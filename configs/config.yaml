@@ -1,0 +1,100 @@
+# BitMar Configuration
+# Vision-Language Episodic Memory Transformer with BitNet Quantization
+
+# Model Architecture
+model:
+  # Vocabulary and tokenization
+  vocab_size: 50257  # GPT-2 vocabulary size
+  max_seq_len: 256
+  dropout: 0.1
+  
+  # BitNet Text Encoder (smaller for efficiency)
+  text_encoder_dim: 512
+  text_encoder_layers: 6
+  text_encoder_heads: 8
+  
+  # BitNet Text Decoder
+  text_decoder_dim: 512
+  text_decoder_layers: 6
+  text_decoder_heads: 8
+  
+  # Vision Processing (DiNOv2 features)
+  vision_encoder_dim: 768  # DiNOv2 feature dimension
+  vision_hidden_size: 256
+  vision_latent_size: 512
+  
+  # Cross-modal Fusion
+  fusion_hidden_size: 512
+  fusion_num_heads: 8
+  fusion_num_layers: 2
+  
+  # Episodic Memory (Larimar-inspired)
+  memory_size: 512
+  episode_dim: 512
+  memory_alpha: 0.1
+  direct_writing: true
+  observation_noise_std: 1e-6
+
+# Training Configuration
+training:
+  batch_size: 8
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_steps: 1000
+  max_epochs: 10
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 4
+  
+  # Optimization
+  optimizer: "adamw"
+  scheduler: "cosine"
+  
+  # Regularization
+  label_smoothing: 0.1
+  dropout: 0.1
+
+# Data Configuration
+data:
+  data_dir: "../babylm_dataset"
+  max_length: 128
+  num_workers: 4
+  subset_size: null  # Use full dataset, set to smaller number for testing
+  
+  # Data splits
+  train_split: 0.8
+  val_split: 0.2
+
+# Logging and Monitoring
+logging:
+  wandb_project: "bitmar"
+  wandb_entity: "babylm-ntust-org"
+  log_every_n_steps: 50
+  val_check_interval: 1000
+  
+  # Checkpointing
+  save_top_k: 3
+  monitor: "val_loss"
+  mode: "min"
+  
+  # Output directories
+  output_dir: "./outputs"
+  checkpoint_dir: "./checkpoints"
+
+# Hardware Configuration
+hardware:
+  accelerator: "auto"  # auto, cpu, gpu
+  devices: 1
+  precision: "16-mixed"  # 32, 16, 16-mixed, bf16, bf16-mixed
+  
+# Attention Analysis
+attention_analysis:
+  enabled: true
+  log_attention_every_n_steps: 200
+  save_attention_patterns: true
+  analyze_top_k_heads: 10
+
+# Experimental Features
+experimental:
+  use_flash_attention: false  # Requires flash-attn package
+  gradient_checkpointing: true
+  compile_model: false  # PyTorch 2.0 compilation
