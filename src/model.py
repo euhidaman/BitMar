@@ -652,6 +652,11 @@ class BitMarModel(nn.Module):
         )
 
         # Additional BitNet projection layers
+        self.text_to_episode = BitNetLinear(
+            config['text_encoder_dim'],
+            config['episode_dim']
+        )
+        
         self.memory_to_decoder = BitNetLinear(
             config['episode_dim'],
             config['fusion_hidden_size']
@@ -691,14 +696,11 @@ class BitMarModel(nn.Module):
         # [batch_size, text_encoder_dim]
         text_pooled = text_features.mean(dim=1)
 
-        # Project text to episode dimension if needed
-        if text_pooled.size(-1) != vision_latent.size(-1):
-            episode_proj = BitNetLinear(
-                text_pooled.size(-1), vision_latent.size(-1)).to(text_pooled.device)
-            text_pooled = episode_proj(text_pooled)
+        # Project text to episode dimension
+        text_projected = self.text_to_episode(text_pooled)
 
         # Combine text and vision features
-        episode = text_pooled + vision_latent  # Simple addition fusion
+        episode = text_projected + vision_latent  # Simple addition fusion
 
         return episode
 

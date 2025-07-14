@@ -141,8 +141,8 @@ class BitMarTrainer:
         # Optimizer
         self.optimizer = AdamW(
             self.model.parameters(),
-            lr=self.config['model']['learning_rate'],
-            weight_decay=self.config['model']['weight_decay'],
+            lr=self.config['training']['learning_rate'],
+            weight_decay=self.config['training']['weight_decay'],
             betas=(0.9, 0.999),
             eps=1e-8
         )
@@ -158,7 +158,7 @@ class BitMarTrainer:
             self.scheduler = None
 
         logger.info(
-            f"Optimizer: AdamW with LR={self.config['model']['learning_rate']}")
+            f"Optimizer: AdamW with LR={self.config['training']['learning_rate']}")
         if self.scheduler:
             logger.info(f"Scheduler: {self.config['training']['scheduler']}")
 
@@ -214,9 +214,9 @@ class BitMarTrainer:
                     outputs['memory_usage'])
                 epoch_metrics['memory_usage_entropy'] += memory_entropy
 
-            if outputs['text_latent'] is not None and outputs['vision_latent'] is not None:
+            if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
                 cross_modal_sim = self._compute_cross_modal_similarity(
-                    outputs['text_latent'], outputs['vision_latent']
+                    outputs['text_features'], outputs['vision_latent']
                 )
                 epoch_metrics['cross_modal_similarity'] += cross_modal_sim
 
@@ -279,9 +279,9 @@ class BitMarTrainer:
                         outputs['memory_usage'])
                     val_metrics['val_memory_entropy'] += memory_entropy
 
-                if outputs['text_latent'] is not None and outputs['vision_latent'] is not None:
+                if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
                     cross_modal_sim = self._compute_cross_modal_similarity(
-                        outputs['text_latent'], outputs['vision_latent']
+                        outputs['text_features'], outputs['vision_latent']
                     )
                     val_metrics['val_cross_modal_similarity'] += cross_modal_sim
 
@@ -439,11 +439,11 @@ class BitMarTrainer:
             self.save_checkpoint(epoch, is_best=is_best)
 
             # Run attention analysis periodically
-            if (epoch + 1) % 2 == 0 and self.config['model']['track_attention']:
+            if (epoch + 1) % 2 == 0 and self.config['training']['track_attention']:
                 self.run_attention_analysis()
 
         # Final attention analysis
-        if self.config['model']['track_attention']:
+        if self.config['training']['track_attention']:
             logger.info("Running final attention analysis...")
             self.run_attention_analysis()
 
