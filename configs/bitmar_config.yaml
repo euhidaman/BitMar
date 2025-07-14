@@ -52,20 +52,25 @@ model:
   analyze_cross_modal: true
 
 data:
-  # Dataset paths
-  captions_file: "../babylm_dataset/cc_3M_captions.json"
-  vision_features_1: "../babylm_dataset/cc_3M_dino_v2_states_1of2.npy"
-  vision_features_2: "../babylm_dataset/cc_3M_dino_v2_states_2of2.npy"
+  # Dataset paths (complete BabyLM multimodal dataset)
+  dataset_dir: "../babylm_dataset"
+  
+  # HuggingFace token for validation datasets (set via environment variable)
+  hf_token: null  # Set HF_TOKEN environment variable
+  
+  # Validation datasets from HuggingFace
+  validation_datasets:
+    - "ewok-core/ewok-core-1.0"
+    - "facebook/winoground"
   
   # Data processing
   max_seq_length: 512
   vision_feature_dim: 768
-  train_split: 0.95
-  val_split: 0.05
+  text_encoder_name: "gpt2"  # Changed to GPT-2 for better generation
   
-  # DataLoader settings
-  batch_size: 16
-  num_workers: 4
+  # DataLoader settings (optimized for RTX 4090)
+  batch_size: 32  # Increased for RTX 4090
+  num_workers: 8  # More workers for faster data loading
   pin_memory: true
   persistent_workers: true
 

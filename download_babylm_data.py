@@ -77,19 +77,19 @@ def verify_existing_data():
     # Check parent directory for BabyLM data
     dataset_dir = Path("../babylm_dataset")
     
-    # Required multimodal files as per BabyLM specification
+    # Required multimodal files from OSF dataset
     required_files = [
         "cc_3M_captions.json",  # Conceptual Captions 3M captions
         "cc_3M_dino_v2_states_1of2.npy",  # DiNOv2 embeddings part 1
         "cc_3M_dino_v2_states_2of2.npy",  # DiNOv2 embeddings part 2
+        "local_narr_captions.json",  # Localized Narratives captions
+        "local_narr_dino_v2_states.npy",  # Localized Narratives DiNOv2 embeddings
     ]
     
-    # Optional text-only data
+    # Optional files
     optional_files = [
         "train_50M.zip",  # Text-only training data
-        "cc_3M_captions.download_instructions.txt",
-        "cc_3M_dino_v2_states_1of2.download_instructions.txt", 
-        "cc_3M_dino_v2_states_2of2.download_instructions.txt"
+        "README.pdf",  # Dataset documentation
     ]
 
     existing_files = []
@@ -117,116 +117,140 @@ def verify_existing_data():
         
         # Verify data integrity
         try:
-            # Test loading captions
-            captions_path = dataset_dir / "cc_3M_captions.json"
-            with open(captions_path, 'r') as f:
-                captions = json.load(f)
-            logger.info(f"📝 Captions file contains {len(captions)} entries")
-            
-            # Test loading vision features
-            feat1_path = dataset_dir / "cc_3M_dino_v2_states_1of2.npy"
-            feat2_path = dataset_dir / "cc_3M_dino_v2_states_2of2.npy"
-            
-            feat1 = np.load(feat1_path)
-            feat2 = np.load(feat2_path)
-            
-            logger.info(f"🖼️  Vision features part 1: {feat1.shape}")
-            logger.info(f"🖼️  Vision features part 2: {feat2.shape}")
-            logger.info(f"🖼️  Total vision features: {feat1.shape[0] + feat2.shape[0]}")
-            
-            # Verify counts match
-            total_vision = feat1.shape[0] + feat2.shape[0]
-            if isinstance(captions, list):
-                caption_count = len(captions)
-            else:
-                caption_count = len(captions.get('captions', captions))
-                
-            if total_vision == caption_count:
-                logger.info("✅ Vision features and captions count match!")
-                return True
-            else:
-                logger.warning(f"⚠️  Count mismatch: {total_vision} vision vs {caption_count} captions")
+            verify_core_files(dataset_dir)
+            return True
                 
         except Exception as e:
             logger.error(f"❌ Data integrity check failed: {e}")
+            
+    else:
+        logger.warning(f"❌ Missing {len(missing_files)} required files: {missing_files}")
             
     return False
 
 
 def download_babylm_multimodal_dataset():
-    """Download BabyLM multimodal dataset following official structure"""
+    """Download BabyLM multimodal dataset from OSF"""
     logger.info("🚀 Starting BabyLM Multimodal Dataset Download")
     logger.info("=" * 60)
     
-    # Check if data already exists
-    if verify_existing_data():
-        logger.info("Dataset verification passed - ready for training!")
-        return True
-
-    logger.info("\n📋 BabyLM Multimodal Dataset Components:")
-    logger.info("1. Text-only data: train_50M.zip")
-    logger.info("2. Image-caption pairs (precomputed DiNOv2 + captions):")
-    logger.info("   - cc_3M_captions.json")
-    logger.info("   - cc_3M_dino_v2_states_1of2.npy") 
-    logger.info("   - cc_3M_dino_v2_states_2of2.npy")
-    logger.info("\n🔗 Data Sources:")
-    logger.info("- Localized Narratives (OpenImage + MSCOCO training sets)")
-    logger.info("- Conceptual Captions 3M (training split only)")
-    logger.info("- Visual embeddings: DiNOv2 ViT-Base (facebook/dinov2-base)")
-    
-    # Target directory
+    # Target directory - external to BitMar project
     dataset_dir = Path("../babylm_dataset")
     dataset_dir.mkdir(exist_ok=True)
 
-    logger.info(f"\n📁 Dataset directory: {dataset_dir.absolute()}")
-    
-    # Official BabyLM multimodal dataset URLs
-    # These would be the actual download URLs from the BabyLM organizers
-    file_urls = {
-        "cc_3M_captions.json": "https://example.com/babylm/cc_3M_captions.json",
-        "cc_3M_dino_v2_states_1of2.npy": "https://example.com/babylm/cc_3M_dino_v2_states_1of2.npy", 
-        "cc_3M_dino_v2_states_2of2.npy": "https://example.com/babylm/cc_3M_dino_v2_states_2of2.npy",
-        "train_50M.zip": "https://example.com/babylm/train_50M.zip"
-    }
-    
-    logger.info("\n⚠️  IMPORTANT: Manual Download Required")
-    logger.info("=" * 60)
-    logger.info("The BabyLM dataset requires manual download from the official source.")
-    logger.info("Please follow these steps:")
-    logger.info("\n1. Visit the BabyLM Challenge website")
-    logger.info("2. Download the following files to ../babylm_dataset/:")
-    logger.info("   ✅ cc_3M_captions.json")
-    logger.info("   ✅ cc_3M_dino_v2_states_1of2.npy") 
-    logger.info("   ✅ cc_3M_dino_v2_states_2of2.npy")
-    logger.info("   📝 train_50M.zip (optional for text-only)")
-    
-    logger.info("\n💡 Alternative: Use precomputed visual embeddings")
-    logger.info("If you have raw images, you can compute DiNOv2 embeddings using:")
-    logger.info('   from transformers import AutoModel')
-    logger.info('   model = AutoModel.from_pretrained("facebook/dinov2-base")')
-    
-    # Create download instruction files that explain the process
-    instructions = {
-        "cc_3M_captions.json": "Download Conceptual Captions 3M captions (JSON format)",
-        "cc_3M_dino_v2_states_1of2.npy": "Download precomputed DiNOv2 visual embeddings (part 1/2)",
-        "cc_3M_dino_v2_states_2of2.npy": "Download precomputed DiNOv2 visual embeddings (part 2/2)"
-    }
-    
-    for filename, description in instructions.items():
-        instruction_file = dataset_dir / f"{filename}.download_instructions.txt"
-        with open(instruction_file, 'w') as f:
-            f.write(f"BabyLM Dataset File: {filename}\n")
-            f.write(f"Description: {description}\n")
-            f.write(f"Source: BabyLM Challenge - Multimodal Track\n")
-            f.write(f"Format: {filename.split('.')[-1].upper()}\n")
-            f.write(f"\nOfficial sources:\n")
-            f.write(f"- Localized Narratives: https://google.github.io/localized-narratives/\n")
-            f.write(f"- Conceptual Captions 3M: https://ai.google.com/research/ConceptualCaptions/download\n")
-            f.write(f"- Visual embeddings computed with: facebook/dinov2-base\n")
-        
-        logger.info(f"📝 Created: {instruction_file}")
+    # Official BabyLM multimodal dataset URL
+    dataset_url = "https://files.osf.io/v1/resources/ad7qg/providers/osfstorage/6603014bb3a1e301127dfa59/?zip="
+    zip_filename = dataset_dir / "babylm_multimodal.zip"
 
-    return False
+    logger.info(f"\n� Dataset directory: {dataset_dir.absolute()}")
+    logger.info(f"📥 Downloading from: {dataset_url}")
+    
+    # Expected files after extraction
+    expected_files = [
+        "cc_3M_captions.json",  # 136.1 MB
+        "cc_3M_dino_v2_states_1of2.npy",  # 3.5 GB  
+        "cc_3M_dino_v2_states_2of2.npy",  # 3.5 GB
+        "local_narr_captions.json",  # 139.2 MB
+        "local_narr_dino_v2_states.npy",  # 2.4 GB
+        "train_50M.zip",  # 90.2 MB
+        "README.pdf"  # 63.0 kB
+    ]
+
+    logger.info("\n📋 Expected dataset files (~9.8 GB total):")
+    for filename in expected_files:
+        logger.info(f"   📄 {filename}")
+
+    # Download the ZIP file
+    logger.info(f"\n📥 Downloading BabyLM dataset...")
+    if download_file(dataset_url, str(zip_filename)):
+        logger.info("✅ Download completed successfully!")
+
+        # Extract ZIP file
+        logger.info("📦 Extracting dataset...")
+        if extract_zip(str(zip_filename), str(dataset_dir)):
+            logger.info("✅ Extraction completed successfully!")
+
+            # Clean up ZIP file
+            zip_filename.unlink()
+            logger.info("🧹 Cleaned up ZIP file")
+
+            # Verify extraction
+            logger.info("🔍 Verifying extracted files...")
+            verified_count = 0
+
+            for filename in expected_files:
+                filepath = dataset_dir / filename
+                if check_file_exists(filepath):
+                    size_mb = filepath.stat().st_size / (1024 * 1024)
+                    logger.info(f"✅ {filename}: Verified ({size_mb:.1f} MB)")
+                    verified_count += 1
+                else:
+                    logger.warning(f"⚠️  {filename}: Missing after extraction")
+
+            if verified_count >= 5:  # At least the core multimodal files
+                logger.info("🎉 Dataset download and setup completed!")
+                logger.info(f"✅ {verified_count}/{len(expected_files)} files verified")
+                
+                # Additional verification for core files
+                try:
+                    verify_core_files(dataset_dir)
+                    return True
+                except Exception as e:
+                    logger.error(f"❌ Core file verification failed: {e}")
+                    return False
+            else:
+                logger.error(f"❌ Only {verified_count}/{len(expected_files)} files verified")
+                return False
+
+        else:
+            logger.error("❌ Failed to extract dataset")
+            return False
+    else:
+        logger.error("❌ Failed to download dataset")
+        return False
+
+
+def verify_core_files(dataset_dir: Path):
+    """Verify core multimodal files"""
+    logger.info("🔍 Verifying core dataset files...")
+    
+    # Test loading Conceptual Captions
+    cc_captions_path = dataset_dir / "cc_3M_captions.json"
+    with open(cc_captions_path, 'r') as f:
+        cc_captions = json.load(f)
+    logger.info(f"📝 Conceptual Captions: {len(cc_captions)} entries")
+    
+    # Test loading Localized Narratives
+    ln_captions_path = dataset_dir / "local_narr_captions.json"
+    with open(ln_captions_path, 'r') as f:
+        ln_captions = json.load(f)
+    logger.info(f"📝 Localized Narratives: {len(ln_captions)} entries")
+    
+    # Test vision features shapes
+    cc_feat1 = np.load(dataset_dir / "cc_3M_dino_v2_states_1of2.npy", mmap_mode='r')
+    cc_feat2 = np.load(dataset_dir / "cc_3M_dino_v2_states_2of2.npy", mmap_mode='r')
+    ln_feat = np.load(dataset_dir / "local_narr_dino_v2_states.npy", mmap_mode='r')
+    
+    logger.info(f"🖼️  CC features part 1: {cc_feat1.shape}")
+    logger.info(f"🖼️  CC features part 2: {cc_feat2.shape}")
+    logger.info(f"🖼️  LN features: {ln_feat.shape}")
+    
+    # Verify alignment
+    total_cc_features = cc_feat1.shape[0] + cc_feat2.shape[0]
+    if total_cc_features == len(cc_captions):
+        logger.info("✅ Conceptual Captions alignment verified!")
+    else:
+        raise ValueError(f"CC alignment error: {total_cc_features} features vs {len(cc_captions)} captions")
+        
+    if ln_feat.shape[0] == len(ln_captions):
+        logger.info("✅ Localized Narratives alignment verified!")
+    else:
+        raise ValueError(f"LN alignment error: {ln_feat.shape[0]} features vs {len(ln_captions)} captions")
+    
+    total_samples = total_cc_features + ln_feat.shape[0]
+    logger.info(f"🎯 Total multimodal samples: {total_samples:,}")
+    
+    return True
 
     # Download ZIP file
     zip_filename = dataset_dir / "babylm_dataset.zip"
