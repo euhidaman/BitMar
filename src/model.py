@@ -155,6 +155,14 @@ class BitNetAttention(nn.Module):
         attention_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
         
         if mask is not None:
+            # Handle mask shape: expand to match attention scores shape
+            if mask.dim() == 2:  # [batch_size, seq_len]
+                mask = mask.unsqueeze(1).unsqueeze(1)  # [batch_size, 1, 1, seq_len]
+            elif mask.dim() == 3:  # [batch_size, seq_len, seq_len]
+                mask = mask.unsqueeze(1)  # [batch_size, 1, seq_len, seq_len]
+            
+            # Expand mask to match attention scores shape
+            mask = mask.expand(batch_size, self.num_heads, seq_len, -1)
             attention_scores.masked_fill_(mask == 0, float('-inf'))
         
         attention_weights = F.softmax(attention_scores, dim=-1)
@@ -254,7 +262,13 @@ class BitNetTextEncoder(nn.Module):
         # Transform through BitNet layers
         attention_patterns = []
         for layer in self.layers:
-            x, attn_weights = layer(x, attention_mask)
+            # Convert attention mask to the right format for the layer
+            layer_mask = None
+            if attention_mask is not None:
+                # Create a mask where 1 means attend, 0 means don't attend
+                layer_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # [batch_size, 1, 1, seq_len]
+            
+            x, attn_weights = layer(x, layer_mask)
             attention_patterns.append(attn_weights)
         
         x = self.norm(x)
