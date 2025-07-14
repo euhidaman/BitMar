@@ -45,8 +45,8 @@ data:
   # HuggingFace configuration (use environment variables)
   hf_token: null  # Use HF_TOKEN environment variable
   validation_datasets: 
-    - "ewok-core/ewok-core-1.0"
-    - "facebook/winoground"
+    - "squad"  # Public dataset, no auth required
+    - "glue/sst2"  # Public dataset, no auth required
 
 training:
   # Training configuration
@@ -64,7 +64,7 @@ training:
 # Weights & Biases configuration (optional)
 wandb:
   project: "bitmar-babylm"
-  entity: null  # Will use default entity or from environment
+  entity: "babylm-ntust"  # Use babylm-ntust team
   api_key: null  # Use WANDB_API_KEY environment variable
   log_every_n_steps: 50
   log_attention: true

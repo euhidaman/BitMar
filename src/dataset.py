@@ -159,8 +159,21 @@ class HuggingFaceValidationDataset(Dataset):
             elif dataset_name == "facebook/winoground":
                 self.dataset = load_dataset(dataset_name, token=hf_token, split="test")
                 self.text_field = "caption_0"  # Winoground has multiple captions
+            elif dataset_name == "squad":
+                self.dataset = load_dataset(dataset_name, split="validation")  # No token needed
+                self.text_field = "question"  # Use questions for text generation
+            elif dataset_name == "glue/sst2":
+                self.dataset = load_dataset("glue", "sst2", split="validation")  # No token needed
+                self.text_field = "sentence"  # Use sentences for text generation
             else:
-                raise ValueError(f"Unknown validation dataset: {dataset_name}")
+                # Try to load as a generic public dataset
+                self.dataset = load_dataset(dataset_name, split="validation")
+                # Try to guess the text field
+                sample = self.dataset[0]
+                text_fields = ["text", "sentence", "question", "input", "content"]
+                self.text_field = next((field for field in text_fields if field in sample), None)
+                if self.text_field is None:
+                    raise ValueError(f"Could not find text field in dataset: {dataset_name}")
 
             if max_samples is not None:
                 self.dataset = self.dataset.select(range(min(max_samples, len(self.dataset))))
