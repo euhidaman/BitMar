@@ -26,12 +26,16 @@ class BitMarWandbLogger:
         self.step = 0
         self.config = config or {}
         
-        # Initialize wandb
+        # Initialize wandb with step metric
         wandb.init(
             project=self.project_name,
             config=self.config,
             name=run_name or f"bitmar_{wandb.util.generate_id()}"
         )
+        
+        # Define step metric to ensure proper ordering
+        wandb.define_metric("step")
+        wandb.define_metric("*", step_metric="step")
         
         # Set up plotting style
         plt.style.use('seaborn-v0_8')
@@ -109,6 +113,7 @@ class BitMarWandbLogger:
         # Add epoch and step info
         metrics['Training/Epoch'] = epoch
         metrics['Training/Step'] = step
+        metrics['step'] = step  # Add step for wandb metric definition
         
         # Log to wandb
         wandb.log(metrics, step=step)
@@ -147,6 +152,8 @@ class BitMarWandbLogger:
                     # Sparsity (zeros percentage)
                     metrics[f'Quantization/Sparsity_{module_name}'] = zeros * 100
         
+        # Add step for consistency
+        metrics['step'] = step
         wandb.log(metrics, step=step)
         
     def log_memory_analysis(self, memory_module, step: int):
@@ -188,11 +195,13 @@ class BitMarWandbLogger:
                         metrics['Memory/Analysis_Max_Similarity'] = similarities.max().item()
                         metrics['Memory/Analysis_Similarity_Std'] = similarities.std().item()
         
+        # Add step for consistency
+        metrics['step'] = step
         wandb.log(metrics, step=step)
         
     def log_learning_rate(self, lr: float, step: int):
         """Log learning rate with proper categorization"""
-        wandb.log({'Training/Learning_Rate': lr}, step=step)
+        wandb.log({'Training/Learning_Rate': lr, 'step': step}, step=step)
         
     def log_gradient_metrics(self, model: nn.Module, step: int):
         """Log gradient statistics with proper categorization"""
@@ -247,6 +256,8 @@ class BitMarWandbLogger:
                 component_norm = (norm ** 0.5) / component_counts[component]
                 metrics[f'Gradients/{component.title()}_Norm'] = component_norm
         
+        # Add step for consistency
+        metrics['step'] = step
         wandb.log(metrics, step=step)
         
     def log_validation_metrics(self, val_loss: float, perplexity: float, step: int, **kwargs):
@@ -260,7 +271,9 @@ class BitMarWandbLogger:
         for key, value in kwargs.items():
             if isinstance(value, (int, float)):
                 metrics[f'Validation/{key}'] = value
-                
+        
+        # Add step for consistency        
+        metrics['step'] = step
         wandb.log(metrics, step=step)
         
     def log_model_size_metrics(self, model: nn.Module):
@@ -299,7 +312,9 @@ class BitMarWandbLogger:
         for key, value in kwargs.items():
             if isinstance(value, (int, float)):
                 metrics[f'Epoch_Summary/{key}'] = value
-                
+        
+        # Add step for consistency
+        metrics['step'] = step
         wandb.log(metrics, step=step)
         
     def create_memory_heatmap(self, memory_usage: torch.Tensor, memory_age: torch.Tensor, step: int):

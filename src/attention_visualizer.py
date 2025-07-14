@@ -90,7 +90,12 @@ class AttentionHeadAnalyzer:
             # Compute attention concentration (how much attention goes to top tokens)
             concentration = self._compute_attention_concentration(avg_attention, top_k=5)
             
-            # Store metrics
+            # Store metrics (ensure they are Python floats)
+            if isinstance(entropy, torch.Tensor):
+                entropy = entropy.item()
+            if isinstance(concentration, torch.Tensor):
+                concentration = concentration.item()
+                
             self.attention_history[attention_type][f'layer_{layer_idx}_entropy'].append(entropy)
             self.attention_history[attention_type][f'layer_{layer_idx}_concentration'].append(concentration)
             
@@ -116,19 +121,28 @@ class AttentionHeadAnalyzer:
             avg_attention = attention_weights.mean(0).squeeze()  # [seq_len]
             
             # Attention distribution across text positions
-            attention_var = torch.var(avg_attention).item()
-            attention_max = torch.max(avg_attention).item()
-            attention_mean = torch.mean(avg_attention).item()
+            attention_var = torch.var(avg_attention)
+            attention_max = torch.max(avg_attention)
+            attention_mean = torch.mean(avg_attention)
+            
+            # Ensure values are Python floats
+            if isinstance(attention_var, torch.Tensor):
+                attention_var = attention_var.item()
+            if isinstance(attention_max, torch.Tensor):
+                attention_max = attention_max.item()
+            if isinstance(attention_mean, torch.Tensor):
+                attention_mean = attention_mean.item()
             
             # Store metrics
-            layer_idx = int(layer_name.split('_')[-1])
+            layer_idx = int(layer_name.split('_')[-1]) if '_' in layer_name else 0
             self.attention_history['cross_modal'][f'layer_{layer_idx}_variance'].append(attention_var)
             self.attention_history['cross_modal'][f'layer_{layer_idx}_max'].append(attention_max)
             self.attention_history['cross_modal'][f'layer_{layer_idx}_mean'].append(attention_mean)
             
             # Update importance scores
             importance = attention_var  # Higher variance = more selective attention
-            self.head_importance_scores['cross_modal'][layer_idx, :] += importance
+            if layer_idx < self.head_importance_scores['cross_modal'].shape[0]:
+                self.head_importance_scores['cross_modal'][layer_idx, :] += importance
             
     def _analyze_memory_attention(self, memory_attention: torch.Tensor, step: int):
         """Analyze episodic memory attention patterns"""
@@ -143,11 +157,25 @@ class AttentionHeadAnalyzer:
         avg_attention = memory_attention.mean(0)  # [memory_size]
         
         # Memory access patterns
-        entropy = self._compute_attention_entropy(avg_attention.unsqueeze(0)).item()
-        top_k_access = torch.topk(avg_attention, k=min(10, memory_size))[0].mean().item()
-        sparsity = (avg_attention < 0.01).float().mean().item()  # Fraction of barely-used slots
+        entropy = self._compute_attention_entropy(avg_attention.unsqueeze(0))
+        top_k_access = torch.topk(avg_attention, k=min(10, memory_size))[0].mean()
+        sparsity = (avg_attention < 0.01).float().mean()
+        
+        # Ensure values are Python floats
+        if isinstance(entropy, torch.Tensor):
+            entropy = entropy.item()
+        if isinstance(top_k_access, torch.Tensor):
+            top_k_access = top_k_access.item()
+        if isinstance(sparsity, torch.Tensor):
+            sparsity = sparsity.item()
         
         # Store metrics
+        self.attention_history['memory'].append({
+            'step': step,
+            'entropy': entropy,
+            'top_k_access': top_k_access,
+            'sparsity': sparsity
+        })
         self.attention_history['memory'].append({
             'entropy': entropy,
             'top_k_access': top_k_access,
