@@ -197,10 +197,10 @@ class BitMarTrainer:
             loss.backward()
 
             # Gradient clipping
-            if self.config['model']['gradient_clip'] > 0:
+            if self.config['training']['gradient_clip_val'] > 0:
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
-                    self.config['model']['gradient_clip']
+                    self.config['training']['gradient_clip_val']
                 )
 
             self.optimizer.step()
