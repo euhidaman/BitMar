@@ -23,12 +23,12 @@ def download_file(url: str, filepath: str, chunk_size: int = 8192) -> bool:
     try:
         response = requests.get(url, stream=True)
         response.raise_for_status()
-        
+
         total_size = int(response.headers.get('content-length', 0))
-        
+
         filepath = Path(filepath)
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(filepath, 'wb') as f, tqdm(
             desc=filepath.name,
             total=total_size,
@@ -40,10 +40,10 @@ def download_file(url: str, filepath: str, chunk_size: int = 8192) -> bool:
                 if chunk:
                     f.write(chunk)
                     pbar.update(len(chunk))
-        
+
         logger.info(f"✅ Downloaded: {filepath}")
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ Failed to download {url}: {e}")
         return False
@@ -71,21 +71,21 @@ def download_babylm_dataset():
     """Download BabyLM multimodal dataset from OSF"""
     logger.info("🚀 Starting BabyLM Dataset Download")
     logger.info("=" * 50)
-    
+
     # OSF download URL for the complete dataset
     dataset_url = "https://files.osf.io/v1/resources/ad7qg/providers/osfstorage/?zip="
-    
+
     # Target directory
     dataset_dir = Path("../babylm_dataset")
     dataset_dir.mkdir(exist_ok=True)
-    
+
     # Check if dataset already exists
     required_files = [
         "cc_3M_captions.json",
-        "cc_3M_dino_v2_states_1of2.npy", 
+        "cc_3M_dino_v2_states_1of2.npy",
         "cc_3M_dino_v2_states_2of2.npy"
     ]
-    
+
     existing_files = []
     for filename in required_files:
         filepath = dataset_dir / filename
@@ -93,34 +93,34 @@ def download_babylm_dataset():
             size_mb = filepath.stat().st_size / (1024 * 1024)
             logger.info(f"✅ {filename}: Already exists ({size_mb:.1f} MB)")
             existing_files.append(filename)
-    
+
     if len(existing_files) == len(required_files):
         logger.info("🎉 All dataset files already exist!")
         return True
-    
+
     # Download ZIP file
     zip_filename = dataset_dir / "babylm_dataset.zip"
-    
+
     logger.info("📥 Downloading BabyLM multimodal dataset...")
     logger.info(f"   URL: {dataset_url}")
     logger.info(f"   Target: {zip_filename}")
-    
+
     if download_file(dataset_url, zip_filename):
         logger.info("✅ Download completed successfully!")
-        
+
         # Extract ZIP file
         logger.info("📦 Extracting dataset...")
         if extract_zip(str(zip_filename), str(dataset_dir)):
             logger.info("✅ Extraction completed successfully!")
-            
+
             # Clean up ZIP file
             zip_filename.unlink()
             logger.info("🧹 Cleaned up ZIP file")
-            
+
             # Verify extraction
             logger.info("🔍 Verifying extracted files...")
             verified_count = 0
-            
+
             for filename in required_files:
                 filepath = dataset_dir / filename
                 if check_file_exists(filepath):
@@ -129,14 +129,15 @@ def download_babylm_dataset():
                     verified_count += 1
                 else:
                     logger.error(f"❌ {filename}: Missing after extraction")
-            
+
             if verified_count == len(required_files):
                 logger.info("🎉 Dataset download and setup completed!")
                 return True
             else:
-                logger.error(f"❌ Only {verified_count}/{len(required_files)} files verified")
+                logger.error(
+                    f"❌ Only {verified_count}/{len(required_files)} files verified")
                 return False
-                
+
         else:
             logger.error("❌ Failed to extract dataset")
             return False
@@ -152,10 +153,10 @@ def download_babylm_dataset():
 def create_sample_dataset():
     """Create a small sample dataset for testing when full dataset is not available"""
     logger.info("Creating sample dataset for testing...")
-    
+
     dataset_dir = Path("../babylm_dataset")
     dataset_dir.mkdir(exist_ok=True)
-    
+
     # Create sample captions
     sample_captions = [
         "A cat sitting on a windowsill looking outside",
@@ -169,39 +170,39 @@ def create_sample_dataset():
         "Snow-covered trees in a winter forest",
         "Butterfly landing on a colorful flower"
     ] * 100  # 1000 samples
-    
+
     captions_file = dataset_dir / "cc_3M_captions.json"
     with open(captions_file, 'w') as f:
         json.dump(sample_captions, f)
-    
+
     logger.info(f"✅ Created sample captions: {len(sample_captions)} samples")
-    
+
     # Create sample vision features (random DiNOv2-like features)
     np.random.seed(42)  # For reproducible samples
-    
+
     # Split into two files like the real dataset
     num_samples_1 = 500
     num_samples_2 = 500
     feature_dim = 768  # DiNOv2 dimension
-    
+
     # Create realistic-looking features (normalized)
     features_1 = np.random.randn(num_samples_1, feature_dim).astype(np.float32)
     features_1 = features_1 / np.linalg.norm(features_1, axis=1, keepdims=True)
-    
+
     features_2 = np.random.randn(num_samples_2, feature_dim).astype(np.float32)
     features_2 = features_2 / np.linalg.norm(features_2, axis=1, keepdims=True)
-    
+
     # Save features
     features_file_1 = dataset_dir / "cc_3M_dino_v2_states_1of2.npy"
     features_file_2 = dataset_dir / "cc_3M_dino_v2_states_2of2.npy"
-    
+
     np.save(features_file_1, features_1)
     np.save(features_file_2, features_2)
-    
+
     logger.info(f"✅ Created sample vision features:")
     logger.info(f"   Part 1: {features_1.shape} -> {features_file_1}")
     logger.info(f"   Part 2: {features_2.shape} -> {features_file_2}")
-    
+
     # Create download instructions (for reference)
     instructions = {
         "cc_3M_captions.json": "Sample captions created locally",
@@ -214,24 +215,25 @@ def create_sample_dataset():
             "features_2": "https://data.babylm.github.io/multimodal/cc_3M_dino_v2_states_2of2.npy"
         }
     }
-    
+
     instructions_file = dataset_dir / "download_instructions.json"
     with open(instructions_file, 'w') as f:
         json.dump(instructions, f, indent=2)
-    
+
     logger.info("✅ Sample dataset created successfully!")
     logger.info(f"   Dataset directory: {dataset_dir.absolute()}")
     logger.info(f"   Total samples: {len(sample_captions)}")
     logger.info(f"   Feature dimension: {feature_dim}")
-    
+
     return True
 
 
 def main():
     """Main function"""
     import argparse
-    
-    parser = argparse.ArgumentParser(description="Download BabyLM dataset for BitMar")
+
+    parser = argparse.ArgumentParser(
+        description="Download BabyLM dataset for BitMar")
     parser.add_argument(
         "--sample-only",
         action="store_true",
@@ -242,21 +244,21 @@ def main():
         action="store_true",
         help="Force re-download even if files exist"
     )
-    
+
     args = parser.parse_args()
-    
+
     if args.sample_only:
         logger.info("Creating sample dataset for testing...")
         success = create_sample_dataset()
     else:
         logger.info("Attempting to download full BabyLM dataset...")
         success = download_babylm_dataset()
-        
+
         if not success:
             logger.info("\n📋 Full dataset download failed.")
             logger.info("Creating sample dataset for testing instead...")
             success = create_sample_dataset()
-    
+
     if success:
         logger.info("\n🎉 Dataset setup completed!")
         logger.info("Next steps:")
