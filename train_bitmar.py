@@ -236,33 +236,41 @@ class BitMarTrainer:
             })
 
             # Enhanced logging with wandb logger
-            if self.wandb_logger and batch_idx % self.config['wandb']['log_every_n_steps'] == 0:
-                # Log comprehensive training metrics
-                self.wandb_logger.log_training_metrics(outputs, epoch, self.global_step)
-                
-                # Log learning rate
-                self.wandb_logger.log_learning_rate(
-                    self.optimizer.param_groups[0]['lr'], self.global_step
-                )
-                
-                # Log gradient metrics
-                self.wandb_logger.log_gradient_metrics(self.model, self.global_step)
-                
-                # Log quantization metrics (every 10 steps to reduce overhead)
-                if self.global_step % (self.config['wandb']['log_every_n_steps'] * 10) == 0:
-                    self.wandb_logger.log_quantization_metrics(self.model, self.global_step)
+            log_every_n_steps = self.config.get('wandb', {}).get('log_every_n_steps', 50)
+            if self.wandb_logger and batch_idx % log_every_n_steps == 0:
+                try:
+                    # Log comprehensive training metrics
+                    self.wandb_logger.log_training_metrics(outputs, epoch, self.global_step)
                     
-                # Log memory analysis
-                if hasattr(self.model, 'memory'):
-                    self.wandb_logger.log_memory_analysis(self.model.memory, self.global_step)
+                    # Log learning rate
+                    self.wandb_logger.log_learning_rate(
+                        self.optimizer.param_groups[0]['lr'], self.global_step
+                    )
+                    
+                    # Log gradient metrics
+                    self.wandb_logger.log_gradient_metrics(self.model, self.global_step)
+                    
+                    # Log quantization metrics (every 10 steps to reduce overhead)
+                    if self.global_step % (log_every_n_steps * 10) == 0:
+                        self.wandb_logger.log_quantization_metrics(self.model, self.global_step)
+                        
+                    # Log memory analysis
+                    if hasattr(self.model, 'memory'):
+                        self.wandb_logger.log_memory_analysis(self.model.memory, self.global_step)
+                        
+                except Exception as e:
+                    logger.warning(f"Wandb logging failed at step {self.global_step}: {e}")
 
             # Attention analysis (less frequent to avoid overhead)
             if (self.attention_analyzer and 
                 self.global_step % self.config.get('attention_analysis', {}).get('log_every_n_steps', 100) == 0):
                 
-                self.attention_analyzer.analyze_batch_attention(
-                    outputs, input_ids, self.global_step
-                )
+                try:
+                    self.attention_analyzer.analyze_batch_attention(
+                        outputs, batch['input_ids'], self.global_step
+                    )
+                except Exception as e:
+                    logger.warning(f"Attention analysis failed at step {self.global_step}: {e}")
 
             self.global_step += 1
 
@@ -484,30 +492,38 @@ class BitMarTrainer:
                 
                 logger.info("Creating attention visualizations...")
                 
-                # Create attention head heatmaps
-                for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                    self.attention_analyzer.create_attention_head_heatmap(
-                        self.global_step, attention_type
-                    )
-                
-                # Create timeline plots
-                self.attention_analyzer.create_attention_timeline_plot(self.global_step)
-                
-                # Save top attention heads
-                for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                    self.attention_analyzer.save_top_heads(self.global_step, attention_type)
+                try:
+                    # Create attention head heatmaps
+                    for attention_type in ['encoder', 'decoder', 'cross_modal']:
+                        self.attention_analyzer.create_attention_head_heatmap(
+                            self.global_step, attention_type
+                        )
+                    
+                    # Create timeline plots
+                    self.attention_analyzer.create_attention_timeline_plot(self.global_step)
+                    
+                    # Save top attention heads
+                    for attention_type in ['encoder', 'decoder', 'cross_modal']:
+                        self.attention_analyzer.save_top_heads(self.global_step, attention_type)
+                        
+                except Exception as e:
+                    logger.warning(f"Attention visualization creation failed: {e}")
                 
                 # Create visualizations with wandb logger
                 if self.wandb_logger and hasattr(self.model, 'memory'):
-                    # Memory heatmaps
-                    self.wandb_logger.create_memory_heatmap(
-                        self.model.memory.memory_usage,
-                        self.model.memory.memory_age,
-                        self.global_step
-                    )
-                    
-                    # Quantization plots
-                    self.wandb_logger.create_quantization_plot(self.model, self.global_step)
+                    try:
+                        # Memory heatmaps
+                        self.wandb_logger.create_memory_heatmap(
+                            self.model.memory.memory_usage,
+                            self.model.memory.memory_age,
+                            self.global_step
+                        )
+                        
+                        # Quantization plots
+                        self.wandb_logger.create_quantization_plot(self.model, self.global_step)
+                        
+                    except Exception as e:
+                        logger.warning(f"Wandb visualization creation failed: {e}")
 
             if self.use_wandb:
                 wandb.log(all_metrics)

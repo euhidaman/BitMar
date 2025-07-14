@@ -14,6 +14,9 @@ from collections import defaultdict
 import io
 import base64
 from PIL import Image
+import logging
+
+logger = logging.getLogger(__name__)
 
 class BitMarWandbLogger:
     """Comprehensive wandb logging for BitMar model with detailed visualizations"""
@@ -301,90 +304,125 @@ class BitMarWandbLogger:
         
     def create_memory_heatmap(self, memory_usage: torch.Tensor, memory_age: torch.Tensor, step: int):
         """Create and log memory usage heatmap"""
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-        
-        # Memory usage heatmap
-        memory_2d = memory_usage.cpu().numpy().reshape(-1, int(np.sqrt(len(memory_usage))))
-        im1 = ax1.imshow(memory_2d, cmap='viridis', aspect='auto')
-        ax1.set_title('Memory Slot Usage')
-        ax1.set_xlabel('Memory Slot (X)')
-        ax1.set_ylabel('Memory Slot (Y)')
-        plt.colorbar(im1, ax=ax1, label='Usage Count')
-        
-        # Memory age heatmap
-        age_2d = memory_age.cpu().numpy().reshape(-1, int(np.sqrt(len(memory_age))))
-        im2 = ax2.imshow(age_2d, cmap='plasma', aspect='auto')
-        ax2.set_title('Memory Slot Age')
-        ax2.set_xlabel('Memory Slot (X)')
-        ax2.set_ylabel('Memory Slot (Y)')
-        plt.colorbar(im2, ax=ax2, label='Age (Steps)')
-        
-        plt.tight_layout()
-        wandb.log({"Memory/Usage_Age_Heatmap": wandb.Image(fig)}, step=step)
-        plt.close(fig)
+        try:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+            
+            # Convert to numpy and handle reshape safely
+            memory_usage_np = memory_usage.cpu().numpy()
+            memory_age_np = memory_age.cpu().numpy()
+            
+            # Try to create a roughly square matrix, pad if necessary
+            total_slots = len(memory_usage_np)
+            side_length = int(np.ceil(np.sqrt(total_slots)))
+            
+            # Pad arrays to make them square
+            padded_usage = np.zeros(side_length * side_length)
+            padded_age = np.zeros(side_length * side_length)
+            
+            padded_usage[:total_slots] = memory_usage_np
+            padded_age[:total_slots] = memory_age_np
+            
+            # Reshape to 2D
+            memory_2d = padded_usage.reshape(side_length, side_length)
+            age_2d = padded_age.reshape(side_length, side_length)
+            
+            # Memory usage heatmap
+            im1 = ax1.imshow(memory_2d, cmap='viridis', aspect='auto')
+            ax1.set_title('Memory Slot Usage')
+            ax1.set_xlabel('Memory Slot (X)')
+            ax1.set_ylabel('Memory Slot (Y)')
+            plt.colorbar(im1, ax=ax1, label='Usage Count')
+            
+            # Memory age heatmap
+            im2 = ax2.imshow(age_2d, cmap='plasma', aspect='auto')
+            ax2.set_title('Memory Slot Age')
+            ax2.set_xlabel('Memory Slot (X)')
+            ax2.set_ylabel('Memory Slot (Y)')
+            plt.colorbar(im2, ax=ax2, label='Age (Steps)')
+            
+            plt.tight_layout()
+            wandb.log({"Memory/Usage_Age_Heatmap": wandb.Image(fig)}, step=step)
+            plt.close(fig)
+            
+        except Exception as e:
+            logger.warning(f"Failed to create memory heatmap: {e}")
+            if 'fig' in locals():
+                plt.close(fig)
         
     def create_attention_distribution_plot(self, attention_weights: Dict[str, torch.Tensor], step: int):
         """Create attention distribution plots"""
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        axes = axes.flatten()
-        
-        plot_idx = 0
-        for layer_name, weights in attention_weights.items():
-            if plot_idx >= 4:
-                break
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+            axes = axes.flatten()
+            
+            plot_idx = 0
+            for layer_name, weights in attention_weights.items():
+                if plot_idx >= 4:
+                    break
+                    
+                ax = axes[plot_idx]
+                weights_np = weights[0].cpu().numpy().flatten()  # Take first batch item
                 
-            ax = axes[plot_idx]
-            weights_np = weights[0].cpu().numpy().flatten()  # Take first batch item
+                ax.hist(weights_np, bins=50, alpha=0.7, density=True)
+                ax.set_title(f'Attention Distribution - {layer_name}')
+                ax.set_xlabel('Attention Weight')
+                ax.set_ylabel('Density')
+                ax.grid(True, alpha=0.3)
+                
+                plot_idx += 1
             
-            ax.hist(weights_np, bins=50, alpha=0.7, density=True)
-            ax.set_title(f'Attention Distribution - {layer_name}')
-            ax.set_xlabel('Attention Weight')
-            ax.set_ylabel('Density')
-            ax.grid(True, alpha=0.3)
+            # Hide unused subplots
+            for i in range(plot_idx, 4):
+                axes[i].axis('off')
+                
+            plt.tight_layout()
+            wandb.log({"Attention/Distribution_Plot": wandb.Image(fig)}, step=step)
+            plt.close(fig)
             
-            plot_idx += 1
-        
-        # Hide unused subplots
-        for i in range(plot_idx, 4):
-            axes[i].axis('off')
-            
-        plt.tight_layout()
-        wandb.log({"Attention/Distribution_Plot": wandb.Image(fig)}, step=step)
-        plt.close(fig)
+        except Exception as e:
+            logger.warning(f"Failed to create attention distribution plot: {e}")
+            if 'fig' in locals():
+                plt.close(fig)
         
     def create_quantization_plot(self, model: nn.Module, step: int):
         """Create quantization distribution plot"""
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        axes = axes.flatten()
-        
-        plot_idx = 0
-        for name, module in model.named_modules():
-            if hasattr(module, 'quantize_weights_1_58_bit') and plot_idx < 4:
-                if hasattr(module, 'weight'):
-                    weight = module.weight.data
-                    quantized_weight = module.quantize_weights_1_58_bit(weight)
-                    
-                    ax = axes[plot_idx]
-                    weights_np = quantized_weight.cpu().numpy().flatten()
-                    
-                    # Count occurrences
-                    unique, counts = np.unique(weights_np, return_counts=True)
-                    ax.bar(unique, counts, alpha=0.7)
-                    ax.set_title(f'Quantized Weights - {name.split(".")[-2]}')
-                    ax.set_xlabel('Weight Value')
-                    ax.set_ylabel('Count')
-                    ax.set_xticks([-1, 0, 1])
-                    ax.grid(True, alpha=0.3)
-                    
-                    plot_idx += 1
-        
-        # Hide unused subplots
-        for i in range(plot_idx, 4):
-            axes[i].axis('off')
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+            axes = axes.flatten()
             
-        plt.tight_layout()
-        wandb.log({"Quantization/Weight_Distribution": wandb.Image(fig)}, step=step)
-        plt.close(fig)
+            plot_idx = 0
+            for name, module in model.named_modules():
+                if hasattr(module, 'quantize_weights_1_58_bit') and plot_idx < 4:
+                    if hasattr(module, 'weight'):
+                        weight = module.weight.data
+                        quantized_weight = module.quantize_weights_1_58_bit(weight)
+                        
+                        ax = axes[plot_idx]
+                        weights_np = quantized_weight.cpu().numpy().flatten()
+                        
+                        # Count occurrences
+                        unique, counts = np.unique(weights_np, return_counts=True)
+                        ax.bar(unique, counts, alpha=0.7)
+                        ax.set_title(f'Quantized Weights - {name.split(".")[-2]}')
+                        ax.set_xlabel('Weight Value')
+                        ax.set_ylabel('Count')
+                        ax.set_xticks([-1, 0, 1])
+                        ax.grid(True, alpha=0.3)
+                        
+                        plot_idx += 1
+            
+            # Hide unused subplots
+            for i in range(plot_idx, 4):
+                axes[i].axis('off')
+                
+            plt.tight_layout()
+            wandb.log({"Quantization/Weight_Distribution": wandb.Image(fig)}, step=step)
+            plt.close(fig)
+            
+        except Exception as e:
+            logger.warning(f"Failed to create quantization plot: {e}")
+            if 'fig' in locals():
+                plt.close(fig)
         
     def _compute_attention_entropy(self, attention_weights: torch.Tensor) -> float:
         """Compute entropy of attention weights"""
