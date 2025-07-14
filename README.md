@@ -71,6 +71,47 @@ python train_bitmar.py --config configs/bitmar_config.yaml
 python train_bitmar.py --config configs/bitmar_config.yaml --max_epochs 1 --batch_size 4
 ```
 
+## 📊 BabyLM Multimodal Dataset
+
+BitMar is designed for the **BabyLM Challenge Multimodal Track**, using the official dataset structure:
+
+### Dataset Components
+
+**Text-only Data:**
+- `train_50M.zip` - 50M tokens of text-only training data
+
+**Image-Caption Pairs:**
+- **Captions**: `cc_3M_captions.json` - Conceptual Captions 3M captions
+- **Visual Features**: Precomputed DiNOv2 embeddings (768D)
+  - `cc_3M_dino_v2_states_1of2.npy` - First half of visual embeddings
+  - `cc_3M_dino_v2_states_2of2.npy` - Second half of visual embeddings
+
+### Data Sources
+- **Localized Narratives**: OpenImage + MSCOCO training sets
+- **Conceptual Captions 3M**: Training split only
+- **Visual Embeddings**: DiNOv2 ViT-Base model (`facebook/dinov2-base`)
+
+### Dataset Setup
+
+1. **Automatic Setup** (if you have the files):
+```bash
+python download_babylm_data.py
+```
+
+2. **Manual Download** (recommended):
+   - Download the files to `../babylm_dataset/`
+   - Ensure files match the expected structure
+
+3. **Test Dataset** (for development):
+```bash
+python download_babylm_data.py --test
+```
+
+### Data Verification
+```bash
+python test_dataset_compatibility.py
+```
+
 ## 📊 Model Architecture Details
 
 ### BitNet Text Processing

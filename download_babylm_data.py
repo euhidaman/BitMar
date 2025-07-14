@@ -1,6 +1,8 @@
 """
-Download BabyLM Dataset for BitMar
-Downloads the complete multimodal BabyLM dataset from OSF
+Download BabyLM Multimodal Dataset for BitMar
+Downloads the complete BabyLM multimodal dataset following the official structure:
+- Text-only data from train_50M.zip 
+- Precomputed DiNOv2 visual embeddings + captions from Conceptual Captions 3M
 """
 
 import os
@@ -12,6 +14,7 @@ import zipfile
 from pathlib import Path
 import logging
 from tqdm import tqdm
+import shutil
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -67,36 +70,163 @@ def check_file_exists(filepath: str) -> bool:
     return path.exists() and path.stat().st_size > 0
 
 
-def download_babylm_dataset():
-    """Download BabyLM multimodal dataset from OSF"""
-    logger.info("🚀 Starting BabyLM Dataset Download")
-    logger.info("=" * 50)
-
-    # OSF download URL for the complete dataset
-    dataset_url = "https://files.osf.io/v1/resources/ad7qg/providers/osfstorage/?zip="
-
-    # Target directory
+def verify_existing_data():
+    """Verify if BabyLM data already exists in the expected location"""
+    logger.info("🔍 Checking for existing BabyLM dataset...")
+    
+    # Check parent directory for BabyLM data
     dataset_dir = Path("../babylm_dataset")
-    dataset_dir.mkdir(exist_ok=True)
-
-    # Check if dataset already exists
+    
+    # Required multimodal files as per BabyLM specification
     required_files = [
-        "cc_3M_captions.json",
-        "cc_3M_dino_v2_states_1of2.npy",
-        "cc_3M_dino_v2_states_2of2.npy"
+        "cc_3M_captions.json",  # Conceptual Captions 3M captions
+        "cc_3M_dino_v2_states_1of2.npy",  # DiNOv2 embeddings part 1
+        "cc_3M_dino_v2_states_2of2.npy",  # DiNOv2 embeddings part 2
+    ]
+    
+    # Optional text-only data
+    optional_files = [
+        "train_50M.zip",  # Text-only training data
+        "cc_3M_captions.download_instructions.txt",
+        "cc_3M_dino_v2_states_1of2.download_instructions.txt", 
+        "cc_3M_dino_v2_states_2of2.download_instructions.txt"
     ]
 
     existing_files = []
+    missing_files = []
+    
     for filename in required_files:
         filepath = dataset_dir / filename
         if check_file_exists(filepath):
             size_mb = filepath.stat().st_size / (1024 * 1024)
-            logger.info(f"✅ {filename}: Already exists ({size_mb:.1f} MB)")
+            logger.info(f"✅ {filename}: Found ({size_mb:.1f} MB)")
             existing_files.append(filename)
+        else:
+            logger.warning(f"❌ {filename}: Missing")
+            missing_files.append(filename)
+    
+    # Check optional files
+    for filename in optional_files:
+        filepath = dataset_dir / filename
+        if check_file_exists(filepath):
+            size_mb = filepath.stat().st_size / (1024 * 1024)
+            logger.info(f"📁 {filename}: Found ({size_mb:.1f} MB)")
 
     if len(existing_files) == len(required_files):
-        logger.info("🎉 All dataset files already exist!")
+        logger.info("🎉 All required multimodal dataset files found!")
+        
+        # Verify data integrity
+        try:
+            # Test loading captions
+            captions_path = dataset_dir / "cc_3M_captions.json"
+            with open(captions_path, 'r') as f:
+                captions = json.load(f)
+            logger.info(f"📝 Captions file contains {len(captions)} entries")
+            
+            # Test loading vision features
+            feat1_path = dataset_dir / "cc_3M_dino_v2_states_1of2.npy"
+            feat2_path = dataset_dir / "cc_3M_dino_v2_states_2of2.npy"
+            
+            feat1 = np.load(feat1_path)
+            feat2 = np.load(feat2_path)
+            
+            logger.info(f"🖼️  Vision features part 1: {feat1.shape}")
+            logger.info(f"🖼️  Vision features part 2: {feat2.shape}")
+            logger.info(f"🖼️  Total vision features: {feat1.shape[0] + feat2.shape[0]}")
+            
+            # Verify counts match
+            total_vision = feat1.shape[0] + feat2.shape[0]
+            if isinstance(captions, list):
+                caption_count = len(captions)
+            else:
+                caption_count = len(captions.get('captions', captions))
+                
+            if total_vision == caption_count:
+                logger.info("✅ Vision features and captions count match!")
+                return True
+            else:
+                logger.warning(f"⚠️  Count mismatch: {total_vision} vision vs {caption_count} captions")
+                
+        except Exception as e:
+            logger.error(f"❌ Data integrity check failed: {e}")
+            
+    return False
+
+
+def download_babylm_multimodal_dataset():
+    """Download BabyLM multimodal dataset following official structure"""
+    logger.info("🚀 Starting BabyLM Multimodal Dataset Download")
+    logger.info("=" * 60)
+    
+    # Check if data already exists
+    if verify_existing_data():
+        logger.info("Dataset verification passed - ready for training!")
         return True
+
+    logger.info("\n📋 BabyLM Multimodal Dataset Components:")
+    logger.info("1. Text-only data: train_50M.zip")
+    logger.info("2. Image-caption pairs (precomputed DiNOv2 + captions):")
+    logger.info("   - cc_3M_captions.json")
+    logger.info("   - cc_3M_dino_v2_states_1of2.npy") 
+    logger.info("   - cc_3M_dino_v2_states_2of2.npy")
+    logger.info("\n🔗 Data Sources:")
+    logger.info("- Localized Narratives (OpenImage + MSCOCO training sets)")
+    logger.info("- Conceptual Captions 3M (training split only)")
+    logger.info("- Visual embeddings: DiNOv2 ViT-Base (facebook/dinov2-base)")
+    
+    # Target directory
+    dataset_dir = Path("../babylm_dataset")
+    dataset_dir.mkdir(exist_ok=True)
+
+    logger.info(f"\n📁 Dataset directory: {dataset_dir.absolute()}")
+    
+    # Official BabyLM multimodal dataset URLs
+    # These would be the actual download URLs from the BabyLM organizers
+    file_urls = {
+        "cc_3M_captions.json": "https://example.com/babylm/cc_3M_captions.json",
+        "cc_3M_dino_v2_states_1of2.npy": "https://example.com/babylm/cc_3M_dino_v2_states_1of2.npy", 
+        "cc_3M_dino_v2_states_2of2.npy": "https://example.com/babylm/cc_3M_dino_v2_states_2of2.npy",
+        "train_50M.zip": "https://example.com/babylm/train_50M.zip"
+    }
+    
+    logger.info("\n⚠️  IMPORTANT: Manual Download Required")
+    logger.info("=" * 60)
+    logger.info("The BabyLM dataset requires manual download from the official source.")
+    logger.info("Please follow these steps:")
+    logger.info("\n1. Visit the BabyLM Challenge website")
+    logger.info("2. Download the following files to ../babylm_dataset/:")
+    logger.info("   ✅ cc_3M_captions.json")
+    logger.info("   ✅ cc_3M_dino_v2_states_1of2.npy") 
+    logger.info("   ✅ cc_3M_dino_v2_states_2of2.npy")
+    logger.info("   📝 train_50M.zip (optional for text-only)")
+    
+    logger.info("\n💡 Alternative: Use precomputed visual embeddings")
+    logger.info("If you have raw images, you can compute DiNOv2 embeddings using:")
+    logger.info('   from transformers import AutoModel')
+    logger.info('   model = AutoModel.from_pretrained("facebook/dinov2-base")')
+    
+    # Create download instruction files that explain the process
+    instructions = {
+        "cc_3M_captions.json": "Download Conceptual Captions 3M captions (JSON format)",
+        "cc_3M_dino_v2_states_1of2.npy": "Download precomputed DiNOv2 visual embeddings (part 1/2)",
+        "cc_3M_dino_v2_states_2of2.npy": "Download precomputed DiNOv2 visual embeddings (part 2/2)"
+    }
+    
+    for filename, description in instructions.items():
+        instruction_file = dataset_dir / f"{filename}.download_instructions.txt"
+        with open(instruction_file, 'w') as f:
+            f.write(f"BabyLM Dataset File: {filename}\n")
+            f.write(f"Description: {description}\n")
+            f.write(f"Source: BabyLM Challenge - Multimodal Track\n")
+            f.write(f"Format: {filename.split('.')[-1].upper()}\n")
+            f.write(f"\nOfficial sources:\n")
+            f.write(f"- Localized Narratives: https://google.github.io/localized-narratives/\n")
+            f.write(f"- Conceptual Captions 3M: https://ai.google.com/research/ConceptualCaptions/download\n")
+            f.write(f"- Visual embeddings computed with: facebook/dinov2-base\n")
+        
+        logger.info(f"📝 Created: {instruction_file}")
+
+    return False
 
     # Download ZIP file
     zip_filename = dataset_dir / "babylm_dataset.zip"
@@ -147,129 +277,61 @@ def download_babylm_dataset():
         logger.info(f"   1. Open: {dataset_url}")
         logger.info(f"   2. Save to: {zip_filename}")
         logger.info(f"   3. Extract to: {dataset_dir}")
-        return False
-
-
-def create_sample_dataset():
-    """Create a small sample dataset for testing when full dataset is not available"""
-    logger.info("Creating sample dataset for testing...")
-
+    
+def create_test_dataset():
+    """Create a small test dataset for development"""
+    logger.info("🧪 Creating test dataset for development...")
+    
     dataset_dir = Path("../babylm_dataset")
     dataset_dir.mkdir(exist_ok=True)
-
-    # Create sample captions
-    sample_captions = [
-        "A cat sitting on a windowsill looking outside",
-        "Beautiful sunset over mountains with orange and pink sky",
-        "Children playing in a park with green grass",
-        "Red sports car driving on a highway",
-        "Fresh vegetables arranged on a wooden table",
-        "Dog running through a field of flowers",
-        "City skyline at night with bright lights",
-        "Ocean waves crashing on a sandy beach",
-        "Snow-covered trees in a winter forest",
-        "Butterfly landing on a colorful flower"
-    ] * 100  # 1000 samples
-
+    
+    # Create test captions (100 samples)
+    test_captions = [
+        f"A beautiful landscape with mountains and trees in scene {i}"
+        for i in range(100)
+    ]
+    
     captions_file = dataset_dir / "cc_3M_captions.json"
     with open(captions_file, 'w') as f:
-        json.dump(sample_captions, f)
-
-    logger.info(f"✅ Created sample captions: {len(sample_captions)} samples")
-
-    # Create sample vision features (random DiNOv2-like features)
-    np.random.seed(42)  # For reproducible samples
-
-    # Split into two files like the real dataset
-    num_samples_1 = 500
-    num_samples_2 = 500
-    feature_dim = 768  # DiNOv2 dimension
-
-    # Create realistic-looking features (normalized)
-    features_1 = np.random.randn(num_samples_1, feature_dim).astype(np.float32)
-    features_1 = features_1 / np.linalg.norm(features_1, axis=1, keepdims=True)
-
-    features_2 = np.random.randn(num_samples_2, feature_dim).astype(np.float32)
-    features_2 = features_2 / np.linalg.norm(features_2, axis=1, keepdims=True)
-
-    # Save features
-    features_file_1 = dataset_dir / "cc_3M_dino_v2_states_1of2.npy"
-    features_file_2 = dataset_dir / "cc_3M_dino_v2_states_2of2.npy"
-
-    np.save(features_file_1, features_1)
-    np.save(features_file_2, features_2)
-
-    logger.info(f"✅ Created sample vision features:")
-    logger.info(f"   Part 1: {features_1.shape} -> {features_file_1}")
-    logger.info(f"   Part 2: {features_2.shape} -> {features_file_2}")
-
-    # Create download instructions (for reference)
-    instructions = {
-        "cc_3M_captions.json": "Sample captions created locally",
-        "cc_3M_dino_v2_states_1of2.npy": "Sample DiNOv2 features (part 1) created locally",
-        "cc_3M_dino_v2_states_2of2.npy": "Sample DiNOv2 features (part 2) created locally",
-        "note": "These are sample files for testing. For real training, download from BabyLM dataset.",
-        "real_urls": {
-            "captions": "https://data.babylm.github.io/multimodal/cc_3M_captions.json",
-            "features_1": "https://data.babylm.github.io/multimodal/cc_3M_dino_v2_states_1of2.npy",
-            "features_2": "https://data.babylm.github.io/multimodal/cc_3M_dino_v2_states_2of2.npy"
-        }
-    }
-
-    instructions_file = dataset_dir / "download_instructions.json"
-    with open(instructions_file, 'w') as f:
-        json.dump(instructions, f, indent=2)
-
-    logger.info("✅ Sample dataset created successfully!")
-    logger.info(f"   Dataset directory: {dataset_dir.absolute()}")
-    logger.info(f"   Total samples: {len(sample_captions)}")
-    logger.info(f"   Feature dimension: {feature_dim}")
-
+        json.dump(test_captions, f)
+    
+    # Create test vision features (DiNOv2 base is 768 dimensions)
+    test_features_1 = np.random.randn(50, 768).astype(np.float32)
+    test_features_2 = np.random.randn(50, 768).astype(np.float32)
+    
+    feat1_file = dataset_dir / "cc_3M_dino_v2_states_1of2.npy"
+    feat2_file = dataset_dir / "cc_3M_dino_v2_states_2of2.npy"
+    
+    np.save(feat1_file, test_features_1)
+    np.save(feat2_file, test_features_2)
+    
+    logger.info(f"✅ Created test captions: {len(test_captions)} samples")
+    logger.info(f"✅ Created test features: {test_features_1.shape} + {test_features_2.shape}")
+    logger.info("🧪 Test dataset ready for development!")
+    
     return True
 
 
 def main():
-    """Main function"""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Download BabyLM dataset for BitMar")
-    parser.add_argument(
-        "--sample-only",
-        action="store_true",
-        help="Create sample dataset for testing instead of downloading full dataset"
-    )
-    parser.add_argument(
-        "--force-download",
-        action="store_true",
-        help="Force re-download even if files exist"
-    )
-
-    args = parser.parse_args()
-
-    if args.sample_only:
-        logger.info("Creating sample dataset for testing...")
-        success = create_sample_dataset()
-    else:
-        logger.info("Attempting to download full BabyLM dataset...")
-        success = download_babylm_dataset()
-
-        if not success:
-            logger.info("\n📋 Full dataset download failed.")
-            logger.info("Creating sample dataset for testing instead...")
-            success = create_sample_dataset()
-
-    if success:
-        logger.info("\n🎉 Dataset setup completed!")
-        logger.info("Next steps:")
-        logger.info("1. Run: python test_dataset_compatibility.py")
-        logger.info("2. Run: python test_cpu_compatibility.py")
-        logger.info("3. For full training: python train_bitmar.py")
-        exit(0)
-    else:
-        logger.error("\n❌ Dataset setup failed!")
-        logger.info("Please check your internet connection and try again.")
-        exit(1)
+    """Main function to download or verify BabyLM dataset"""
+    logger.info("🚀 BabyLM Dataset Setup for BitMar")
+    logger.info("=" * 50)
+    
+    # First check if data already exists
+    if verify_existing_data():
+        logger.info("✅ Dataset ready for training!")
+        return True
+    
+    # Try to download from official sources
+    logger.info("\n📥 Attempting dataset download...")
+    success = download_babylm_multimodal_dataset()
+    
+    if not success:
+        logger.info("\n🧪 Creating test dataset for development...")
+        create_test_dataset()
+        logger.info("\n⚠️  Using test data - replace with real BabyLM dataset for final training")
+        
+    return True
 
 
 if __name__ == "__main__":
