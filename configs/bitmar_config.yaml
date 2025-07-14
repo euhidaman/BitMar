@@ -1,0 +1,96 @@
+model:
+  # BitNet Text Encoder (fully quantized)
+  vocab_size: 50257  # GPT-2 vocabulary
+  text_encoder_dim: 512
+  text_encoder_layers: 6
+  text_encoder_heads: 8
+  
+  # BitNet Text Decoder (fully quantized)
+  text_decoder_dim: 512
+  text_decoder_layers: 6
+  text_decoder_heads: 8
+  
+  # Vision processing (DiNOv2 features)
+  vision_encoder_dim: 768  # DiNOv2 feature dimension
+  vision_latent_size: 512
+  vision_hidden_size: 256
+  
+  # Cross-modal fusion (BitNet quantized)
+  fusion_hidden_size: 512
+  fusion_num_heads: 8
+  fusion_num_layers: 2
+  
+  # Episodic Memory (Larimar-inspired)
+  memory_size: 512  # Number of memory slots
+  episode_dim: 512  # Episode feature dimension
+  memory_alpha: 0.1
+  direct_writing: true
+  
+  # Model configuration
+  max_seq_len: 128  # Shorter for efficiency
+  dropout: 0.1
+  learning_rate: 0.0001
+  weight_decay: 0.01
+
+data:
+  # Dataset configuration
+  dataset_dir: "../babylm_dataset"
+  text_encoder_name: "gpt2"
+  max_seq_length: 128  # Shorter for efficiency
+  
+  # DataLoader settings (optimized for RTX 4090)
+  batch_size: 32  # Increased for RTX 4090
+  num_workers: 8  # More workers for faster data loading
+  pin_memory: true
+  persistent_workers: true
+  
+  # HuggingFace configuration (use environment variables)
+  hf_token: null  # Use HF_TOKEN environment variable
+  validation_datasets: 
+    - "ewok-core/ewok-core-1.0"
+    - "facebook/winoground"
+
+training:
+  # Training configuration
+  max_epochs: 10
+  accumulate_grad_batches: 1
+  gradient_clip_val: 1.0
+  val_check_interval: 1000
+  scheduler: "cosine"
+  min_lr: 0.00001
+  warmup_steps: 1000
+
+# Weights & Biases configuration (optional)
+wandb:
+  project: "bitmar-babylm"
+  entity: null  # Will use default entity or from environment
+  api_key: null  # Use WANDB_API_KEY environment variable
+  log_every_n_steps: 50
+  log_attention: true
+  log_memory: true
+  log_gradients: false
+  save_code: true
+
+# Evaluation settings
+evaluation:
+  metrics: ["bleu", "rouge", "cross_modal_accuracy"]
+  generate_samples: true
+  num_samples: 100
+  max_generation_length: 100
+  temperature: 0.7
+  top_p: 0.9
+
+# Output directories
+output:
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+  attention_dir: "attention_analysis"
+  memory_dir: "memory_analysis"
+  results_dir: "results"
+
+# CPU testing configuration
+cpu_test:
+  batch_size: 2
+  max_samples: 100
+  reduced_model_size: true
+  memory_size: 64  # Reduced for CPU testing
