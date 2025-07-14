@@ -12,6 +12,7 @@ from datasets import load_dataset
 from typing import Dict, List, Tuple, Optional
 import logging
 import random
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -268,7 +269,7 @@ class BabyLMDataModule:
         # Dataset parameters
         self.dataset_dir = config['dataset_dir']
         self.max_seq_length = config['max_seq_length']
-        self.hf_token = config.get('hf_token', '')
+        self.hf_token = config.get('hf_token') or os.getenv('HF_TOKEN', '')
 
         # DataLoader parameters
         self.batch_size = config['batch_size']
@@ -435,7 +436,7 @@ if __name__ == "__main__":
         'batch_size': 4,
         'num_workers': 0,
         'pin_memory': False,
-        'hf_token': "your_hf_token_here",
+        'hf_token': os.getenv('HF_TOKEN', 'your_hf_token_here'),
         'validation_datasets': ['ewok-core/ewok-core-1.0', 'facebook/winoground']
     }
 

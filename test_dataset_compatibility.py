@@ -3,7 +3,7 @@ Dataset Compatibility Test for BitMar
 Tests BabyLM dataset loading and preprocessing
 """
 
-from src.dataset import BabyLMMultimodalDataset, create_data_module
+from src.dataset import CompleteBabyLMDataset, BabyLMDataModule, create_data_module
 import sys
 import logging
 import json
@@ -155,14 +155,11 @@ def test_dataset_creation():
 
     try:
         # Create dataset with small sample
-        dataset = BabyLMMultimodalDataset(
-            captions_file="../babylm_dataset/cc_3M_captions.json",
-            vision_features_1="../babylm_dataset/cc_3M_dino_v2_states_1of2.npy",
-            vision_features_2="../babylm_dataset/cc_3M_dino_v2_states_2of2.npy",
-            tokenizer_name="bert-base-uncased",
+        dataset = CompleteBabyLMDataset(
+            dataset_dir="../babylm_dataset",
+            tokenizer_name="gpt2",
             max_seq_length=256,
             split="train",
-            train_ratio=0.95,
             max_samples=100  # Small sample for testing
         )
 
@@ -200,16 +197,14 @@ def test_data_module():
 
     try:
         config = {
-            'captions_file': "../babylm_dataset/cc_3M_captions.json",
-            'vision_features_1': "../babylm_dataset/cc_3M_dino_v2_states_1of2.npy",
-            'vision_features_2': "../babylm_dataset/cc_3M_dino_v2_states_2of2.npy",
-            'text_encoder_name': "bert-base-uncased",
+            'dataset_dir': "../babylm_dataset",
+            'text_encoder_name': "gpt2",
             'max_seq_length': 256,
-            'train_split': 0.95,
-            'val_split': 0.05,
             'batch_size': 4,
             'num_workers': 0,
             'pin_memory': False,
+            'hf_token': None,  # Will use dummy validation data
+            'validation_datasets': ['ewok-core/ewok-core-1.0', 'facebook/winoground']
         }
 
         # Create data module
@@ -218,28 +213,32 @@ def test_data_module():
 
         logger.info(f"✅ Data module created successfully!")
         logger.info(f"   Train dataset size: {len(data_module.train_dataset)}")
-        logger.info(f"   Val dataset size: {len(data_module.val_dataset)}")
+        logger.info(f"   Val datasets: {list(data_module.val_datasets.keys())}")
 
         # Test data loaders
         train_loader = data_module.train_dataloader()
-        val_loader = data_module.val_dataloader()
+        val_loaders = data_module.val_dataloader()
 
         logger.info(f"   Train batches: {len(train_loader)}")
-        logger.info(f"   Val batches: {len(val_loader)}")
+        logger.info(f"   Val loaders: {len(val_loaders)}")
 
         # Test batch loading
         train_batch = next(iter(train_loader))
-        val_batch = next(iter(val_loader))
+        val_batch = next(iter(val_loaders[0])) if val_loaders else None
 
         logger.info(f"✅ Batch loading successful!")
         logger.info(
             f"   Train batch input shape: {train_batch['input_ids'].shape}")
         logger.info(
             f"   Train batch vision shape: {train_batch['vision_features'].shape}")
-        logger.info(
-            f"   Val batch input shape: {val_batch['input_ids'].shape}")
-        logger.info(
-            f"   Val batch vision shape: {val_batch['vision_features'].shape}")
+        
+        if val_batch is not None:
+            logger.info(
+                f"   Val batch input shape: {val_batch['input_ids'].shape}")
+            logger.info(
+                f"   Val batch vision shape: {val_batch['vision_features'].shape}")
+        else:
+            logger.info("   No validation batch available (using dummy data)")
 
         return True
 
