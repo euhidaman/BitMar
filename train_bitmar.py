@@ -72,22 +72,43 @@ class BitMarTrainer:
 
     def setup_wandb(self):
         """Initialize Weights & Biases logging"""
-        if self.config.get('wandb', {}).get('api_key'):
-            # Set API key
-            os.environ['WANDB_API_KEY'] = self.config['wandb']['api_key']
+        wandb_config = self.config.get('wandb', {})
+        
+        # Check if wandb should be used
+        use_wandb = (
+            wandb_config.get('api_key') or 
+            os.getenv('WANDB_API_KEY') or
+            wandb_config.get('project')
+        )
+        
+        if use_wandb:
+            try:
+                # Set API key if provided in config
+                if wandb_config.get('api_key'):
+                    os.environ['WANDB_API_KEY'] = wandb_config['api_key']
 
-            # Initialize wandb
-            wandb.init(
-                project=self.config['wandb']['project'],
-                entity=self.config['wandb']['entity'],
-                config=self.config,
-                name=f"bitmar-{self.config['training']['max_epochs']}epochs",
-                tags=["bitmar", "multimodal", "episodic-memory", "babylm"]
-            )
+                # Initialize wandb with optional entity
+                init_kwargs = {
+                    'project': wandb_config.get('project', 'bitmar-babylm'),
+                    'config': self.config,
+                    'name': f"bitmar-{self.config['training']['max_epochs']}epochs",
+                    'tags': ["bitmar", "multimodal", "episodic-memory", "babylm"]
+                }
+                
+                # Only add entity if it's specified and not null
+                if wandb_config.get('entity'):
+                    init_kwargs['entity'] = wandb_config['entity']
 
-            # Watch model (will be set later)
-            self.use_wandb = True
-            logger.info("Wandb initialized successfully")
+                wandb.init(**init_kwargs)
+
+                # Watch model (will be set later)
+                self.use_wandb = True
+                logger.info("Wandb initialized successfully")
+                
+            except Exception as e:
+                logger.warning(f"Wandb initialization failed: {e}")
+                logger.info("Continuing training without wandb logging")
+                self.use_wandb = False
         else:
             self.use_wandb = False
             logger.info("Wandb not configured, logging locally only")

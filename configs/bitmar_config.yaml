@@ -1,7 +1,16 @@
 model:
   # BitNet Text Encoder (fully quantized)
   vocab_size: 50257  # GPT-2 vocabulary
-  text_encoder_dim: 512
+  tex# Weights & Biases configuration (optional)
+wandb:
+  project: "bitmar-babylm"
+  entity: null  # Will use default entity or from environment
+  api_key: null  # Use WANDB_API_KEY environment variable
+  log_every_n_steps: 50
+  log_attention: true
+  log_memory: true
+  log_gradients: false
+  save_code: truedim: 512
   text_encoder_layers: 6
   text_encoder_heads: 8
   
