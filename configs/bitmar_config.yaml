@@ -48,6 +48,16 @@ data:
     - "squad"  # Public dataset, no auth required
     - "glue/sst2"  # Public dataset, no auth required
 
+# Enhanced attention analysis configuration
+attention_analysis:
+  # Enable attention head tracking and visualization
+  track_top_k: 20  # Track top 20 most important heads
+  log_every_n_steps: 100  # Analyze attention every 100 steps
+  viz_every_n_epochs: 2  # Create visualizations every 2 epochs
+  save_head_patterns: true  # Save attention patterns to files
+  analyze_memory_attention: true  # Analyze episodic memory attention
+  analyze_cross_modal: true  # Analyze cross-modal attention fusion
+
 training:
   # Training configuration
   max_epochs: 10
@@ -62,15 +72,24 @@ training:
   track_attention: true
 
 # Weights & Biases configuration (optional)
+# Enhanced wandb configuration with comprehensive logging
 wandb:
   project: "bitmar-babylm"
   entity: "babylm-ntust"  # Use babylm-ntust team
   api_key: null  # Use WANDB_API_KEY environment variable
   log_every_n_steps: 50
+  # Detailed logging categories with proper axis labels
   log_attention: true
   log_memory: true
-  log_gradients: false
+  log_gradients: true
+  log_quantization: true
+  log_features: true
   save_code: true
+  # Visualization settings
+  create_plots: true
+  plot_attention_heatmaps: true
+  plot_memory_usage: true
+  plot_quantization_dist: true
 
 # Evaluation settings
 evaluation:
@@ -81,10 +100,13 @@ evaluation:
   temperature: 0.7
   top_p: 0.9
 
-# Output directories
+# Output directories (including attention analysis)
 output:
   checkpoint_dir: "checkpoints"
   log_dir: "logs"
+  attention_dir: "attention_analysis"
+  memory_dir: "memory_analysis"
+  results_dir: "results"
   attention_dir: "attention_analysis"
   memory_dir: "memory_analysis"
   results_dir: "results"

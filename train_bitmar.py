@@ -6,6 +6,8 @@ Handles multimodal training with episodic memory and attention analysis
 from src.attention_analysis import analyze_model_attention
 from src.dataset import create_data_module
 from src.model import create_bitmar_model, count_parameters
+from src.wandb_logger import BitMarWandbLogger
+from src.attention_visualizer import AttentionHeadAnalyzer
 import os
 import sys
 import argparse
@@ -49,8 +51,10 @@ class BitMarTrainer:
         # Setup directories
         self.setup_directories()
 
-        # Initialize wandb if configured
-        self.setup_wandb()
+        # Initialize enhanced wandb logger and attention analyzer
+        self.wandb_logger = None
+        self.attention_analyzer = None
+        self.setup_logging_systems()
 
         # Create model and data
         self.model = None
@@ -70,8 +74,8 @@ class BitMarTrainer:
             dir_path.mkdir(parents=True, exist_ok=True)
             setattr(self, dir_name, dir_path)
 
-    def setup_wandb(self):
-        """Initialize Weights & Biases logging"""
+    def setup_logging_systems(self):
+        """Initialize enhanced wandb logger and attention analyzer"""
         wandb_config = self.config.get('wandb', {})
         
         # Check if wandb should be used
@@ -87,30 +91,26 @@ class BitMarTrainer:
                 if wandb_config.get('api_key'):
                     os.environ['WANDB_API_KEY'] = wandb_config['api_key']
 
-                # Initialize wandb with optional entity
-                init_kwargs = {
-                    'project': wandb_config.get('project', 'bitmar-babylm'),
-                    'config': self.config,
-                    'name': f"bitmar-{self.config['training']['max_epochs']}epochs",
-                    'tags': ["bitmar", "multimodal", "episodic-memory", "babylm"]
-                }
+                # Initialize enhanced wandb logger
+                run_name = f"bitmar-{self.config['training']['max_epochs']}epochs-{wandb.util.generate_id()[:8]}"
                 
-                # Only add entity if it's specified and not null
-                if wandb_config.get('entity'):
-                    init_kwargs['entity'] = wandb_config['entity']
-
-                wandb.init(**init_kwargs)
-
-                # Watch model (will be set later)
+                self.wandb_logger = BitMarWandbLogger(
+                    project_name=wandb_config.get('project', 'bitmar-babylm'),
+                    config=self.config,
+                    run_name=run_name
+                )
+                
                 self.use_wandb = True
-                logger.info("Wandb initialized successfully")
+                logger.info("Enhanced Wandb logger initialized successfully")
                 
             except Exception as e:
                 logger.warning(f"Wandb initialization failed: {e}")
                 logger.info("Continuing training without wandb logging")
                 self.use_wandb = False
+                self.wandb_logger = None
         else:
             self.use_wandb = False
+            self.wandb_logger = None
             logger.info("Wandb not configured, logging locally only")
 
     def setup_model_and_data(self, max_samples: Optional[int] = None):
@@ -125,9 +125,18 @@ class BitMarTrainer:
         param_count = count_parameters(self.model)
         logger.info(f"Model parameters: {param_count}")
 
-        if self.use_wandb:
-            wandb.log(param_count)
-            wandb.watch(self.model, log="all", log_freq=100)
+        # Log model size with enhanced wandb logger
+        if self.wandb_logger:
+            self.wandb_logger.log_model_size_metrics(self.model)
+
+        # Initialize attention analyzer
+        self.attention_analyzer = AttentionHeadAnalyzer(
+            model=self.model,
+            tokenizer=self.model.tokenizer,
+            save_dir=str(self.attention_dir),
+            wandb_logger=self.wandb_logger,
+            track_top_k=self.config.get('attention_analysis', {}).get('track_top_k', 10)
+        )
 
         # Create data module
         self.data_module = create_data_module(self.config['data'])
@@ -226,14 +235,34 @@ class BitMarTrainer:
                 'avg_loss': f"{np.mean(epoch_losses):.4f}"
             })
 
-            # Log to wandb
-            if self.use_wandb and batch_idx % self.config['wandb']['log_every_n_steps'] == 0:
-                wandb.log({
-                    'train_loss_step': loss.item(),
-                    'epoch': epoch,
-                    'global_step': self.global_step,
-                    'learning_rate': self.optimizer.param_groups[0]['lr']
-                })
+            # Enhanced logging with wandb logger
+            if self.wandb_logger and batch_idx % self.config['wandb']['log_every_n_steps'] == 0:
+                # Log comprehensive training metrics
+                self.wandb_logger.log_training_metrics(outputs, epoch, self.global_step)
+                
+                # Log learning rate
+                self.wandb_logger.log_learning_rate(
+                    self.optimizer.param_groups[0]['lr'], self.global_step
+                )
+                
+                # Log gradient metrics
+                self.wandb_logger.log_gradient_metrics(self.model, self.global_step)
+                
+                # Log quantization metrics (every 10 steps to reduce overhead)
+                if self.global_step % (self.config['wandb']['log_every_n_steps'] * 10) == 0:
+                    self.wandb_logger.log_quantization_metrics(self.model, self.global_step)
+                    
+                # Log memory analysis
+                if hasattr(self.model, 'memory'):
+                    self.wandb_logger.log_memory_analysis(self.model.memory, self.global_step)
+
+            # Attention analysis (less frequent to avoid overhead)
+            if (self.attention_analyzer and 
+                self.global_step % self.config.get('attention_analysis', {}).get('log_every_n_steps', 100) == 0):
+                
+                self.attention_analyzer.analyze_batch_attention(
+                    outputs, input_ids, self.global_step
+                )
 
             self.global_step += 1
 
@@ -415,10 +444,31 @@ class BitMarTrainer:
             if self.scheduler:
                 self.scheduler.step()
 
+            # Log validation metrics with enhanced logger
+            if self.wandb_logger:
+                self.wandb_logger.log_validation_metrics(
+                    val_metrics['val_loss'],
+                    np.exp(val_metrics['val_loss']),  # Perplexity
+                    self.global_step,
+                    memory_entropy=val_metrics['val_memory_entropy'],
+                    cross_modal_similarity=val_metrics['val_cross_modal_similarity']
+                )
+
             # Combine metrics
             all_metrics = {**train_metrics, **val_metrics}
             all_metrics['epoch'] = epoch
             all_metrics['learning_rate'] = self.optimizer.param_groups[0]['lr']
+
+            # Log epoch summary
+            if self.wandb_logger:
+                self.wandb_logger.log_epoch_summary(
+                    epoch=epoch,
+                    train_loss=train_metrics['train_loss'],
+                    val_loss=val_metrics['val_loss'],
+                    memory_efficiency=train_metrics['memory_usage_entropy'],
+                    step=self.global_step,
+                    cross_modal_similarity=train_metrics['cross_modal_similarity']
+                )
 
             # Log metrics
             logger.info(f"Train Loss: {train_metrics['train_loss']:.4f}")
@@ -427,6 +477,37 @@ class BitMarTrainer:
                 f"Memory Entropy: {train_metrics['memory_usage_entropy']:.4f}")
             logger.info(
                 f"Cross-Modal Similarity: {train_metrics['cross_modal_similarity']:.4f}")
+
+            # Create attention visualizations (every few epochs to avoid overhead)
+            if (self.attention_analyzer and 
+                (epoch + 1) % self.config.get('attention_analysis', {}).get('viz_every_n_epochs', 2) == 0):
+                
+                logger.info("Creating attention visualizations...")
+                
+                # Create attention head heatmaps
+                for attention_type in ['encoder', 'decoder', 'cross_modal']:
+                    self.attention_analyzer.create_attention_head_heatmap(
+                        self.global_step, attention_type
+                    )
+                
+                # Create timeline plots
+                self.attention_analyzer.create_attention_timeline_plot(self.global_step)
+                
+                # Save top attention heads
+                for attention_type in ['encoder', 'decoder', 'cross_modal']:
+                    self.attention_analyzer.save_top_heads(self.global_step, attention_type)
+                
+                # Create visualizations with wandb logger
+                if self.wandb_logger and hasattr(self.model, 'memory'):
+                    # Memory heatmaps
+                    self.wandb_logger.create_memory_heatmap(
+                        self.model.memory.memory_usage,
+                        self.model.memory.memory_age,
+                        self.global_step
+                    )
+                    
+                    # Quantization plots
+                    self.wandb_logger.create_quantization_plot(self.model, self.global_step)
 
             if self.use_wandb:
                 wandb.log(all_metrics)
@@ -438,14 +519,21 @@ class BitMarTrainer:
 
             self.save_checkpoint(epoch, is_best=is_best)
 
-            # Run attention analysis periodically
-            if (epoch + 1) % 2 == 0 and self.config['training']['track_attention']:
-                self.run_attention_analysis()
-
-        # Final attention analysis
-        if self.config['training']['track_attention']:
-            logger.info("Running final attention analysis...")
-            self.run_attention_analysis()
+        # Final analysis and cleanup
+        logger.info("Training completed! Running final analysis...")
+        
+        if self.attention_analyzer:
+            # Generate final attention report
+            final_report = self.attention_analyzer.generate_attention_report(self.global_step)
+            logger.info(f"Final attention analysis: {final_report}")
+            
+            # Save final top heads
+            for attention_type in ['encoder', 'decoder', 'cross_modal']:
+                self.attention_analyzer.save_top_heads(self.global_step, attention_type, k=20)
+        
+        # Close wandb logger
+        if self.wandb_logger:
+            self.wandb_logger.finish()
 
         logger.info("Training completed!")
 
