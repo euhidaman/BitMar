@@ -41,13 +41,18 @@ class BitMarWandbLogger:
         plt.style.use('seaborn-v0_8')
         sns.set_palette("husl")
         
-    def log_training_metrics(self, outputs: Dict[str, torch.Tensor], epoch: int, step: int):
-        """Log comprehensive training metrics from model outputs"""
+    def log_consolidated_metrics(self, outputs: Dict[str, torch.Tensor], epoch: int, step: int, 
+                                lr: float, model: nn.Module, memory_module=None, 
+                                log_quantization: bool = False):
+        """Log all metrics in a single consolidated call to avoid step conflicts"""
         metrics = {}
         
         # Basic training metrics
         if 'loss' in outputs and outputs['loss'] is not None:
             metrics['Training/Loss'] = outputs['loss'].item()
+        
+        # Learning rate
+        metrics['Training/Learning_Rate'] = lr
         
         # Memory metrics with proper categorization
         if 'memory_usage' in outputs:
@@ -109,13 +114,117 @@ class BitMarWandbLogger:
                     outputs['text_features'], outputs['vision_latent']
                 )
                 metrics['Features/CrossModal_Similarity'] = similarity
+        
+        # Gradient metrics
+        total_norm = 0
+        param_count = 0
+        component_norms = {
+            'encoder': 0, 'decoder': 0, 'fusion': 0, 'memory': 0, 
+            'vision': 0, 'projection': 0, 'other': 0
+        }
+        component_counts = {k: 0 for k in component_norms.keys()}
+        
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                param_norm = param.grad.data.norm(2).item()
+                total_norm += param_norm ** 2
+                param_count += 1
+                
+                # Categorize by component
+                component = 'other'
+                if 'text_encoder' in name:
+                    component = 'encoder'
+                elif 'text_decoder' in name:
+                    component = 'decoder'
+                elif 'fusion' in name:
+                    component = 'fusion'
+                elif 'memory' in name:
+                    component = 'memory'
+                elif 'vision' in name:
+                    component = 'vision'
+                elif any(proj in name for proj in ['proj', 'to_episode', 'to_decoder']):
+                    component = 'projection'
+                
+                component_norms[component] += param_norm ** 2
+                component_counts[component] += 1
+        
+        if param_count > 0:
+            total_norm = total_norm ** 0.5
+            metrics['Gradients/Total_Norm'] = total_norm
+            metrics['Gradients/Avg_Norm'] = total_norm / param_count
             
+            # Log component-wise gradients
+            for component, norm in component_norms.items():
+                if component_counts[component] > 0:
+                    component_norm = (norm ** 0.5) / component_counts[component]
+                    metrics[f'Gradients/{component.title()}_Norm'] = component_norm
+        
+        # Memory analysis
+        if memory_module and hasattr(memory_module, 'memory'):
+            memory = memory_module.memory
+            memory_age = memory_module.memory_age
+            memory_usage = memory_module.memory_usage
+            
+            # Memory utilization
+            active_slots = (memory_usage > 0).float().mean().item()
+            metrics['Memory/Analysis_Active_Slots_Ratio'] = active_slots
+            
+            # Memory age distribution
+            metrics['Memory/Analysis_Avg_Age'] = memory_age.mean().item()
+            metrics['Memory/Analysis_Max_Age'] = memory_age.max().item()
+            metrics['Memory/Analysis_Age_Std'] = memory_age.std().item()
+            
+            # Memory usage distribution
+            metrics['Memory/Analysis_Usage_Mean'] = memory_usage.mean().item()
+            metrics['Memory/Analysis_Usage_Max'] = memory_usage.max().item()
+            
+            # Memory similarity analysis
+            if memory.numel() > 0:
+                active_memory = memory[memory_usage > 0]
+                if active_memory.size(0) > 1:
+                    normalized_memory = nn.functional.normalize(active_memory, dim=1)
+                    similarity_matrix = torch.mm(normalized_memory, normalized_memory.t())
+                    
+                    mask = ~torch.eye(similarity_matrix.size(0), dtype=bool, device=memory.device)
+                    if mask.any():
+                        similarities = similarity_matrix[mask]
+                        
+                        metrics['Memory/Analysis_Avg_Similarity'] = similarities.mean().item()
+                        metrics['Memory/Analysis_Max_Similarity'] = similarities.max().item()
+                        metrics['Memory/Analysis_Similarity_Std'] = similarities.std().item()
+        
+        # Quantization metrics (if requested)
+        if log_quantization:
+            for name, module in model.named_modules():
+                if hasattr(module, 'quantize_weights_1_58_bit'):
+                    module_name = name.replace('.', '_')
+                    
+                    if hasattr(module, 'weight_scale'):
+                        metrics[f'Quantization/WeightScale_{module_name}'] = module.weight_scale.item()
+                        
+                    if hasattr(module, 'input_scale'):
+                        metrics[f'Quantization/InputScale_{module_name}'] = module.input_scale.item()
+                        
+                    if hasattr(module, 'weight'):
+                        weight = module.weight.data
+                        quantized_weight = module.quantize_weights_1_58_bit(weight)
+                        
+                        total_weights = quantized_weight.numel()
+                        zeros = (quantized_weight == 0).float().sum().item() / total_weights
+                        ones = (quantized_weight == 1).float().sum().item() / total_weights
+                        neg_ones = (quantized_weight == -1).float().sum().item() / total_weights
+                        
+                        metrics[f'Quantization/Zeros_Ratio_{module_name}'] = zeros
+                        metrics[f'Quantization/Ones_Ratio_{module_name}'] = ones
+                        metrics[f'Quantization/NegOnes_Ratio_{module_name}'] = neg_ones
+                        metrics[f'Quantization/Sparsity_{module_name}'] = zeros * 100
+        
         # Add epoch and step info
         metrics['Training/Epoch'] = epoch
         metrics['Training/Step'] = step
-        metrics['step'] = step  # Add step for wandb metric definition
+        metrics['step'] = step
         
-        # Log to wandb
+        # Log everything at once
         wandb.log(metrics, step=step)
         self.step = step
         
@@ -153,8 +262,11 @@ class BitMarWandbLogger:
                     metrics[f'Quantization/Sparsity_{module_name}'] = zeros * 100
         
         # Add step for consistency
-        metrics['step'] = step
-        wandb.log(metrics, step=step)
+        if step > self.step:
+            metrics['step'] = step
+            wandb.log(metrics, step=step)
+        else:
+            wandb.log(metrics)
         
     def log_memory_analysis(self, memory_module, step: int):
         """Log detailed episodic memory analysis"""
@@ -196,12 +308,18 @@ class BitMarWandbLogger:
                         metrics['Memory/Analysis_Similarity_Std'] = similarities.std().item()
         
         # Add step for consistency
-        metrics['step'] = step
-        wandb.log(metrics, step=step)
+        if step > self.step:
+            metrics['step'] = step
+            wandb.log(metrics, step=step)
+        else:
+            wandb.log(metrics)
         
     def log_learning_rate(self, lr: float, step: int):
         """Log learning rate with proper categorization"""
-        wandb.log({'Training/Learning_Rate': lr, 'step': step}, step=step)
+        if step > self.step:
+            wandb.log({'Training/Learning_Rate': lr, 'step': step}, step=step)
+        else:
+            wandb.log({'Training/Learning_Rate': lr})
         
     def log_gradient_metrics(self, model: nn.Module, step: int):
         """Log gradient statistics with proper categorization"""
@@ -257,8 +375,11 @@ class BitMarWandbLogger:
                 metrics[f'Gradients/{component.title()}_Norm'] = component_norm
         
         # Add step for consistency
-        metrics['step'] = step
-        wandb.log(metrics, step=step)
+        if step > self.step:
+            metrics['step'] = step
+            wandb.log(metrics, step=step)
+        else:
+            wandb.log(metrics)
         
     def log_validation_metrics(self, val_loss: float, perplexity: float, step: int, **kwargs):
         """Log validation metrics with proper categorization"""
@@ -273,8 +394,11 @@ class BitMarWandbLogger:
                 metrics[f'Validation/{key}'] = value
         
         # Add step for consistency        
-        metrics['step'] = step
-        wandb.log(metrics, step=step)
+        if step > self.step:
+            metrics['step'] = step
+            wandb.log(metrics, step=step)
+        else:
+            wandb.log(metrics)
         
     def log_model_size_metrics(self, model: nn.Module):
         """Log model size and parameter statistics"""
@@ -314,8 +438,11 @@ class BitMarWandbLogger:
                 metrics[f'Epoch_Summary/{key}'] = value
         
         # Add step for consistency
-        metrics['step'] = step
-        wandb.log(metrics, step=step)
+        if step > self.step:
+            metrics['step'] = step
+            wandb.log(metrics, step=step)
+        else:
+            wandb.log(metrics)
         
     def create_memory_heatmap(self, memory_usage: torch.Tensor, memory_age: torch.Tensor, step: int):
         """Create and log memory usage heatmap"""

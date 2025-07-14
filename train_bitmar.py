@@ -239,24 +239,19 @@ class BitMarTrainer:
             log_every_n_steps = self.config.get('wandb', {}).get('log_every_n_steps', 50)
             if self.wandb_logger and batch_idx % log_every_n_steps == 0:
                 try:
-                    # Log comprehensive training metrics
-                    self.wandb_logger.log_training_metrics(outputs, epoch, self.global_step)
+                    # Log all metrics in a single consolidated call
+                    log_quantization = self.global_step % (log_every_n_steps * 10) == 0
+                    memory_module = self.model.memory if hasattr(self.model, 'memory') else None
                     
-                    # Log learning rate
-                    self.wandb_logger.log_learning_rate(
-                        self.optimizer.param_groups[0]['lr'], self.global_step
+                    self.wandb_logger.log_consolidated_metrics(
+                        outputs=outputs,
+                        epoch=epoch,
+                        step=self.global_step,
+                        lr=self.optimizer.param_groups[0]['lr'],
+                        model=self.model,
+                        memory_module=memory_module,
+                        log_quantization=log_quantization
                     )
-                    
-                    # Log gradient metrics
-                    self.wandb_logger.log_gradient_metrics(self.model, self.global_step)
-                    
-                    # Log quantization metrics (every 10 steps to reduce overhead)
-                    if self.global_step % (log_every_n_steps * 10) == 0:
-                        self.wandb_logger.log_quantization_metrics(self.model, self.global_step)
-                        
-                    # Log memory analysis
-                    if hasattr(self.model, 'memory'):
-                        self.wandb_logger.log_memory_analysis(self.model.memory, self.global_step)
                         
                 except Exception as e:
                     logger.warning(f"Wandb logging failed at step {self.global_step}: {e}")
