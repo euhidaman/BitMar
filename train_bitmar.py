@@ -186,93 +186,125 @@ class BitMarTrainer:
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}")
 
         for batch_idx, batch in enumerate(progress_bar):
-            # Move batch to device
-            for key in batch:
-                if torch.is_tensor(batch[key]):
-                    batch[key] = batch[key].to(self.device)
+            try:
+                # Move batch to device
+                for key in batch:
+                    if torch.is_tensor(batch[key]):
+                        batch[key] = batch[key].to(self.device)
 
-            # Forward pass
-            outputs = self.model(
-                input_ids=batch['input_ids'],
-                attention_mask=batch['attention_mask'],
-                vision_features=batch['vision_features'],
-                labels=batch['labels']
-            )
-
-            loss = outputs['loss']
-
-            # Backward pass
-            self.optimizer.zero_grad()
-            loss.backward()
-
-            # Gradient clipping
-            if self.config['training']['gradient_clip_val'] > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.config['training']['gradient_clip_val']
+                # Forward pass
+                outputs = self.model(
+                    input_ids=batch['input_ids'],
+                    attention_mask=batch['attention_mask'],
+                    vision_features=batch['vision_features'],
+                    labels=batch['labels']
                 )
 
-            self.optimizer.step()
-
-            # Update metrics
-            epoch_losses.append(loss.item())
-
-            # Compute additional metrics
-            if outputs['memory_usage'] is not None:
-                memory_entropy = self._compute_memory_entropy(
-                    outputs['memory_usage'])
-                epoch_metrics['memory_usage_entropy'] += memory_entropy
-
-            if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
-                cross_modal_sim = self._compute_cross_modal_similarity(
-                    outputs['text_features'], outputs['vision_latent']
-                )
-                epoch_metrics['cross_modal_similarity'] += cross_modal_sim
-
-            # Update progress bar
-            progress_bar.set_postfix({
-                'loss': f"{loss.item():.4f}",
-                'avg_loss': f"{np.mean(epoch_losses):.4f}"
-            })
-
-            # Enhanced logging with wandb logger
-            log_every_n_steps = self.config.get('wandb', {}).get('log_every_n_steps', 50)
-            if self.wandb_logger and batch_idx % log_every_n_steps == 0:
-                try:
-                    # Log all metrics in a single consolidated call
-                    log_quantization = self.global_step % (log_every_n_steps * 10) == 0
-                    memory_module = self.model.memory if hasattr(self.model, 'memory') else None
-                    
-                    self.wandb_logger.log_consolidated_metrics(
-                        outputs=outputs,
-                        epoch=epoch,
-                        step=self.global_step,
-                        lr=self.optimizer.param_groups[0]['lr'],
-                        model=self.model,
-                        memory_module=memory_module,
-                        log_quantization=log_quantization
-                    )
-                        
-                except Exception as e:
-                    logger.warning(f"Wandb logging failed at step {self.global_step}: {e}")
-
-            # Attention analysis (less frequent to avoid overhead)
-            if (self.attention_analyzer and 
-                self.global_step % self.config.get('attention_analysis', {}).get('log_every_n_steps', 100) == 0):
+                loss = outputs['loss']
                 
-                try:
-                    self.attention_analyzer.analyze_batch_attention(
-                        outputs, batch['input_ids'], self.global_step
+                # Check for invalid loss
+                if not torch.isfinite(loss):
+                    logger.warning(f"Invalid loss at step {self.global_step}: {loss.item()}")
+                    continue
+
+                # Backward pass
+                self.optimizer.zero_grad()
+                loss.backward()
+
+                # Gradient clipping
+                if self.config['training']['gradient_clip_val'] > 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config['training']['gradient_clip_val']
                     )
-                except Exception as e:
-                    logger.warning(f"Attention analysis failed at step {self.global_step}: {e}")
 
-            self.global_step += 1
+                self.optimizer.step()
 
-        # Average metrics over epoch
-        epoch_metrics['train_loss'] = np.mean(epoch_losses)
-        epoch_metrics['memory_usage_entropy'] /= len(train_loader)
-        epoch_metrics['cross_modal_similarity'] /= len(train_loader)
+                # Update metrics
+                epoch_losses.append(loss.item())
+
+                # Compute additional metrics with error handling
+                if outputs['memory_usage'] is not None:
+                    try:
+                        memory_entropy = self._compute_memory_entropy(outputs['memory_usage'])
+                        if np.isfinite(memory_entropy):
+                            epoch_metrics['memory_usage_entropy'] += memory_entropy
+                    except Exception as e:
+                        logger.warning(f"Memory entropy computation failed at step {self.global_step}: {e}")
+
+                if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
+                    try:
+                        cross_modal_sim = self._compute_cross_modal_similarity(
+                            outputs['text_features'], outputs['vision_latent']
+                        )
+                        if np.isfinite(cross_modal_sim):
+                            epoch_metrics['cross_modal_similarity'] += cross_modal_sim
+                    except Exception as e:
+                        logger.warning(f"Cross-modal similarity computation failed at step {self.global_step}: {e}")
+
+                # Update progress bar
+                progress_bar.set_postfix({
+                    'loss': f"{loss.item():.4f}",
+                    'avg_loss': f"{np.mean(epoch_losses):.4f}"
+                })
+
+                # Enhanced logging with wandb logger
+                log_every_n_steps = self.config.get('wandb', {}).get('log_every_n_steps', 50)
+                if self.wandb_logger and batch_idx % log_every_n_steps == 0:
+                    try:
+                        # Log all metrics in a single consolidated call
+                        log_quantization = self.global_step % (log_every_n_steps * 10) == 0
+                        memory_module = self.model.memory if hasattr(self.model, 'memory') else None
+                        
+                        self.wandb_logger.log_consolidated_metrics(
+                            outputs=outputs,
+                            epoch=epoch,
+                            step=self.global_step,
+                            lr=self.optimizer.param_groups[0]['lr'],
+                            model=self.model,
+                            memory_module=memory_module,
+                            log_quantization=log_quantization
+                        )
+                            
+                    except Exception as e:
+                        logger.warning(f"Wandb logging failed at step {self.global_step}: {e}")
+
+                # Attention analysis (less frequent to avoid overhead)
+                if (self.attention_analyzer and 
+                    self.global_step % self.config.get('attention_analysis', {}).get('log_every_n_steps', 100) == 0):
+                    
+                    try:
+                        self.attention_analyzer.analyze_batch_attention(
+                            outputs, batch['input_ids'], self.global_step
+                        )
+                    except Exception as e:
+                        logger.warning(f"Attention analysis failed at step {self.global_step}: {e}")
+
+                self.global_step += 1
+                
+                # Memory cleanup every 100 steps to prevent OOM
+                if self.global_step % 100 == 0:
+                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                
+            except Exception as e:
+                logger.error(f"Training batch {batch_idx} failed at step {self.global_step}: {e}")
+                logger.error(f"Skipping batch and continuing training...")
+                
+                # Clear GPU cache after error
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    
+                self.global_step += 1
+                continue
+
+        # Average metrics over epoch with safety checks
+        epoch_metrics['train_loss'] = np.mean(epoch_losses) if epoch_losses else float('inf')
+        epoch_metrics['memory_usage_entropy'] = (epoch_metrics['memory_usage_entropy'] / len(train_loader)) if len(train_loader) > 0 else 0.0
+        epoch_metrics['cross_modal_similarity'] = (epoch_metrics['cross_modal_similarity'] / len(train_loader)) if len(train_loader) > 0 else 0.0
+
+        # Final memory cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return epoch_metrics
 
@@ -289,48 +321,88 @@ class BitMarTrainer:
         }
 
         with torch.no_grad():
-            for batch in tqdm(val_loader, desc="Validation"):
-                # Move batch to device
-                for key in batch:
-                    if torch.is_tensor(batch[key]):
-                        batch[key] = batch[key].to(self.device)
+            for batch_idx, batch in enumerate(tqdm(val_loader, desc="Validation")):
+                try:
+                    # Move batch to device
+                    for key in batch:
+                        if torch.is_tensor(batch[key]):
+                            batch[key] = batch[key].to(self.device)
 
-                # Forward pass
-                outputs = self.model(
-                    input_ids=batch['input_ids'],
-                    attention_mask=batch['attention_mask'],
-                    vision_features=batch['vision_features'],
-                    labels=batch['labels']
-                )
-
-                val_losses.append(outputs['loss'].item())
-
-                # Compute additional metrics
-                if outputs['memory_usage'] is not None:
-                    memory_entropy = self._compute_memory_entropy(
-                        outputs['memory_usage'])
-                    val_metrics['val_memory_entropy'] += memory_entropy
-
-                if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
-                    cross_modal_sim = self._compute_cross_modal_similarity(
-                        outputs['text_features'], outputs['vision_latent']
+                    # Forward pass
+                    outputs = self.model(
+                        input_ids=batch['input_ids'],
+                        attention_mask=batch['attention_mask'],
+                        vision_features=batch['vision_features'],
+                        labels=batch['labels']
                     )
-                    val_metrics['val_cross_modal_similarity'] += cross_modal_sim
 
-        # Average metrics
-        val_metrics['val_loss'] = np.mean(val_losses)
-        val_metrics['val_memory_entropy'] /= len(val_loader)
-        val_metrics['val_cross_modal_similarity'] /= len(val_loader)
+                    # Safely extract loss
+                    if outputs['loss'] is not None and torch.isfinite(outputs['loss']):
+                        val_losses.append(outputs['loss'].item())
 
+                    # Compute additional metrics with safety checks
+                    if outputs['memory_usage'] is not None:
+                        try:
+                            memory_entropy = self._compute_memory_entropy(outputs['memory_usage'])
+                            if np.isfinite(memory_entropy):
+                                val_metrics['val_memory_entropy'] += memory_entropy
+                        except Exception as e:
+                            logger.warning(f"Memory entropy computation failed: {e}")
+
+                    if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
+                        try:
+                            cross_modal_sim = self._compute_cross_modal_similarity(
+                                outputs['text_features'], outputs['vision_latent']
+                            )
+                            if np.isfinite(cross_modal_sim):
+                                val_metrics['val_cross_modal_similarity'] += cross_modal_sim
+                        except Exception as e:
+                            logger.warning(f"Cross-modal similarity computation failed: {e}")
+                            
+                except Exception as e:
+                    logger.warning(f"Validation batch {batch_idx} failed: {e}")
+                    continue
+
+        # Average metrics with safety checks
+        val_metrics['val_loss'] = np.mean(val_losses) if val_losses else float('inf')
+        val_metrics['val_memory_entropy'] = (val_metrics['val_memory_entropy'] / len(val_loader)) if len(val_loader) > 0 else 0.0
+        val_metrics['val_cross_modal_similarity'] = (val_metrics['val_cross_modal_similarity'] / len(val_loader)) if len(val_loader) > 0 else 0.0
+
+        # Clear GPU cache and restore training mode
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+        self.model.train()  # Restore training mode
+        
+        logger.info(f"Validation completed - Loss: {val_metrics['val_loss']:.4f}")
+        
         return val_metrics
 
     def _compute_memory_entropy(self, memory_usage: torch.Tensor) -> float:
         """Compute entropy of memory usage distribution"""
-        # Normalize to probabilities
-        probs = memory_usage / (memory_usage.sum() + 1e-8)
-        # Compute entropy
-        entropy = -(probs * torch.log(probs + 1e-8)).sum().item()
-        return entropy
+        try:
+            # Check for valid input
+            if memory_usage is None or memory_usage.numel() == 0:
+                return 0.0
+            
+            # Check for all-zero usage
+            usage_sum = memory_usage.sum()
+            if usage_sum <= 1e-8:
+                return 0.0
+            
+            # Normalize to probabilities
+            probs = memory_usage / usage_sum
+            
+            # Compute entropy with numerical stability
+            log_probs = torch.log(probs + 1e-8)
+            entropy = -(probs * log_probs).sum().item()
+            
+            # Return finite value only
+            return entropy if np.isfinite(entropy) else 0.0
+            
+        except Exception as e:
+            logger.warning(f"Memory entropy computation failed: {e}")
+            return 0.0
 
     def _compute_cross_modal_similarity(
         self,
@@ -338,59 +410,90 @@ class BitMarTrainer:
         vision_latent: torch.Tensor
     ) -> float:
         """Compute cosine similarity between text and vision features"""
-        # Pool text features (mean over sequence)
-        text_pooled = text_latent.mean(dim=1)  # [batch_size, feature_dim]
+        try:
+            # Check for valid inputs
+            if text_latent is None or vision_latent is None:
+                return 0.0
+            
+            if text_latent.numel() == 0 or vision_latent.numel() == 0:
+                return 0.0
+            
+            # Pool text features (mean over sequence)
+            text_pooled = text_latent.mean(dim=1)  # [batch_size, feature_dim]
 
-        # Compute cosine similarity
-        cos_sim = torch.cosine_similarity(text_pooled, vision_latent, dim=1)
-        return cos_sim.mean().item()
+            # Check dimensions match
+            if text_pooled.shape[-1] != vision_latent.shape[-1]:
+                logger.warning(f"Dimension mismatch: text {text_pooled.shape} vs vision {vision_latent.shape}")
+                return 0.0
+
+            # Compute cosine similarity with numerical stability
+            cos_sim = torch.cosine_similarity(text_pooled, vision_latent, dim=1)
+            similarity = cos_sim.mean().item()
+            
+            # Return finite value only
+            return similarity if np.isfinite(similarity) else 0.0
+            
+        except Exception as e:
+            logger.warning(f"Cross-modal similarity computation failed: {e}")
+            return 0.0
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         """Save model checkpoint"""
-        checkpoint = {
-            'epoch': epoch,
-            'global_step': self.global_step,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
-            'best_val_loss': self.best_val_loss,
-            'config': self.config
-        }
+        try:
+            checkpoint = {
+                'epoch': epoch,
+                'global_step': self.global_step,
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+                'best_val_loss': self.best_val_loss,
+                'config': self.config
+            }
 
-        # Save regular checkpoint
-        checkpoint_path = self.checkpoint_dir / f'checkpoint_epoch_{epoch}.pt'
-        torch.save(checkpoint, checkpoint_path)
+            # Save regular checkpoint
+            checkpoint_path = self.checkpoint_dir / f'checkpoint_epoch_{epoch}.pt'
+            torch.save(checkpoint, checkpoint_path)
 
-        # Save best checkpoint
-        if is_best:
-            best_path = self.checkpoint_dir / 'best_checkpoint.pt'
-            torch.save(checkpoint, best_path)
-            logger.info(f"New best checkpoint saved: {best_path}")
+            # Save best checkpoint
+            if is_best:
+                best_path = self.checkpoint_dir / 'best_checkpoint.pt'
+                torch.save(checkpoint, best_path)
+                logger.info(f"New best checkpoint saved: {best_path}")
 
-        # Save latest checkpoint
-        latest_path = self.checkpoint_dir / 'latest_checkpoint.pt'
-        torch.save(checkpoint, latest_path)
+            # Save latest checkpoint
+            latest_path = self.checkpoint_dir / 'latest_checkpoint.pt'
+            torch.save(checkpoint, latest_path)
 
-        logger.info(f"Checkpoint saved: {checkpoint_path}")
+            logger.info(f"Checkpoint saved: {checkpoint_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint at epoch {epoch}: {e}")
+            logger.error("Training will continue but checkpoint is not saved")
 
     def load_checkpoint(self, checkpoint_path: str) -> int:
         """Load model checkpoint"""
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
-        if self.scheduler and checkpoint['scheduler_state_dict']:
-            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            if self.scheduler and checkpoint['scheduler_state_dict']:
+                self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
-        self.current_epoch = checkpoint['epoch']
-        self.global_step = checkpoint['global_step']
-        self.best_val_loss = checkpoint['best_val_loss']
+            self.current_epoch = checkpoint['epoch']
+            self.global_step = checkpoint['global_step']
+            self.best_val_loss = checkpoint['best_val_loss']
 
-        logger.info(f"Checkpoint loaded from {checkpoint_path}")
-        logger.info(f"Resuming from epoch {self.current_epoch}")
+            logger.info(f"Checkpoint loaded from {checkpoint_path}")
+            logger.info(f"Resuming from epoch {self.current_epoch}")
 
-        return self.current_epoch
+            return self.current_epoch
+            
+        except Exception as e:
+            logger.error(f"Failed to load checkpoint from {checkpoint_path}: {e}")
+            logger.error("Starting training from scratch")
+            return 0
 
     def run_attention_analysis(self):
         """Run comprehensive attention analysis"""
