@@ -23,6 +23,14 @@ from typing import Dict, Optional
 import numpy as np
 from tqdm import tqdm
 
+# Try to import bitsandbytes for 8-bit optimizer
+try:
+    import bitsandbytes as bnb
+    BITSANDBYTES_AVAILABLE = True
+except ImportError:
+    BITSANDBYTES_AVAILABLE = False
+    print("Warning: bitsandbytes not available. Install with: pip install bitsandbytes")
+
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
@@ -147,29 +155,48 @@ class BitMarTrainer:
 
     def setup_optimizer(self):
         """Setup optimizer and learning rate scheduler"""
-        # Optimizer
-        self.optimizer = AdamW(
-            self.model.parameters(),
-            lr=self.config['training']['learning_rate'],
-            weight_decay=self.config['training']['weight_decay'],
-            betas=(0.9, 0.999),
-            eps=1e-8
-        )
+        # Use AdamW8bit if bitsandbytes is available, otherwise fallback to regular AdamW
+        if BITSANDBYTES_AVAILABLE:
+            self.optimizer = bnb.optim.AdamW8bit(
+                self.model.parameters(),
+                lr=self.config['training']['learning_rate'],
+                weight_decay=self.config['training']['weight_decay'],
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
+            logger.info(f"Using AdamW8bit optimizer for memory efficiency")
+        else:
+            self.optimizer = AdamW(
+                self.model.parameters(),
+                lr=self.config['training']['learning_rate'],
+                weight_decay=self.config['training']['weight_decay'],
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
+            logger.info(f"Using regular AdamW optimizer (bitsandbytes not available)")
 
-        # Learning rate scheduler
+        # Learning rate scheduler with proper step-based scheduling
         if self.config['training']['scheduler'] == 'cosine':
+            # Calculate total training steps for proper cosine annealing
+            train_loader = self.data_module.train_dataloader()
+            steps_per_epoch = len(train_loader)
+            total_steps = steps_per_epoch * self.config['training']['max_epochs']
+            
             self.scheduler = CosineAnnealingLR(
                 self.optimizer,
-                T_max=self.config['training']['max_epochs'],
+                T_max=total_steps,  # Use total steps, not epochs
                 eta_min=self.config['training']['min_lr']
             )
+            self.scheduler_step_mode = 'step'  # Step every training step, not epoch
+            logger.info(f"Cosine scheduler: {total_steps} total steps, eta_min={self.config['training']['min_lr']}")
         else:
             self.scheduler = None
+            self.scheduler_step_mode = 'epoch'
 
         logger.info(
-            f"Optimizer: AdamW with LR={self.config['training']['learning_rate']}")
+            f"Optimizer: {'AdamW8bit' if BITSANDBYTES_AVAILABLE else 'AdamW'} with LR={self.config['training']['learning_rate']}")
         if self.scheduler:
-            logger.info(f"Scheduler: {self.config['training']['scheduler']}")
+            logger.info(f"Scheduler: {self.config['training']['scheduler']} ({'step-based' if self.scheduler_step_mode == 'step' else 'epoch-based'})")
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """Train for one epoch"""
@@ -282,6 +309,10 @@ class BitMarTrainer:
 
                 self.global_step += 1
                 
+                # Step learning rate scheduler if step-based
+                if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
+                    self.scheduler.step()
+                
                 # Memory cleanup every 100 steps to prevent OOM
                 if self.global_step % 100 == 0:
                     torch.cuda.empty_cache() if torch.cuda.is_available() else None
@@ -311,7 +342,7 @@ class BitMarTrainer:
     def validate_epoch(self, epoch: int) -> Dict[str, float]:
         """Validate for one epoch"""
         self.model.eval()
-        val_loader = self.data_module.val_dataloader()
+        val_loaders = self.data_module.val_dataloader()  # Returns list of loaders
 
         val_losses = []
         val_metrics = {
@@ -321,52 +352,59 @@ class BitMarTrainer:
         }
 
         with torch.no_grad():
-            for batch_idx, batch in enumerate(tqdm(val_loader, desc="Validation")):
-                try:
-                    # Move batch to device
-                    for key in batch:
-                        if torch.is_tensor(batch[key]):
-                            batch[key] = batch[key].to(self.device)
+            # Handle multiple validation dataloaders
+            for loader_idx, val_loader in enumerate(val_loaders):
+                logger.info(f"Validating on dataset {loader_idx + 1}/{len(val_loaders)}")
+                
+                for batch_idx, batch in enumerate(tqdm(val_loader, desc=f"Validation-{loader_idx+1}")):
+                    try:
+                        # Move batch to device
+                        for key in batch:
+                            if torch.is_tensor(batch[key]):
+                                batch[key] = batch[key].to(self.device)
 
-                    # Forward pass
-                    outputs = self.model(
-                        input_ids=batch['input_ids'],
-                        attention_mask=batch['attention_mask'],
-                        vision_features=batch['vision_features'],
-                        labels=batch['labels']
-                    )
+                        # Forward pass
+                        outputs = self.model(
+                            input_ids=batch['input_ids'],
+                            attention_mask=batch['attention_mask'],
+                            vision_features=batch['vision_features'],
+                            labels=batch['labels']
+                        )
 
-                    # Safely extract loss
-                    if outputs['loss'] is not None and torch.isfinite(outputs['loss']):
-                        val_losses.append(outputs['loss'].item())
+                        # Safely extract loss
+                        if outputs['loss'] is not None and torch.isfinite(outputs['loss']):
+                            val_losses.append(outputs['loss'].item())
 
-                    # Compute additional metrics with safety checks
-                    if outputs['memory_usage'] is not None:
-                        try:
-                            memory_entropy = self._compute_memory_entropy(outputs['memory_usage'])
-                            if np.isfinite(memory_entropy):
-                                val_metrics['val_memory_entropy'] += memory_entropy
-                        except Exception as e:
-                            logger.warning(f"Memory entropy computation failed: {e}")
+                        # Compute additional metrics with safety checks
+                        if outputs['memory_usage'] is not None:
+                            try:
+                                memory_entropy = self._compute_memory_entropy(outputs['memory_usage'])
+                                if np.isfinite(memory_entropy):
+                                    val_metrics['val_memory_entropy'] += memory_entropy
+                            except Exception as e:
+                                logger.warning(f"Memory entropy computation failed: {e}")
 
-                    if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
-                        try:
-                            cross_modal_sim = self._compute_cross_modal_similarity(
-                                outputs['text_features'], outputs['vision_latent']
-                            )
-                            if np.isfinite(cross_modal_sim):
-                                val_metrics['val_cross_modal_similarity'] += cross_modal_sim
-                        except Exception as e:
-                            logger.warning(f"Cross-modal similarity computation failed: {e}")
-                            
-                except Exception as e:
-                    logger.warning(f"Validation batch {batch_idx} failed: {e}")
-                    continue
+                        if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
+                            try:
+                                cross_modal_sim = self._compute_cross_modal_similarity(
+                                    outputs['text_features'], outputs['vision_latent']
+                                )
+                                if np.isfinite(cross_modal_sim):
+                                    val_metrics['val_cross_modal_similarity'] += cross_modal_sim
+                            except Exception as e:
+                                logger.warning(f"Cross-modal similarity computation failed: {e}")
+                                
+                    except Exception as e:
+                        logger.warning(f"Validation batch {batch_idx} in loader {loader_idx} failed: {e}")
+                        continue
+
+        # Calculate total number of batches across all loaders for averaging
+        total_batches = sum(len(loader) for loader in val_loaders) if val_loaders else 1
 
         # Average metrics with safety checks
         val_metrics['val_loss'] = np.mean(val_losses) if val_losses else float('inf')
-        val_metrics['val_memory_entropy'] = (val_metrics['val_memory_entropy'] / len(val_loader)) if len(val_loader) > 0 else 0.0
-        val_metrics['val_cross_modal_similarity'] = (val_metrics['val_cross_modal_similarity'] / len(val_loader)) if len(val_loader) > 0 else 0.0
+        val_metrics['val_memory_entropy'] = (val_metrics['val_memory_entropy'] / total_batches) if total_batches > 0 else 0.0
+        val_metrics['val_cross_modal_similarity'] = (val_metrics['val_cross_modal_similarity'] / total_batches) if total_batches > 0 else 0.0
 
         # Clear GPU cache and restore training mode
         if torch.cuda.is_available():
@@ -546,9 +584,10 @@ class BitMarTrainer:
             # Validate
             val_metrics = self.validate_epoch(epoch)
 
-            # Update learning rate
-            if self.scheduler:
+            # Update learning rate scheduler (only for epoch-based schedulers)
+            if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'epoch':
                 self.scheduler.step()
+                logger.info(f"Scheduler stepped (epoch-based), new LR: {self.optimizer.param_groups[0]['lr']:.2e}")
 
             # Log validation metrics with enhanced logger
             if self.wandb_logger:
