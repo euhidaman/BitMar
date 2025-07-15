@@ -1,44 +1,44 @@
 model:
-  # BitNet Text Encoder (fully quantized)
+  # BitNet Text Encoder (Tiny Model - Quantized)
   vocab_size: 50257  # GPT-2 vocabulary
-  text_encoder_dim: 512
-  text_encoder_layers: 6
-  text_encoder_heads: 8
+  text_encoder_dim: 256  # Reduced from 512 for edge efficiency
+  text_encoder_layers: 4  # Reduced from 6 layers
+  text_encoder_heads: 4  # Reduced from 8 heads
   
-  # BitNet Text Decoder (fully quantized)
-  text_decoder_dim: 512
-  text_decoder_layers: 6
-  text_decoder_heads: 8
+  # BitNet Text Decoder (Tiny Model - Quantized)
+  text_decoder_dim: 256  # Reduced from 512 for edge efficiency
+  text_decoder_layers: 4  # Reduced from 6 layers
+  text_decoder_heads: 4  # Reduced from 8 heads
   
-  # Vision processing (DiNOv2 features)
-  vision_encoder_dim: 768  # DiNOv2 feature dimension
-  vision_latent_size: 512
-  vision_hidden_size: 256
+  # Vision processing (DiNOv2 features - Efficient)
+  vision_encoder_dim: 768  # DiNOv2 feature dimension (fixed)
+  vision_latent_size: 256  # Reduced from 512 to match episode_dim
+  vision_hidden_size: 128  # Reduced from 256
   
-  # Cross-modal fusion (BitNet quantized)
-  fusion_hidden_size: 512
-  fusion_num_heads: 8
-  fusion_num_layers: 2
+  # Cross-modal fusion (Tiny BitNet quantized)
+  fusion_hidden_size: 256  # Reduced from 512
+  fusion_num_heads: 4  # Reduced from 8
+  fusion_num_layers: 2  # Keep at 2 for cross-modal capability
   
-  # Episodic Memory (Larimar-inspired)
-  memory_size: 512  # Number of memory slots
-  episode_dim: 512  # Episode feature dimension (should match vision_latent_size)
-  memory_alpha: 0.1
+  # Episodic Memory (Tiny Model - Edge Optimized)
+  memory_size: 16  # Ultra-compact: 16 memory slots for edge deployment
+  episode_dim: 256  # Reduced episode dimension for efficiency
+  memory_alpha: 0.15  # Slightly higher for faster adaptation with fewer slots
   direct_writing: true
   
-  # Model configuration
-  max_seq_len: 128  # Shorter for efficiency
-  dropout: 0.1
+  # Model configuration (Tiny Model Optimized)
+  max_seq_len: 64  # Reduced from 128 for edge efficiency
+  dropout: 0.15  # Slightly higher for regularization with smaller model
 
 data:
-  # Dataset configuration
+  # Dataset configuration (Tiny Model)
   dataset_dir: "../babylm_dataset"
   text_encoder_name: "gpt2"
-  max_seq_length: 128  # Shorter for efficiency
+  max_seq_length: 64  # Reduced from 128 for edge efficiency
   
-  # DataLoader settings (optimized for RTX 4090)
-  batch_size: 32  # Increased for RTX 4090
-  num_workers: 8  # More workers for faster data loading
+  # DataLoader settings (Edge optimized)
+  batch_size: 8  # Reduced from 32 for memory efficiency
+  num_workers: 4  # Reduced from 8
   pin_memory: true
   persistent_workers: true
   
@@ -111,9 +111,9 @@ output:
   memory_dir: "memory_analysis"
   results_dir: "results"
 
-# CPU testing configuration
+# CPU testing configuration (Tiny Model)
 cpu_test:
   batch_size: 2
   max_samples: 100
   reduced_model_size: true
-  memory_size: 64  # Reduced for CPU testing
+  memory_size: 8  # Ultra-tiny: 8 slots for CPU testing
