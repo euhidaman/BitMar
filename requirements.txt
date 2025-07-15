@@ -26,5 +26,5 @@ huggingface-hub>=0.16.0
 # Additional testing dependencies
 pytest>=7.0.0
 rouge-score>=0.1.2
-bleu-score>=0.4.0
+bleu
 evaluate>=0.4.0
