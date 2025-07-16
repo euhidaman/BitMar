@@ -94,14 +94,14 @@ class BitMarTrainer:
     def setup_logging_systems(self):
         """Initialize enhanced wandb logger and attention analyzer"""
         wandb_config = self.config.get('wandb', {})
-        
+
         # Check if wandb should be used
         use_wandb = (
-            wandb_config.get('api_key') or 
+            wandb_config.get('api_key') or
             os.getenv('WANDB_API_KEY') or
             wandb_config.get('project')
         )
-        
+
         if use_wandb:
             try:
                 # Set API key if provided in config
@@ -110,16 +110,16 @@ class BitMarTrainer:
 
                 # Initialize enhanced wandb logger
                 run_name = f"bitmar-{self.config['training']['max_epochs']}epochs-{wandb.util.generate_id()[:8]}"
-                
+
                 self.wandb_logger = BitMarWandbLogger(
                     project_name=wandb_config.get('project', 'bitmar-babylm'),
                     config=self.config,
                     run_name=run_name
                 )
-                
+
                 self.use_wandb = True
                 logger.info("Enhanced Wandb logger initialized successfully")
-                
+
             except Exception as e:
                 logger.warning(f"Wandb initialization failed: {e}")
                 logger.info("Continuing training without wandb logging")
@@ -152,7 +152,8 @@ class BitMarTrainer:
             tokenizer=self.model.tokenizer,
             save_dir=str(self.attention_dir),
             wandb_logger=self.wandb_logger,
-            track_top_k=self.config.get('attention_analysis', {}).get('track_top_k', 10)
+            track_top_k=self.config.get(
+                'attention_analysis', {}).get('track_top_k', 10)
         )
 
         # Initialize attention evolution tracker
@@ -192,22 +193,25 @@ class BitMarTrainer:
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
-            logger.info(f"Using regular AdamW optimizer (bitsandbytes not available)")
+            logger.info(
+                f"Using regular AdamW optimizer (bitsandbytes not available)")
 
         # Learning rate scheduler with proper step-based scheduling
         if self.config['training']['scheduler'] == 'cosine':
             # Calculate total training steps for proper cosine annealing
             train_loader = self.data_module.train_dataloader()
             steps_per_epoch = len(train_loader)
-            total_steps = steps_per_epoch * self.config['training']['max_epochs']
-            
+            total_steps = steps_per_epoch * \
+                self.config['training']['max_epochs']
+
             self.scheduler = CosineAnnealingLR(
                 self.optimizer,
                 T_max=total_steps,  # Use total steps, not epochs
                 eta_min=self.config['training']['min_lr']
             )
             self.scheduler_step_mode = 'step'  # Step every training step, not epoch
-            logger.info(f"Cosine scheduler: {total_steps} total steps, eta_min={self.config['training']['min_lr']}")
+            logger.info(
+                f"Cosine scheduler: {total_steps} total steps, eta_min={self.config['training']['min_lr']}")
         else:
             self.scheduler = None
             self.scheduler_step_mode = 'epoch'
@@ -215,7 +219,8 @@ class BitMarTrainer:
         logger.info(
             f"Optimizer: {'AdamW8bit' if BITSANDBYTES_AVAILABLE else 'AdamW'} with LR={self.config['training']['learning_rate']}")
         if self.scheduler:
-            logger.info(f"Scheduler: {self.config['training']['scheduler']} ({'step-based' if self.scheduler_step_mode == 'step' else 'epoch-based'})")
+            logger.info(
+                f"Scheduler: {self.config['training']['scheduler']} ({'step-based' if self.scheduler_step_mode == 'step' else 'epoch-based'})")
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """Train for one epoch"""
@@ -247,10 +252,11 @@ class BitMarTrainer:
                 )
 
                 loss = outputs['loss']
-                
+
                 # Check for invalid loss
                 if not torch.isfinite(loss):
-                    logger.warning(f"Invalid loss at step {self.global_step}: {loss.item()}")
+                    logger.warning(
+                        f"Invalid loss at step {self.global_step}: {loss.item()}")
                     continue
 
                 # Backward pass
@@ -272,11 +278,13 @@ class BitMarTrainer:
                 # Compute additional metrics with error handling
                 if outputs['memory_usage'] is not None:
                     try:
-                        memory_entropy = self._compute_memory_entropy(outputs['memory_usage'])
+                        memory_entropy = self._compute_memory_entropy(
+                            outputs['memory_usage'])
                         if np.isfinite(memory_entropy):
                             epoch_metrics['memory_usage_entropy'] += memory_entropy
                     except Exception as e:
-                        logger.warning(f"Memory entropy computation failed at step {self.global_step}: {e}")
+                        logger.warning(
+                            f"Memory entropy computation failed at step {self.global_step}: {e}")
 
                 if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
                     try:
@@ -286,7 +294,8 @@ class BitMarTrainer:
                         if np.isfinite(cross_modal_sim):
                             epoch_metrics['cross_modal_similarity'] += cross_modal_sim
                     except Exception as e:
-                        logger.warning(f"Cross-modal similarity computation failed at step {self.global_step}: {e}")
+                        logger.warning(
+                            f"Cross-modal similarity computation failed at step {self.global_step}: {e}")
 
                 # Update progress bar
                 progress_bar.set_postfix({
@@ -295,16 +304,19 @@ class BitMarTrainer:
                 })
 
                 # Enhanced logging with wandb logger
-                log_every_n_steps = self.config.get('wandb', {}).get('log_every_n_steps', 50)
+                log_every_n_steps = self.config.get(
+                    'wandb', {}).get('log_every_n_steps', 50)
                 if self.wandb_logger and log_every_n_steps > 0 and batch_idx % log_every_n_steps == 0:
                     try:
                         # Log all metrics in a single consolidated call
-                        log_quantization = self.global_step % (log_every_n_steps * 10) == 0
-                        memory_module = self.model.memory if hasattr(self.model, 'memory') else None
-                        
+                        log_quantization = self.global_step % (
+                            log_every_n_steps * 10) == 0
+                        memory_module = self.model.memory if hasattr(
+                            self.model, 'memory') else None
+
                         # Only log if cross-modal similarity computation succeeded
                         log_outputs = outputs.copy() if isinstance(outputs, dict) else {}
-                        
+
                         self.wandb_logger.log_consolidated_metrics(
                             outputs=log_outputs,
                             epoch=epoch,
@@ -314,83 +326,96 @@ class BitMarTrainer:
                             memory_module=memory_module,
                             log_quantization=log_quantization
                         )
-                            
+
                     except Exception as e:
-                        logger.warning(f"Wandb logging failed at step {self.global_step}: {e}")
+                        logger.warning(
+                            f"Wandb logging failed at step {self.global_step}: {e}")
                         # Continue training without wandb logging for this step
 
                 # Attention analysis (less frequent to avoid overhead)
-                attention_log_steps = self.config.get('attention_analysis', {}).get('log_every_n_steps', 100)
+                attention_log_steps = self.config.get(
+                    'attention_analysis', {}).get('log_every_n_steps', 100)
                 if (self.attention_analyzer and attention_log_steps > 0 and
-                    self.global_step % attention_log_steps == 0):
-                    
+                        self.global_step % attention_log_steps == 0):
+
                     try:
                         self.attention_analyzer.analyze_batch_attention(
                             outputs, batch['input_ids'], self.global_step
                         )
                     except Exception as e:
-                        logger.warning(f"Attention analysis failed at step {self.global_step}: {e}")
+                        logger.warning(
+                            f"Attention analysis failed at step {self.global_step}: {e}")
 
                 # Attention evolution tracking (NEW!)
-                track_attention_steps = self.config.get('track_attention_every_n_steps', 50)
+                track_attention_steps = self.config.get(
+                    'track_attention_every_n_steps', 50)
                 if (self.attention_evolution_tracker and track_attention_steps > 0 and
-                    self.global_step % track_attention_steps == 0):
-                    
+                        self.global_step % track_attention_steps == 0):
+
                     try:
                         # Extract cross-modal attention if available
                         cross_modal_attention = None
                         if 'cross_modal_attention' in outputs:
                             cross_modal_attention = outputs['cross_modal_attention']
                         elif hasattr(outputs, 'attentions') and outputs.attentions:
-                            cross_modal_attention = outputs.attentions[-1]  # Last layer attention
-                        
+                            # Last layer attention
+                            cross_modal_attention = outputs.attentions[-1]
+
                         if cross_modal_attention is not None:
                             # Get caption for first sample in batch
                             sample_caption = "Generated caption"  # TODO: Extract actual caption
                             if 'captions' in batch:
                                 sample_caption = batch['captions'][0] if batch['captions'] else "No caption"
-                            
+
                             # Save attention evolution data
                             self.attention_evolution_tracker.save_epoch_attention(
                                 epoch=epoch,
                                 sample_id=f"step_{self.global_step}_sample_0",
                                 caption=sample_caption,
-                                attention_weights=cross_modal_attention[0:1],  # First sample
+                                # First sample
+                                attention_weights=cross_modal_attention[0:1],
                                 image_features=batch['vision_features'][0:1],
-                                compressed_features=outputs.get('vision_latent', None)
+                                compressed_features=outputs.get(
+                                    'vision_latent', None)
                             )
-                            
+
                             if self.global_step % 200 == 0 and self.global_step > 0:  # Less frequent logging, avoid zero
-                                logger.info(f"🎯 Tracked attention evolution at step {self.global_step}")
-                                
+                                logger.info(
+                                    f"🎯 Tracked attention evolution at step {self.global_step}")
+
                     except Exception as e:
-                        logger.warning(f"Attention evolution tracking failed at step {self.global_step}: {e}")
+                        logger.warning(
+                            f"Attention evolution tracking failed at step {self.global_step}: {e}")
 
                 self.global_step += 1
-                
+
                 # Step learning rate scheduler if step-based
                 if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
                     self.scheduler.step()
-                
+
                 # Memory cleanup every 100 steps to prevent OOM
                 if self.global_step > 0 and self.global_step % 100 == 0:
                     torch.cuda.empty_cache() if torch.cuda.is_available() else None
-                
+
             except Exception as e:
-                logger.error(f"Training batch {batch_idx} failed at step {self.global_step}: {e}")
+                logger.error(
+                    f"Training batch {batch_idx} failed at step {self.global_step}: {e}")
                 logger.error(f"Skipping batch and continuing training...")
-                
+
                 # Clear GPU cache after error
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                    
+
                 self.global_step += 1
                 continue
 
         # Average metrics over epoch with safety checks
-        epoch_metrics['train_loss'] = np.mean(epoch_losses) if epoch_losses else float('inf')
-        epoch_metrics['memory_usage_entropy'] = (epoch_metrics['memory_usage_entropy'] / len(train_loader)) if len(train_loader) > 0 else 0.0
-        epoch_metrics['cross_modal_similarity'] = (epoch_metrics['cross_modal_similarity'] / len(train_loader)) if len(train_loader) > 0 else 0.0
+        epoch_metrics['train_loss'] = np.mean(
+            epoch_losses) if epoch_losses else float('inf')
+        epoch_metrics['memory_usage_entropy'] = (
+            epoch_metrics['memory_usage_entropy'] / len(train_loader)) if len(train_loader) > 0 else 0.0
+        epoch_metrics['cross_modal_similarity'] = (
+            epoch_metrics['cross_modal_similarity'] / len(train_loader)) if len(train_loader) > 0 else 0.0
 
         # Final memory cleanup
         if torch.cuda.is_available():
@@ -413,8 +438,9 @@ class BitMarTrainer:
         with torch.no_grad():
             # Handle multiple validation dataloaders
             for loader_idx, val_loader in enumerate(val_loaders):
-                logger.info(f"Validating on dataset {loader_idx + 1}/{len(val_loaders)}")
-                
+                logger.info(
+                    f"Validating on dataset {loader_idx + 1}/{len(val_loaders)}")
+
                 for batch_idx, batch in enumerate(tqdm(val_loader, desc=f"Validation-{loader_idx+1}")):
                     try:
                         # Move batch to device
@@ -437,11 +463,13 @@ class BitMarTrainer:
                         # Compute additional metrics with safety checks
                         if outputs['memory_usage'] is not None:
                             try:
-                                memory_entropy = self._compute_memory_entropy(outputs['memory_usage'])
+                                memory_entropy = self._compute_memory_entropy(
+                                    outputs['memory_usage'])
                                 if np.isfinite(memory_entropy):
                                     val_metrics['val_memory_entropy'] += memory_entropy
                             except Exception as e:
-                                logger.warning(f"Memory entropy computation failed: {e}")
+                                logger.warning(
+                                    f"Memory entropy computation failed: {e}")
 
                         if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
                             try:
@@ -451,28 +479,35 @@ class BitMarTrainer:
                                 if np.isfinite(cross_modal_sim):
                                     val_metrics['val_cross_modal_similarity'] += cross_modal_sim
                             except Exception as e:
-                                logger.warning(f"Cross-modal similarity computation failed: {e}")
-                                
+                                logger.warning(
+                                    f"Cross-modal similarity computation failed: {e}")
+
                     except Exception as e:
-                        logger.warning(f"Validation batch {batch_idx} in loader {loader_idx} failed: {e}")
+                        logger.warning(
+                            f"Validation batch {batch_idx} in loader {loader_idx} failed: {e}")
                         continue
 
         # Calculate total number of batches across all loaders for averaging
-        total_batches = sum(len(loader) for loader in val_loaders) if val_loaders else 1
+        total_batches = sum(len(loader)
+                            for loader in val_loaders) if val_loaders else 1
 
         # Average metrics with safety checks
-        val_metrics['val_loss'] = np.mean(val_losses) if val_losses else float('inf')
-        val_metrics['val_memory_entropy'] = (val_metrics['val_memory_entropy'] / total_batches) if total_batches > 0 else 0.0
-        val_metrics['val_cross_modal_similarity'] = (val_metrics['val_cross_modal_similarity'] / total_batches) if total_batches > 0 else 0.0
+        val_metrics['val_loss'] = np.mean(
+            val_losses) if val_losses else float('inf')
+        val_metrics['val_memory_entropy'] = (
+            val_metrics['val_memory_entropy'] / total_batches) if total_batches > 0 else 0.0
+        val_metrics['val_cross_modal_similarity'] = (
+            val_metrics['val_cross_modal_similarity'] / total_batches) if total_batches > 0 else 0.0
 
         # Clear GPU cache and restore training mode
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            
+
         self.model.train()  # Restore training mode
-        
-        logger.info(f"Validation completed - Loss: {val_metrics['val_loss']:.4f}")
-        
+
+        logger.info(
+            f"Validation completed - Loss: {val_metrics['val_loss']:.4f}")
+
         return val_metrics
 
     def _compute_memory_entropy(self, memory_usage: torch.Tensor) -> float:
@@ -481,22 +516,22 @@ class BitMarTrainer:
             # Check for valid input
             if memory_usage is None or memory_usage.numel() == 0:
                 return 0.0
-            
+
             # Check for all-zero usage
             usage_sum = memory_usage.sum()
             if usage_sum <= 1e-8:
                 return 0.0
-            
+
             # Normalize to probabilities
             probs = memory_usage / usage_sum
-            
+
             # Compute entropy with numerical stability
             log_probs = torch.log(probs + 1e-8)
             entropy = -(probs * log_probs).sum().item()
-            
+
             # Return finite value only
             return entropy if np.isfinite(entropy) else 0.0
-            
+
         except Exception as e:
             logger.warning(f"Memory entropy computation failed: {e}")
             return 0.0
@@ -511,10 +546,10 @@ class BitMarTrainer:
             # Check for valid inputs
             if text_latent is None or vision_latent is None:
                 return 0.0
-            
+
             if text_latent.numel() == 0 or vision_latent.numel() == 0:
                 return 0.0
-            
+
             # Pool text features (mean over sequence)
             text_pooled = text_latent.mean(dim=1)  # [batch_size, feature_dim]
 
@@ -522,23 +557,26 @@ class BitMarTrainer:
             if text_pooled.shape[-1] != vision_latent.shape[-1]:
                 text_dim = text_pooled.shape[-1]
                 vision_dim = vision_latent.shape[-1]
-                
+
                 if text_dim > vision_dim:
                     # Project text to vision dimension (take first N dimensions)
                     text_pooled = text_pooled[:, :vision_dim]
-                    logger.debug(f"Projected text features from {text_dim}D to {vision_dim}D")
+                    logger.debug(
+                        f"Projected text features from {text_dim}D to {vision_dim}D")
                 elif vision_dim > text_dim:
                     # Project vision to text dimension (take first N dimensions)
                     vision_latent = vision_latent[:, :text_dim]
-                    logger.debug(f"Projected vision features from {vision_dim}D to {text_dim}D")
+                    logger.debug(
+                        f"Projected vision features from {vision_dim}D to {text_dim}D")
 
             # Compute cosine similarity with numerical stability
-            cos_sim = torch.cosine_similarity(text_pooled, vision_latent, dim=1)
+            cos_sim = torch.cosine_similarity(
+                text_pooled, vision_latent, dim=1)
             similarity = cos_sim.mean().item()
-            
+
             # Return finite value only
             return similarity if np.isfinite(similarity) else 0.0
-            
+
         except Exception as e:
             logger.warning(f"Cross-modal similarity computation failed: {e}")
             return 0.0
@@ -557,7 +595,8 @@ class BitMarTrainer:
             }
 
             # Save regular checkpoint
-            checkpoint_path = self.checkpoint_dir / f'checkpoint_epoch_{epoch}.pt'
+            checkpoint_path = self.checkpoint_dir / \
+                f'checkpoint_epoch_{epoch}.pt'
             torch.save(checkpoint, checkpoint_path)
 
             # Save best checkpoint
@@ -571,7 +610,7 @@ class BitMarTrainer:
             torch.save(checkpoint, latest_path)
 
             logger.info(f"Checkpoint saved: {checkpoint_path}")
-            
+
         except Exception as e:
             logger.error(f"Failed to save checkpoint at epoch {epoch}: {e}")
             logger.error("Training will continue but checkpoint is not saved")
@@ -585,7 +624,8 @@ class BitMarTrainer:
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
             if self.scheduler and checkpoint['scheduler_state_dict']:
-                self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                self.scheduler.load_state_dict(
+                    checkpoint['scheduler_state_dict'])
 
             self.current_epoch = checkpoint['epoch']
             self.global_step = checkpoint['global_step']
@@ -595,9 +635,10 @@ class BitMarTrainer:
             logger.info(f"Resuming from epoch {self.current_epoch}")
 
             return self.current_epoch
-            
+
         except Exception as e:
-            logger.error(f"Failed to load checkpoint from {checkpoint_path}: {e}")
+            logger.error(
+                f"Failed to load checkpoint from {checkpoint_path}: {e}")
             logger.error("Starting training from scratch")
             return 0
 
@@ -655,7 +696,8 @@ class BitMarTrainer:
             # Update learning rate scheduler (only for epoch-based schedulers)
             if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'epoch':
                 self.scheduler.step()
-                logger.info(f"Scheduler stepped (epoch-based), new LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+                logger.info(
+                    f"Scheduler stepped (epoch-based), new LR: {self.optimizer.param_groups[0]['lr']:.2e}")
 
             # Log validation metrics with enhanced logger
             if self.wandb_logger:
@@ -692,56 +734,63 @@ class BitMarTrainer:
                 f"Cross-Modal Similarity: {train_metrics['cross_modal_similarity']:.4f}")
 
             # Create attention visualizations (every few epochs to avoid overhead)
-            if (self.attention_analyzer and 
-                (epoch + 1) % self.config.get('attention_analysis', {}).get('viz_every_n_epochs', 2) == 0):
-                
+            if (self.attention_analyzer and
+                    (epoch + 1) % self.config.get('attention_analysis', {}).get('viz_every_n_epochs', 2) == 0):
+
                 logger.info("Creating attention visualizations...")
-                
+
                 try:
                     # Create attention head heatmaps
                     for attention_type in ['encoder', 'decoder', 'cross_modal']:
                         self.attention_analyzer.create_attention_head_heatmap(
                             self.global_step, attention_type
                         )
-                    
+
                     # Create timeline plots
-                    self.attention_analyzer.create_attention_timeline_plot(self.global_step)
-                    
+                    self.attention_analyzer.create_attention_timeline_plot(
+                        self.global_step)
+
                     # Save top attention heads
                     for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                        self.attention_analyzer.save_top_heads(self.global_step, attention_type)
-                        
+                        self.attention_analyzer.save_top_heads(
+                            self.global_step, attention_type)
+
                 except Exception as e:
-                    logger.warning(f"Attention visualization creation failed: {e}")
+                    logger.warning(
+                        f"Attention visualization creation failed: {e}")
 
             # Generate attention evolution visualizations (NEW!)
-            if (self.attention_evolution_tracker and 
-                (epoch + 1) % self.config.get('save_attention_every_n_epochs', 1) == 0):
-                
-                logger.info("🎨 Generating attention evolution visualizations...")
-                
+            if (self.attention_evolution_tracker and
+                    (epoch + 1) % self.config.get('save_attention_every_n_epochs', 1) == 0):
+
+                logger.info(
+                    "🎨 Generating attention evolution visualizations...")
+
                 try:
                     # Create epoch comparison grids
                     if epoch > 0:  # Need at least 2 epochs
                         # Get sample IDs from this epoch
                         if epoch in self.attention_evolution_tracker.attention_history:
-                            sample_ids = list(self.attention_evolution_tracker.attention_history[epoch].keys())
+                            sample_ids = list(
+                                self.attention_evolution_tracker.attention_history[epoch].keys())
                             if sample_ids:
                                 self.attention_evolution_tracker.create_epoch_comparison_grid(
                                     sample_id=sample_ids[0],
                                     epochs=[epoch-1, epoch]
                                 )
-                    
+
                     # Generate learning summary
                     if epoch >= 2:  # Need at least 3 epochs
-                        self.attention_evolution_tracker.create_attention_learning_summary(max_epochs=epoch)
-                        
+                        self.attention_evolution_tracker.create_attention_learning_summary(
+                            max_epochs=epoch)
+
                     # Create token evolution plots for common tokens
                     if epoch >= 3:  # Need several epochs for meaningful evolution
                         common_tokens = ['the', 'a', 'dog', 'cat', 'person']
                         for token_text in common_tokens:
                             try:
-                                token_ids = self.attention_evolution_tracker.tokenizer.encode(token_text)
+                                token_ids = self.attention_evolution_tracker.tokenizer.encode(
+                                    token_text)
                                 if token_ids:
                                     self.attention_evolution_tracker.create_token_evolution_plot(
                                         token_text=token_text,
@@ -749,12 +798,14 @@ class BitMarTrainer:
                                     )
                             except Exception as e:
                                 continue  # Skip if token not found
-                                
-                    logger.info(f"✅ Attention evolution visualizations complete for epoch {epoch}")
-                    
+
+                    logger.info(
+                        f"✅ Attention evolution visualizations complete for epoch {epoch}")
+
                 except Exception as e:
-                    logger.warning(f"Attention evolution visualization failed: {e}")
-                
+                    logger.warning(
+                        f"Attention evolution visualization failed: {e}")
+
                 # Create visualizations with wandb logger
                 if self.wandb_logger and hasattr(self.model, 'memory'):
                     try:
@@ -764,12 +815,14 @@ class BitMarTrainer:
                             self.model.memory.memory_age,
                             self.global_step
                         )
-                        
+
                         # Quantization plots
-                        self.wandb_logger.create_quantization_plot(self.model, self.global_step)
-                        
+                        self.wandb_logger.create_quantization_plot(
+                            self.model, self.global_step)
+
                     except Exception as e:
-                        logger.warning(f"Wandb visualization creation failed: {e}")
+                        logger.warning(
+                            f"Wandb visualization creation failed: {e}")
 
             if self.use_wandb:
                 wandb.log(all_metrics)
@@ -783,16 +836,18 @@ class BitMarTrainer:
 
         # Final analysis and cleanup
         logger.info("Training completed! Running final analysis...")
-        
+
         if self.attention_analyzer:
             # Generate final attention report
-            final_report = self.attention_analyzer.generate_attention_report(self.global_step)
+            final_report = self.attention_analyzer.generate_attention_report(
+                self.global_step)
             logger.info(f"Final attention analysis: {final_report}")
-            
+
             # Save final top heads
             for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                self.attention_analyzer.save_top_heads(self.global_step, attention_type, k=20)
-        
+                self.attention_analyzer.save_top_heads(
+                    self.global_step, attention_type, k=20)
+
         # Close wandb logger
         if self.wandb_logger:
             self.wandb_logger.finish()
@@ -812,7 +867,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/bitmar_config.yaml",
+        default="configs/bitmar_ultra_tiny.yaml",
         help="Path to configuration file"
     )
     parser.add_argument(
@@ -870,7 +925,7 @@ def main():
         config['data']['batch_size'] = args.batch_size
     if args.wandb_project:
         config['wandb']['project'] = args.wandb_project
-    
+
     # Add attention tracking config
     config['track_attention_every_n_steps'] = args.track_attention_every_n_steps
     config['save_attention_every_n_epochs'] = args.save_attention_every_n_epochs

@@ -108,8 +108,8 @@ wandb:
   log_quantization: false # Disable for performance
   log_features: false # Disable for performance
   save_code: true
-  create_plots: false # Disable for performance
-  plot_attention_heatmaps: false
+  create_plots: true # Disable for performance
+  plot_attention_heatmaps: true
   plot_memory_usage: false
   plot_quantization_dist: false
 

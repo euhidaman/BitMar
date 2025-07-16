@@ -76,7 +76,7 @@ training:
 # Weights & Biases (minimal logging for edge)
 wandb:
   project: "bitmar-tiny-edge"
-  entity: "babylm-ntust"
+  entity: "babylm-ntust-org"
   api_key: null
   log_every_n_steps: 100   # Less frequent logging
   log_attention: true
