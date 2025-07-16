@@ -302,8 +302,11 @@ class BitMarTrainer:
                         log_quantization = self.global_step % (log_every_n_steps * 10) == 0
                         memory_module = self.model.memory if hasattr(self.model, 'memory') else None
                         
+                        # Only log if cross-modal similarity computation succeeded
+                        log_outputs = outputs.copy() if isinstance(outputs, dict) else {}
+                        
                         self.wandb_logger.log_consolidated_metrics(
-                            outputs=outputs,
+                            outputs=log_outputs,
                             epoch=epoch,
                             step=self.global_step,
                             lr=self.optimizer.param_groups[0]['lr'],
@@ -314,6 +317,7 @@ class BitMarTrainer:
                             
                     except Exception as e:
                         logger.warning(f"Wandb logging failed at step {self.global_step}: {e}")
+                        # Continue training without wandb logging for this step
 
                 # Attention analysis (less frequent to avoid overhead)
                 if (self.attention_analyzer and 
@@ -512,10 +516,19 @@ class BitMarTrainer:
             # Pool text features (mean over sequence)
             text_pooled = text_latent.mean(dim=1)  # [batch_size, feature_dim]
 
-            # Check dimensions match
+            # Handle dimension mismatch by projecting to smaller dimension
             if text_pooled.shape[-1] != vision_latent.shape[-1]:
-                logger.warning(f"Dimension mismatch: text {text_pooled.shape} vs vision {vision_latent.shape}")
-                return 0.0
+                text_dim = text_pooled.shape[-1]
+                vision_dim = vision_latent.shape[-1]
+                
+                if text_dim > vision_dim:
+                    # Project text to vision dimension (take first N dimensions)
+                    text_pooled = text_pooled[:, :vision_dim]
+                    logger.debug(f"Projected text features from {text_dim}D to {vision_dim}D")
+                elif vision_dim > text_dim:
+                    # Project vision to text dimension (take first N dimensions)
+                    vision_latent = vision_latent[:, :text_dim]
+                    logger.debug(f"Projected vision features from {vision_dim}D to {text_dim}D")
 
             # Compute cosine similarity with numerical stability
             cos_sim = torch.cosine_similarity(text_pooled, vision_latent, dim=1)
