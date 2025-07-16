@@ -4,86 +4,86 @@
 
 model:
   # BitNet Text Encoder (Ultra-Tiny)
-  vocab_size: 50257  # GPT-2 vocabulary (cannot reduce)
-  text_encoder_dim: 128  # Minimal for edge deployment
-  text_encoder_layers: 3  # Minimal layers
-  text_encoder_heads: 4  # Minimal heads
-  
+  vocab_size: 50257 # GPT-2 vocabulary (cannot reduce)
+  text_encoder_dim: 128 # Minimal for edge deployment
+  text_encoder_layers: 3 # Minimal layers
+  text_encoder_heads: 4 # Minimal heads
+
   # BitNet Text Decoder (Ultra-Tiny)
-  text_decoder_dim: 128  # Minimal for edge deployment
-  text_decoder_layers: 3  # Minimal layers
-  text_decoder_heads: 4  # Minimal heads
-  
+  text_decoder_dim: 128 # Minimal for edge deployment
+  text_decoder_layers: 3 # Minimal layers
+  text_decoder_heads: 4 # Minimal heads
+
   # Vision processing (DiNOv2 features - Minimal)
-  vision_encoder_dim: 768  # DiNOv2 fixed dimension
-  vision_latent_size: 128  # Minimal latent size
-  vision_hidden_size: 64   # Ultra-small hidden layer
-  
+  vision_encoder_dim: 768 # DiNOv2 fixed dimension
+  vision_latent_size: 128 # Minimal latent size
+  vision_hidden_size: 64 # Ultra-small hidden layer
+
   # Cross-modal fusion (Ultra-Tiny)
-  fusion_hidden_size: 128  # Minimal fusion
-  fusion_num_heads: 2      # Just 2 heads for basic cross-modal
-  fusion_num_layers: 1     # Single fusion layer
-  
+  fusion_hidden_size: 128 # Minimal fusion
+  fusion_num_heads: 2 # Just 2 heads for basic cross-modal
+  fusion_num_layers: 1 # Single fusion layer
+
   # Episodic Memory (External SD Card Ready)
-  memory_size: 16          # 16 memory slots (1KB total at fp16)
-  episode_dim: 128         # Match vision_latent_size
-  memory_alpha: 0.2        # Higher adaptation rate for fewer slots
+  memory_size: 16 # 16 memory slots (1KB total at fp16)
+  episode_dim: 128 # Match vision_latent_size
+  memory_alpha: 0.2 # Higher adaptation rate for fewer slots
   direct_writing: true
   # Future: external_memory_path: "/sdcard/bitmar_memory.bin"
-  
+
   # Model configuration (Edge Optimized)
-  max_seq_len: 32          # Ultra-short sequences
-  dropout: 0.2             # Higher dropout for tiny model regularization
+  max_seq_len: 32 # Ultra-short sequences
+  dropout: 0.2 # Higher dropout for tiny model regularization
 
 data:
   # Dataset configuration (Edge)
   dataset_dir: "../babylm_dataset"
   text_encoder_name: "gpt2"
-  max_seq_length: 32       # Ultra-short for edge efficiency
-  
+  max_seq_length: 32 # Ultra-short for edge efficiency
+
   # DataLoader settings (Edge Memory Optimized)
-  batch_size: 2            # Minimal batch size
-  num_workers: 2           # Minimal workers
-  pin_memory: false        # Disable for memory conservation
+  batch_size: 2 # Minimal batch size
+  num_workers: 2 # Minimal workers
+  pin_memory: false # Disable for memory conservation
   persistent_workers: false
-  
+
   # Validation (lightweight)
-  validation_datasets: 
-    - "glue/sst2"          # Single lightweight dataset
+  validation_datasets:
+    - "glue/sst2" # Single lightweight dataset
 
 # Enhanced attention analysis (reduced for edge)
 attention_analysis:
-  track_top_k: 5           # Track only top 5 heads
-  log_every_n_steps: 200   # Less frequent logging
-  viz_every_n_epochs: 5    # Less frequent visualization
+  track_top_k: 5 # Track only top 5 heads
+  log_every_n_steps: 200 # Less frequent logging
+  viz_every_n_epochs: 5 # Less frequent visualization
   save_head_patterns: false # Disable to save storage
   analyze_memory_attention: true
   analyze_cross_modal: true
 
 training:
   # Training configuration (Edge Optimized)
-  max_epochs: 20           # More epochs to compensate for smaller model
+  max_epochs: 20 # More epochs to compensate for smaller model
   accumulate_grad_batches: 4 # Simulate larger batch via accumulation
-  gradient_clip_val: 0.5   # Tighter clipping for stability
+  gradient_clip_val: 0.5 # Tighter clipping for stability
   val_check_interval: 2000
   scheduler: "cosine"
   min_lr: 0.00001
-  warmup_steps: 500        # Reduced warmup
-  learning_rate: 0.0002    # Slightly higher LR for tiny model
-  weight_decay: 0.02       # Higher weight decay for regularization
+  warmup_steps: 500 # Reduced warmup
+  learning_rate: 0.0002 # Slightly higher LR for tiny model
+  weight_decay: 0.02 # Higher weight decay for regularization
   track_attention: true
 
 # Weights & Biases (minimal logging for edge)
 wandb:
   project: "bitmar-tiny-edge"
-  entity: "babylm-ntust-org"
+  entity: "babylm-ntust"
   api_key: null
-  log_every_n_steps: 100   # Less frequent logging
+  log_every_n_steps: 100 # Less frequent logging
   log_attention: true
   log_memory: true
-  log_gradients: false     # Disable to reduce overhead
+  log_gradients: false # Disable to reduce overhead
   log_quantization: true
-  log_features: false      # Disable to reduce overhead
+  log_features: false # Disable to reduce overhead
   save_code: true
   create_plots: true
   plot_attention_heatmaps: false # Disable for performance
@@ -92,9 +92,9 @@ wandb:
 
 # Evaluation (lightweight)
 evaluation:
-  metrics: ["bleu", "cross_modal_accuracy"]  # Reduced metrics
+  metrics: ["bleu", "cross_modal_accuracy"] # Reduced metrics
   generate_samples: true
-  num_samples: 20          # Fewer samples
+  num_samples: 20 # Fewer samples
   max_generation_length: 32 # Shorter generation
   temperature: 0.8
   top_p: 0.9
@@ -109,18 +109,18 @@ output:
 
 # Edge deployment testing
 edge_test:
-  batch_size: 1            # Single sample inference
-  max_samples: 50          # Minimal testing
+  batch_size: 1 # Single sample inference
+  max_samples: 50 # Minimal testing
   reduced_model_size: true
-  memory_size: 8           # 8 slots for testing
+  memory_size: 8 # 8 slots for testing
   enable_external_memory: false # Will be enabled later for SD card
 
 # Memory optimization settings
 memory_optimization:
-  use_gradient_checkpointing: true  # Trade compute for memory
-  use_fp16: true                    # Half precision
-  empty_cache_frequency: 10         # Clear cache every 10 steps
-  max_memory_slots_in_ram: 8        # Keep only 8 slots in RAM
+  use_gradient_checkpointing: true # Trade compute for memory
+  use_fp16: true # Half precision
+  empty_cache_frequency: 10 # Clear cache every 10 steps
+  max_memory_slots_in_ram: 8 # Keep only 8 slots in RAM
   # Future SD card settings:
   # external_memory_format: "binary"
   # external_memory_compression: true

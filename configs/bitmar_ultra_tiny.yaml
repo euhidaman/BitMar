@@ -99,7 +99,7 @@ training:
 # Weights & Biases (minimal logging)
 wandb:
   project: "bitmar-ultra-tiny"
-  entity: "babylm-ntust-org"
+  entity: "babylm-ntust"
   api_key: null
   log_every_n_steps: 500 # Very infrequent logging
   log_attention: false # Disable for performance
