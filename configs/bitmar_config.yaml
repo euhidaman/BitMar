@@ -74,8 +74,8 @@ training:
 # Weights & Biases configuration (optional)
 # Enhanced wandb configuration with comprehensive logging
 wandb:
-  project: "bitmar-babylm"
-  entity: "babylm-ntust"  # Use babylm-ntust team
+  project: "bitmar-babylm-edge"
+  entity: "babylm-ntust-org"  # Use babylm-ntust team
   api_key: null  # Use WANDB_API_KEY environment variable
   log_every_n_steps: 50
   # Detailed logging categories with proper axis labels
