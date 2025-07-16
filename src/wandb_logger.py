@@ -573,13 +573,40 @@ class BitMarWandbLogger:
         return entropy.item()
         
     def _compute_cross_modal_similarity(self, text_features: torch.Tensor, vision_features: torch.Tensor) -> float:
-        """Compute cosine similarity between text and vision features"""
-        # Pool text features (mean over sequence)
-        text_pooled = text_features.mean(dim=1)  # [batch_size, feature_dim]
-        
-        # Compute cosine similarity
-        cos_sim = torch.cosine_similarity(text_pooled, vision_features, dim=1)
-        return cos_sim.mean().item()
+        """Compute cosine similarity between text and vision features with dimension handling"""
+        try:
+            # Check for valid inputs
+            if text_features is None or vision_features is None:
+                return 0.0
+            
+            if text_features.numel() == 0 or vision_features.numel() == 0:
+                return 0.0
+            
+            # Pool text features (mean over sequence)
+            text_pooled = text_features.mean(dim=1)  # [batch_size, feature_dim]
+
+            # Handle dimension mismatch by projecting to smaller dimension
+            if text_pooled.shape[-1] != vision_features.shape[-1]:
+                text_dim = text_pooled.shape[-1]
+                vision_dim = vision_features.shape[-1]
+                
+                if text_dim > vision_dim:
+                    # Project text to vision dimension (take first N dimensions)
+                    text_pooled = text_pooled[:, :vision_dim]
+                elif vision_dim > text_dim:
+                    # Project vision to text dimension (take first N dimensions)
+                    vision_features = vision_features[:, :text_dim]
+
+            # Compute cosine similarity with numerical stability
+            cos_sim = torch.cosine_similarity(text_pooled, vision_features, dim=1)
+            similarity = cos_sim.mean().item()
+            
+            # Return finite value only
+            return similarity if np.isfinite(similarity) else 0.0
+            
+        except Exception as e:
+            logger.warning(f"Cross-modal similarity computation failed in wandb logger: {e}")
+            return 0.0
         
     def _estimate_quantized_size(self, model: nn.Module) -> float:
         """Estimate model size after quantization in bytes"""
