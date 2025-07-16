@@ -34,6 +34,14 @@ except ImportError:
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
+# Import attention evolution tracker
+try:
+    from attention_evolution_tracker import AttentionEvolutionTracker
+    ATTENTION_TRACKING_AVAILABLE = True
+except ImportError:
+    ATTENTION_TRACKING_AVAILABLE = False
+    print("Warning: attention_evolution_tracker not available")
+
 
 # Setup logging
 logging.basicConfig(
@@ -62,6 +70,7 @@ class BitMarTrainer:
         # Initialize enhanced wandb logger and attention analyzer
         self.wandb_logger = None
         self.attention_analyzer = None
+        self.attention_evolution_tracker = None
         self.setup_logging_systems()
 
         # Create model and data
@@ -145,6 +154,16 @@ class BitMarTrainer:
             wandb_logger=self.wandb_logger,
             track_top_k=self.config.get('attention_analysis', {}).get('track_top_k', 10)
         )
+
+        # Initialize attention evolution tracker
+        if ATTENTION_TRACKING_AVAILABLE:
+            self.attention_evolution_tracker = AttentionEvolutionTracker(
+                save_dir=str(self.attention_dir / "attention_evolution")
+            )
+            logger.info("Attention evolution tracker initialized")
+        else:
+            self.attention_evolution_tracker = None
+            logger.warning("Attention evolution tracker not available")
 
         # Create data module
         self.data_module = create_data_module(self.config['data'])
@@ -306,6 +325,40 @@ class BitMarTrainer:
                         )
                     except Exception as e:
                         logger.warning(f"Attention analysis failed at step {self.global_step}: {e}")
+
+                # Attention evolution tracking (NEW!)
+                if (self.attention_evolution_tracker and 
+                    self.global_step % self.config.get('track_attention_every_n_steps', 50) == 0):
+                    
+                    try:
+                        # Extract cross-modal attention if available
+                        cross_modal_attention = None
+                        if 'cross_modal_attention' in outputs:
+                            cross_modal_attention = outputs['cross_modal_attention']
+                        elif hasattr(outputs, 'attentions') and outputs.attentions:
+                            cross_modal_attention = outputs.attentions[-1]  # Last layer attention
+                        
+                        if cross_modal_attention is not None:
+                            # Get caption for first sample in batch
+                            sample_caption = "Generated caption"  # TODO: Extract actual caption
+                            if 'captions' in batch:
+                                sample_caption = batch['captions'][0] if batch['captions'] else "No caption"
+                            
+                            # Save attention evolution data
+                            self.attention_evolution_tracker.save_epoch_attention(
+                                epoch=epoch,
+                                sample_id=f"step_{self.global_step}_sample_0",
+                                caption=sample_caption,
+                                attention_weights=cross_modal_attention[0:1],  # First sample
+                                image_features=batch['vision_features'][0:1],
+                                compressed_features=outputs.get('vision_latent', None)
+                            )
+                            
+                            if self.global_step % 200 == 0:  # Less frequent logging
+                                logger.info(f"🎯 Tracked attention evolution at step {self.global_step}")
+                                
+                    except Exception as e:
+                        logger.warning(f"Attention evolution tracking failed at step {self.global_step}: {e}")
 
                 self.global_step += 1
                 
@@ -645,6 +698,47 @@ class BitMarTrainer:
                         
                 except Exception as e:
                     logger.warning(f"Attention visualization creation failed: {e}")
+
+            # Generate attention evolution visualizations (NEW!)
+            if (self.attention_evolution_tracker and 
+                (epoch + 1) % self.config.get('save_attention_every_n_epochs', 1) == 0):
+                
+                logger.info("🎨 Generating attention evolution visualizations...")
+                
+                try:
+                    # Create epoch comparison grids
+                    if epoch > 0:  # Need at least 2 epochs
+                        # Get sample IDs from this epoch
+                        if epoch in self.attention_evolution_tracker.attention_history:
+                            sample_ids = list(self.attention_evolution_tracker.attention_history[epoch].keys())
+                            if sample_ids:
+                                self.attention_evolution_tracker.create_epoch_comparison_grid(
+                                    sample_id=sample_ids[0],
+                                    epochs=[epoch-1, epoch]
+                                )
+                    
+                    # Generate learning summary
+                    if epoch >= 2:  # Need at least 3 epochs
+                        self.attention_evolution_tracker.create_attention_learning_summary(max_epochs=epoch)
+                        
+                    # Create token evolution plots for common tokens
+                    if epoch >= 3:  # Need several epochs for meaningful evolution
+                        common_tokens = ['the', 'a', 'dog', 'cat', 'person']
+                        for token_text in common_tokens:
+                            try:
+                                token_ids = self.attention_evolution_tracker.tokenizer.encode(token_text)
+                                if token_ids:
+                                    self.attention_evolution_tracker.create_token_evolution_plot(
+                                        token_text=token_text,
+                                        token_id=token_ids[0]
+                                    )
+                            except Exception as e:
+                                continue  # Skip if token not found
+                                
+                    logger.info(f"✅ Attention evolution visualizations complete for epoch {epoch}")
+                    
+                except Exception as e:
+                    logger.warning(f"Attention evolution visualization failed: {e}")
                 
                 # Create visualizations with wandb logger
                 if self.wandb_logger and hasattr(self.model, 'memory'):
@@ -730,6 +824,24 @@ def main():
         default=None,
         help="Resume training from checkpoint"
     )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default=None,
+        help="Override W&B project name"
+    )
+    parser.add_argument(
+        "--track_attention_every_n_steps",
+        type=int,
+        default=50,
+        help="Save attention evolution data every N steps"
+    )
+    parser.add_argument(
+        "--save_attention_every_n_epochs",
+        type=int,
+        default=1,
+        help="Generate attention visualizations every N epochs"
+    )
 
     args = parser.parse_args()
 
@@ -741,6 +853,12 @@ def main():
         config['training']['max_epochs'] = args.max_epochs
     if args.batch_size:
         config['data']['batch_size'] = args.batch_size
+    if args.wandb_project:
+        config['wandb']['project'] = args.wandb_project
+    
+    # Add attention tracking config
+    config['track_attention_every_n_steps'] = args.track_attention_every_n_steps
+    config['save_attention_every_n_epochs'] = args.save_attention_every_n_epochs
 
     # Create trainer
     trainer = BitMarTrainer(config)

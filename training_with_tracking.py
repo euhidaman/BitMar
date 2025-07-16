@@ -8,6 +8,11 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from pathlib import Path
 import numpy as np
+import yaml
+import argparse
+import wandb
+from dotenv import load_dotenv
+import os
 from typing import Dict, Optional, Tuple
 
 # Import our custom modules
@@ -275,5 +280,65 @@ def integrate_with_existing_training():
     
     print("Integration example ready! See function docstring for usage.")
 
-if __name__ == "__main__":
+def main():
+    """Main training function with command line interface"""
+    import argparse
+    import yaml
+    import wandb
+    from dotenv import load_dotenv
+    import os
+    
+    # Load environment variables
+    load_dotenv()
+    
+    parser = argparse.ArgumentParser(description="BitMar Training with Attention Tracking")
+    parser.add_argument("--config", type=str, required=True, help="Path to config YAML file")
+    parser.add_argument("--wandb_project", type=str, default="bitmar-training", help="W&B project name")
+    parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
+    parser.add_argument("--track_attention_every_n_steps", type=int, default=50, help="Save attention every N steps")
+    parser.add_argument("--save_attention_every_n_epochs", type=int, default=1, help="Generate visualizations every N epochs")
+    
+    args = parser.parse_args()
+    
+    # Load configuration
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Override config with command line args
+    config['training']['max_epochs'] = args.epochs
+    config['track_attention_every_n_steps'] = args.track_attention_every_n_steps
+    config['save_attention_every_n_epochs'] = args.save_attention_every_n_epochs
+    
+    # Initialize W&B
+    wandb.init(
+        project=args.wandb_project,
+        config=config,
+        name=f"bitmar-ultra-tiny-{args.epochs}epochs"
+    )
+    
+    print(f"🚀 Starting BitMar training with:")
+    print(f"   - Config: {args.config}")
+    print(f"   - Epochs: {args.epochs}")
+    print(f"   - W&B Project: {args.wandb_project}")
+    print(f"   - Attention tracking every {args.track_attention_every_n_steps} steps")
+    
+    # TODO: Import and initialize your actual BitMar model here
+    # from src.models.bitmar import BitMarModel
+    # model = BitMarModel(config)
+    
+    # Initialize enhanced trainer
+    enhanced_trainer = BitMarTrainingWithTracking(
+        model=None,  # Replace with actual model
+        config=config,
+        save_dir=config.get('output', {}).get('checkpoint_dir', './training_outputs')
+    )
+    
+    print("⚠️  Note: Model initialization needs to be implemented.")
+    print("   Please add your BitMar model import and initialization.")
+    print("   See the integrate_with_existing_training() function for the complete training loop.")
+    
+    # For now, show what would happen
     integrate_with_existing_training()
+
+if __name__ == "__main__":
+    main()
