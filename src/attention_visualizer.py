@@ -51,6 +51,9 @@ class AttentionHeadAnalyzer:
                                input_ids: torch.Tensor, step: int):
         """Analyze attention patterns for a single batch"""
         
+        # Save input tokens and captions for visualization
+        self._save_input_context(input_ids, step)
+        
         # Analyze text encoder attention
         if 'text_attention' in model_outputs:
             self._analyze_text_attention(model_outputs['text_attention'], input_ids, step, 'encoder')
@@ -59,13 +62,44 @@ class AttentionHeadAnalyzer:
         if 'decoder_attention' in model_outputs:
             self._analyze_text_attention(model_outputs['decoder_attention'], input_ids, step, 'decoder')
             
-        # Analyze cross-modal attention
+        # Analyze cross-modal attention (this is where token-to-pixel happens)
         if 'cross_attention' in model_outputs:
             self._analyze_cross_modal_attention(model_outputs['cross_attention'], step)
             
         # Analyze memory attention
         if 'memory_attention' in model_outputs:
             self._analyze_memory_attention(model_outputs['memory_attention'], step)
+    
+    def _save_input_context(self, input_ids: torch.Tensor, step: int):
+        """Save input tokens and decoded text for visualization context"""
+        
+        # Create context directory
+        context_dir = self.save_dir / "input_context"
+        context_dir.mkdir(exist_ok=True)
+        
+        # Decode first batch item to get caption text
+        if input_ids.shape[0] > 0:
+            first_sequence = input_ids[0].detach().cpu().numpy()
+            
+            # Remove padding tokens and decode
+            non_pad_tokens = first_sequence[first_sequence != self.tokenizer.pad_token_id]
+            caption_text = self.tokenizer.decode(non_pad_tokens, skip_special_tokens=True)
+            
+            # Save context data
+            context_data = {
+                'step': step,
+                'input_ids': first_sequence,
+                'caption': caption_text,
+                'tokens': [self.tokenizer.decode([token_id]) for token_id in non_pad_tokens],
+                'sequence_length': len(non_pad_tokens)
+            }
+            
+            # Save as JSON for easy reading
+            import json
+            context_path = context_dir / f"context_step_{step}.json"
+            with open(context_path, 'w') as f:
+                json.dump({k: v.tolist() if isinstance(v, np.ndarray) else v 
+                          for k, v in context_data.items()}, f, indent=2)
             
     def _analyze_text_attention(self, attention_patterns: List[torch.Tensor], 
                                input_ids: torch.Tensor, step: int, attention_type: str):
@@ -114,14 +148,17 @@ class AttentionHeadAnalyzer:
             if attention_weights is None:
                 continue
                 
-            # attention_weights shape: [batch_size, seq_len, 1] (text attending to vision)
-            batch_size, seq_len, vision_len = attention_weights.shape
+            # attention_weights shape: [batch_size, seq_len, vision_dim] (text attending to vision)
+            batch_size, seq_len, vision_dim = attention_weights.shape
+            
+            # Save token-to-pixel attention data for visualization
+            self._save_token_pixel_attention(attention_weights, step, layer_name)
             
             # Compute statistics
-            avg_attention = attention_weights.mean(0).squeeze()  # [seq_len]
+            avg_attention = attention_weights.mean(0)  # [seq_len, vision_dim]
             
             # Attention distribution across text positions
-            attention_var = torch.var(avg_attention)
+            attention_var = torch.var(avg_attention, dim=1).mean()  # Variance across vision dims
             attention_max = torch.max(avg_attention)
             attention_mean = torch.mean(avg_attention)
             
@@ -143,6 +180,32 @@ class AttentionHeadAnalyzer:
             importance = attention_var  # Higher variance = more selective attention
             if layer_idx < self.head_importance_scores['cross_modal'].shape[0]:
                 self.head_importance_scores['cross_modal'][layer_idx, :] += importance
+    
+    def _save_token_pixel_attention(self, attention_weights: torch.Tensor, step: int, layer_name: str):
+        """Save token-to-pixel attention data for detailed visualization"""
+        
+        # Create token-pixel attention directory
+        token_pixel_dir = self.save_dir / "token_pixel_attention"
+        token_pixel_dir.mkdir(exist_ok=True)
+        
+        # Save attention weights for this step and layer
+        save_data = {
+            'attention_weights': attention_weights.detach().cpu().numpy(),
+            'step': step,
+            'layer': layer_name,
+            'shape': attention_weights.shape
+        }
+        
+        save_path = token_pixel_dir / f"attention_{layer_name}_step_{step}.npz"
+        np.savez_compressed(save_path, **save_data)
+        
+        # Also save a subset for quick visualization (first batch item only)
+        if attention_weights.shape[0] > 0:
+            first_batch = attention_weights[0].detach().cpu().numpy()  # [seq_len, vision_dim]
+            
+            # Save human-readable format for debugging
+            viz_save_path = token_pixel_dir / f"viz_data_{layer_name}_step_{step}.npy"
+            np.save(viz_save_path, first_batch)
             
     def _analyze_memory_attention(self, memory_attention: torch.Tensor, step: int):
         """Analyze episodic memory attention patterns"""

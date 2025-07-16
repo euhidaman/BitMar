@@ -1,0 +1,171 @@
+# BitMar Ultra-Tiny Edge Configuration with DiNOv2 Feature Reduction
+# Optimized for ARM Cortex-M7 and similar edge devices with <1MB RAM
+# Includes aggressive DiNOv2 feature compression
+
+model:
+  # BitNet Text Encoder (Ultra-Minimal)
+  vocab_size: 50257  # GPT-2 vocabulary (cannot reduce)
+  text_encoder_dim: 64   # Further reduced from 128
+  text_encoder_layers: 2  # Minimal layers for edge
+  text_encoder_heads: 2   # Minimal heads
+  
+  # BitNet Text Decoder (Ultra-Minimal)
+  text_decoder_dim: 64   # Further reduced from 128
+  text_decoder_layers: 2  # Minimal layers for edge
+  text_decoder_heads: 2   # Minimal heads
+  
+  # Vision processing (Compressed DiNOv2 features)
+  vision_encoder_dim: 768      # DiNOv2 input (fixed)
+  vision_latent_size: 32       # Heavily compressed (768 -> 32)
+  vision_hidden_size: 16       # Ultra-small hidden layer
+  vision_compression_method: "top_k_selection"  # Best for edge devices
+  vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
+  vision_pool_size: 2          # 2x2 pooling
+  
+  # Cross-modal fusion (Ultra-Minimal)
+  fusion_hidden_size: 32       # Minimal fusion
+  fusion_num_heads: 1          # Single head for basic cross-modal
+  fusion_num_layers: 1         # Single fusion layer
+  
+  # Episodic Memory (Ultra-Compact for Edge)
+  memory_size: 8               # 8 memory slots only
+  episode_dim: 32              # Match vision_latent_size
+  memory_alpha: 0.3            # Higher adaptation for fewer slots
+  direct_writing: true
+  memory_compression: true     # Enable memory compression
+  
+  # Model configuration (Edge Optimized)
+  max_seq_len: 16              # Ultra-short sequences for edge
+  dropout: 0.25                # Higher dropout for tiny model regularization
+
+# Feature reduction configuration
+vision_feature_reduction:
+  enabled: true
+  method: "top_k_selection"    # Select most important 32 dims from 768
+  target_dim: 32               # Compress 768D -> 32D (24x reduction)
+  spatial_pooling: true        # 14x14 -> 7x7 patches (4x reduction)
+  pool_method: "average"       # Average pooling
+  
+  # Alternative methods (for experimentation)
+  alternative_methods:
+    linear_projection:
+      target_dim: 32
+      learnable: false
+    pca_reduction:
+      target_dim: 32
+      explained_variance: 0.95
+    learned_compression:
+      target_dim: 32
+      hidden_dim: 128
+      
+data:
+  # Dataset configuration (Edge)
+  dataset_dir: "../babylm_dataset"
+  text_encoder_name: "gpt2"
+  max_seq_length: 16           # Ultra-short for edge efficiency
+  
+  # DataLoader settings (Edge Memory Optimized)
+  batch_size: 1                # Single sample processing
+  num_workers: 1               # Minimal workers
+  pin_memory: false            # Disable for memory conservation
+  persistent_workers: false
+  
+  # Validation (minimal)
+  validation_datasets: 
+    - "glue/sst2"              # Single lightweight dataset
+
+# Enhanced attention analysis (minimal for edge)
+attention_analysis:
+  track_top_k: 2               # Track only top 2 heads
+  log_every_n_steps: 500       # Infrequent logging
+  viz_every_n_epochs: 10       # Rare visualization
+  save_head_patterns: false    # Disable to save storage
+  analyze_memory_attention: false # Disable for performance
+  analyze_cross_modal: true    # Keep only essential analysis
+
+training:
+  # Training configuration (Edge Optimized)
+  max_epochs: 50               # More epochs for tiny model
+  accumulate_grad_batches: 8   # Simulate larger batch via accumulation
+  gradient_clip_val: 0.25      # Aggressive clipping for stability
+  val_check_interval: 5000
+  scheduler: "cosine"
+  min_lr: 0.000001
+  warmup_steps: 200            # Minimal warmup
+  learning_rate: 0.0005        # Higher LR for tiny model
+  weight_decay: 0.05           # Aggressive weight decay for regularization
+  track_attention: false       # Disable for performance
+
+# Weights & Biases (minimal logging)
+wandb:
+  project: "bitmar-ultra-tiny"
+  entity: "babylm-ntust"
+  api_key: null
+  log_every_n_steps: 500       # Very infrequent logging
+  log_attention: false         # Disable for performance
+  log_memory: true
+  log_gradients: false         # Disable for performance
+  log_quantization: false      # Disable for performance
+  log_features: false          # Disable for performance
+  save_code: true
+  create_plots: false          # Disable for performance
+  plot_attention_heatmaps: false
+  plot_memory_usage: false
+  plot_quantization_dist: false
+
+# Evaluation (ultra-lightweight)
+evaluation:
+  metrics: ["bleu"]            # Single metric only
+  generate_samples: false      # Disable for performance
+  num_samples: 5               # Minimal samples
+  max_generation_length: 16    # Short generation
+  temperature: 0.9
+  top_p: 0.95
+
+# Output directories
+output:
+  checkpoint_dir: "checkpoints_ultra_tiny"
+  log_dir: "logs_ultra_tiny"
+  attention_dir: "attention_ultra_tiny"
+  memory_dir: "memory_ultra_tiny"
+  results_dir: "results_ultra_tiny"
+
+# Edge deployment testing
+edge_test:
+  batch_size: 1                # Single sample inference
+  max_samples: 20              # Minimal testing
+  reduced_model_size: true
+  memory_size: 4               # 4 slots for testing
+  enable_external_memory: false
+  
+# Memory optimization settings (aggressive)
+memory_optimization:
+  use_gradient_checkpointing: true    # Trade compute for memory
+  use_fp16: true                      # Half precision everywhere
+  use_int8_vision: true               # 8-bit vision features
+  empty_cache_frequency: 5            # Aggressive cache clearing
+  max_memory_slots_in_ram: 4          # Keep only 4 slots in RAM
+  compress_episodic_memory: true      # Compress memory slots
+  
+  # Vision feature optimization
+  vision_feature_caching: false       # Don't cache for memory saving
+  vision_batch_processing: false      # Process one image at a time
+  
+  # Model size optimization
+  tie_word_embeddings: true           # Share input/output embeddings
+  use_shared_attention: true          # Share attention weights across layers
+
+# Performance targets for edge deployment
+performance_targets:
+  max_model_size_mb: 2               # 2MB total model size
+  max_inference_memory_mb: 4         # 4MB inference memory
+  target_inference_time_ms: 100      # 100ms inference time
+  min_accuracy_threshold: 0.70       # 70% of full model accuracy
+  
+# Hardware-specific optimizations
+hardware_optimization:
+  target_device: "arm_cortex_m7"
+  enable_neon_simd: true             # ARM NEON optimization
+  use_quantized_inference: true      # Full quantization
+  optimize_for_cache: true           # Cache-friendly memory layout
+  enable_model_compression: true     # Additional model compression
