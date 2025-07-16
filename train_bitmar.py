@@ -296,7 +296,7 @@ class BitMarTrainer:
 
                 # Enhanced logging with wandb logger
                 log_every_n_steps = self.config.get('wandb', {}).get('log_every_n_steps', 50)
-                if self.wandb_logger and batch_idx % log_every_n_steps == 0:
+                if self.wandb_logger and log_every_n_steps > 0 and batch_idx % log_every_n_steps == 0:
                     try:
                         # Log all metrics in a single consolidated call
                         log_quantization = self.global_step % (log_every_n_steps * 10) == 0
@@ -320,8 +320,9 @@ class BitMarTrainer:
                         # Continue training without wandb logging for this step
 
                 # Attention analysis (less frequent to avoid overhead)
-                if (self.attention_analyzer and 
-                    self.global_step % self.config.get('attention_analysis', {}).get('log_every_n_steps', 100) == 0):
+                attention_log_steps = self.config.get('attention_analysis', {}).get('log_every_n_steps', 100)
+                if (self.attention_analyzer and attention_log_steps > 0 and
+                    self.global_step % attention_log_steps == 0):
                     
                     try:
                         self.attention_analyzer.analyze_batch_attention(
@@ -331,8 +332,9 @@ class BitMarTrainer:
                         logger.warning(f"Attention analysis failed at step {self.global_step}: {e}")
 
                 # Attention evolution tracking (NEW!)
-                if (self.attention_evolution_tracker and 
-                    self.global_step % self.config.get('track_attention_every_n_steps', 50) == 0):
+                track_attention_steps = self.config.get('track_attention_every_n_steps', 50)
+                if (self.attention_evolution_tracker and track_attention_steps > 0 and
+                    self.global_step % track_attention_steps == 0):
                     
                     try:
                         # Extract cross-modal attention if available
@@ -358,7 +360,7 @@ class BitMarTrainer:
                                 compressed_features=outputs.get('vision_latent', None)
                             )
                             
-                            if self.global_step % 200 == 0:  # Less frequent logging
+                            if self.global_step % 200 == 0 and self.global_step > 0:  # Less frequent logging, avoid zero
                                 logger.info(f"🎯 Tracked attention evolution at step {self.global_step}")
                                 
                     except Exception as e:
@@ -371,7 +373,7 @@ class BitMarTrainer:
                     self.scheduler.step()
                 
                 # Memory cleanup every 100 steps to prevent OOM
-                if self.global_step % 100 == 0:
+                if self.global_step > 0 and self.global_step % 100 == 0:
                     torch.cuda.empty_cache() if torch.cuda.is_available() else None
                 
             except Exception as e:
