@@ -266,19 +266,28 @@ class BitMarTrainer:
 
         for batch_idx, batch in enumerate(progress_bar):
             try:
-                # Move batch to device
-                for key in batch:
-                    if torch.is_tensor(batch[key]):
-                        batch[key] = batch[key].to(self.device)
+                # Verify device consistency every 50 steps to catch issues early
+                if self.global_step % 50 == 0:
+                    self.verify_device_consistency()
 
-                # Forward pass
-                outputs = self.model(
-                    input_ids=batch['input_ids'],
-                    attention_mask=batch['attention_mask'],
-                    vision_features=batch['vision_features'],
-                    labels=batch['labels']
-                )
+                # Move batch to device with safety check
+                def move_batch_to_device():
+                    for key in batch:
+                        if torch.is_tensor(batch[key]):
+                            batch[key] = batch[key].to(self.device, non_blocking=True)
 
+                self.safe_gpu_operation("batch_device_transfer", move_batch_to_device)
+
+                # Forward pass with safety wrapper
+                def forward_pass():
+                    return self.model(
+                        input_ids=batch['input_ids'],
+                        attention_mask=batch['attention_mask'],
+                        vision_features=batch['vision_features'],
+                        labels=batch['labels']
+                    )
+
+                outputs = self.safe_gpu_operation("forward_pass", forward_pass)
                 loss = outputs['loss']
 
                 # Check for invalid loss
@@ -287,18 +296,21 @@ class BitMarTrainer:
                         f"Invalid loss at step {self.global_step}: {loss.item()}")
                     continue
 
-                # Backward pass
-                self.optimizer.zero_grad()
-                loss.backward()
+                # Backward pass with safety wrapper
+                def backward_pass():
+                    self.optimizer.zero_grad()
+                    loss.backward()
 
-                # Gradient clipping
-                if self.config['training']['gradient_clip_val'] > 0:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config['training']['gradient_clip_val']
-                    )
+                    # Gradient clipping
+                    if self.config['training']['gradient_clip_val'] > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.config['training']['gradient_clip_val']
+                        )
 
-                self.optimizer.step()
+                    self.optimizer.step()
+
+                self.safe_gpu_operation("backward_pass", backward_pass)
 
                 # Update metrics
                 epoch_losses.append(loss.item())
@@ -702,6 +714,54 @@ class BitMarTrainer:
 
         logger.info("Attention analysis completed")
         return analyzer
+
+    def verify_device_consistency(self):
+        """Verify model and optimizer are on correct device"""
+        try:
+            # Check model device
+            model_device = next(self.model.parameters()).device
+            if model_device != self.device:
+                logger.warning(f"Model moved from {self.device} to {model_device}. Moving back...")
+                self.model.to(self.device)
+
+            # Check optimizer state device (if it has state)
+            if hasattr(self.optimizer, 'state') and self.optimizer.state:
+                for state in self.optimizer.state.values():
+                    if isinstance(state, dict):
+                        for key, value in state.items():
+                            if torch.is_tensor(value) and value.device != self.device:
+                                logger.warning(f"Optimizer state moved to {value.device}. Recreating optimizer...")
+                                # Recreate optimizer to fix device issues
+                                self.setup_optimizer()
+                                break
+        except Exception as e:
+            logger.error(f"Device verification failed: {e}")
+
+    def safe_gpu_operation(self, operation_name: str, operation_func):
+        """Safely execute GPU operations with fallback handling"""
+        try:
+            return operation_func()
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
+                logger.error(f"GPU error in {operation_name}: {e}")
+                logger.info("Attempting GPU memory cleanup...")
+
+                # Aggressive memory cleanup
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
+                # Verify device consistency
+                self.verify_device_consistency()
+
+                # Retry once
+                try:
+                    return operation_func()
+                except Exception as retry_e:
+                    logger.error(f"Retry failed for {operation_name}: {retry_e}")
+                    raise retry_e
+            else:
+                raise e
 
     def train(self, max_samples: Optional[int] = None):
         """Main training loop"""
