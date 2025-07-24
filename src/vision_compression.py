@@ -180,10 +180,38 @@ class DiNOv2FeatureCompressor(nn.Module):
         return self._apply_linear_compression(features)  # Same implementation
     
     def _apply_top_k_compression(self, features: torch.Tensor) -> torch.Tensor:
-        """Apply top-K feature selection"""
-        
-        # Select top-K features using learned indices
-        compressed = features[..., self.selected_indices]
+        """Apply top-K feature selection with bounds checking"""
+
+        # Get actual feature dimension
+        actual_feature_dim = features.shape[-1]
+
+        # Ensure selected indices are within bounds
+        valid_indices = self.selected_indices[self.selected_indices < actual_feature_dim]
+
+        # If we don't have enough valid indices, pad with additional ones
+        if len(valid_indices) < self.target_dim:
+            # Add more indices up to actual_feature_dim
+            additional_needed = min(self.target_dim - len(valid_indices),
+                                  actual_feature_dim - len(valid_indices))
+            if additional_needed > 0:
+                # Find indices not already selected
+                all_indices = torch.arange(actual_feature_dim, device=features.device)
+                mask = torch.ones(actual_feature_dim, dtype=torch.bool, device=features.device)
+                mask[valid_indices] = False
+                additional_indices = all_indices[mask][:additional_needed]
+                valid_indices = torch.cat([valid_indices, additional_indices])
+
+        # Ensure we don't exceed target_dim
+        valid_indices = valid_indices[:self.target_dim]
+
+        # If still not enough, pad with zeros (shouldn't happen with proper config)
+        if len(valid_indices) < self.target_dim:
+            padding_needed = self.target_dim - len(valid_indices)
+            padding_indices = torch.zeros(padding_needed, dtype=torch.long, device=features.device)
+            valid_indices = torch.cat([valid_indices, padding_indices])
+
+        # Select features using valid indices
+        compressed = features[..., valid_indices]
         return compressed
     
     def _apply_pca_compression(self, features: torch.Tensor) -> torch.Tensor:
