@@ -716,26 +716,51 @@ class BitMarTrainer:
         return analyzer
 
     def verify_device_consistency(self):
-        """Verify model and optimizer are on correct device"""
+        """Verify model and optimizer are on correct device with improved stability"""
         try:
             # Check model device
             model_device = next(self.model.parameters()).device
             if model_device != self.device:
                 logger.warning(f"Model moved from {self.device} to {model_device}. Moving back...")
                 self.model.to(self.device)
+                # Force model to stay on device
+                torch.cuda.synchronize() if torch.cuda.is_available() else None
 
-            # Check optimizer state device (if it has state)
+            # Check optimizer state device more robustly
             if hasattr(self.optimizer, 'state') and self.optimizer.state:
-                for state in self.optimizer.state.values():
+                optimizer_needs_recreation = False
+                for param_id, state in self.optimizer.state.items():
                     if isinstance(state, dict):
                         for key, value in state.items():
-                            if torch.is_tensor(value) and value.device != self.device:
-                                logger.warning(f"Optimizer state moved to {value.device}. Recreating optimizer...")
-                                # Recreate optimizer to fix device issues
-                                self.setup_optimizer()
-                                break
+                            if torch.is_tensor(value):
+                                if value.device.type != self.device.type:
+                                    logger.warning(f"Optimizer state moved to {value.device}. Recreating optimizer...")
+                                    optimizer_needs_recreation = True
+                                    break
+                    if optimizer_needs_recreation:
+                        break
+
+                if optimizer_needs_recreation:
+                    # Store current learning rate and step count
+                    current_lr = self.optimizer.param_groups[0]['lr']
+
+                    # Recreate optimizer with current state
+                    old_optimizer_type = self.config.get('optimizer', 'adamw').lower()
+                    self.setup_optimizer()
+
+                    # Restore learning rate if it was modified by scheduler
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] = current_lr
+
+                    logger.info(f"Optimizer recreated on {self.device} with LR={current_lr:.2e}")
+
         except Exception as e:
             logger.error(f"Device verification failed: {e}")
+            # Try to ensure model is on correct device as fallback
+            try:
+                self.model.to(self.device)
+            except Exception as fallback_e:
+                logger.error(f"Fallback device move also failed: {fallback_e}")
 
     def safe_gpu_operation(self, operation_name: str, operation_func):
         """Safely execute GPU operations with fallback handling"""
@@ -965,6 +990,12 @@ def main():
         help="Override max epochs from config"
     )
     parser.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="Override max epochs from config (alias for --max_epochs)"
+    )
+    parser.add_argument(
         "--batch_size",
         type=int,
         default=None,
@@ -1014,8 +1045,11 @@ def main():
     config = load_config(args.config)
 
     # Override config with command line arguments
+    # Handle both --max_epochs and --epochs
     if args.max_epochs:
         config['training']['max_epochs'] = args.max_epochs
+    elif args.epochs:
+        config['training']['max_epochs'] = args.epochs
     if args.batch_size:
         config['data']['batch_size'] = args.batch_size
     if args.wandb_project:
