@@ -1052,6 +1052,12 @@ class BitMarTrainer:
         """Main training loop"""
         logger.info("Starting BitMar training...")
 
+        # Setup directories first
+        self.setup_directories()
+
+        # Setup logging systems before model setup
+        self.setup_logging_systems()
+
         # Setup model and data
         self.setup_model_and_data(max_samples=max_samples)
 
