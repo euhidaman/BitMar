@@ -60,7 +60,7 @@ vision_feature_reduction:
 
 data:
   # Dataset configuration (GPU Optimized)
-  dataset_dir: "../babylm_dataset"
+  dataset_dir: "/workspace/babylm_dataset"  # Fixed path to correct dataset location
   text_encoder_name: "gpt2"
   max_seq_length: 128 # Increased from 16 for better GPU utilization
 
