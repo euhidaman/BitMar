@@ -35,7 +35,7 @@ model:
   memory_compression: true # Enable memory compression
 
   # Model configuration (Edge Optimized)
-  max_seq_len: 16 # Ultra-short sequences for edge
+  max_seq_len: 128 # Increased to match data config for better GPU utilization
   dropout: 0.25 # Higher dropout for tiny model regularization
 
 # Feature reduction configuration
@@ -60,7 +60,7 @@ vision_feature_reduction:
 
 data:
   # Dataset configuration (GPU Optimized)
-  dataset_dir: "/workspace/babylm_dataset"  # Fixed path to correct dataset location
+  dataset_dir: "../babylm_dataset"  # Correct relative path from BitMar directory
   text_encoder_name: "gpt2"
   max_seq_length: 128 # Increased from 16 for better GPU utilization
 
