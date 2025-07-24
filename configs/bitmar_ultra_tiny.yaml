@@ -35,7 +35,7 @@ model:
   memory_compression: true # Enable memory compression
 
   # Model configuration (Edge Optimized)
-  max_seq_len: 128 # Increased to match data config for better GPU utilization
+  max_seq_len: 256 # Increased to match data config and better utilize GPU
   dropout: 0.25 # Higher dropout for tiny model regularization
 
 # Feature reduction configuration
@@ -59,14 +59,14 @@ vision_feature_reduction:
       hidden_dim: 128
 
 data:
-  # Dataset configuration (GPU Optimized)
+  # Dataset configuration (High GPU Utilization)
   dataset_dir: "../babylm_dataset"  # Correct relative path from BitMar directory
   text_encoder_name: "gpt2"
-  max_seq_length: 128 # Increased from 16 for better GPU utilization
+  max_seq_length: 256 # Increased from 128 for better GPU utilization
 
-  # DataLoader settings (GPU Memory Optimized)
-  batch_size: 16 # Increased from 1 for much better GPU usage
-  num_workers: 4 # More workers for better data loading
+  # DataLoader settings (Optimized for RTX A6000)
+  batch_size: 64 # Increased from 16 for much better GPU usage (4x increase)
+  num_workers: 8 # More workers for better data loading pipeline
   pin_memory: true # Enable for faster GPU transfers
   persistent_workers: true # Keep workers alive for efficiency
 
