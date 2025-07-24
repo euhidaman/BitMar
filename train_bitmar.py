@@ -66,7 +66,13 @@ class BitMarTrainer:
 
         # Force CUDA device pinning if available
         if torch.cuda.is_available():
-            torch.cuda.set_device(self.device)
+            # Get the device index (0 if not specified)
+            device_index = self.device.index if self.device.index is not None else 0
+            torch.cuda.set_device(device_index)
+            # Update device to have explicit index
+            self.device = torch.device(f"cuda:{device_index}")
+            logger.info(f"Set CUDA device to: {self.device}")
+
             # Set memory management for stable GPU usage
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
