@@ -58,10 +58,21 @@ logger = logging.getLogger(__name__)
 class BitMarTrainer:
     """BitMar model trainer with episodic memory and attention analysis"""
 
-    def __init__(self, config_path: str, device: Optional[str] = None):
-        """Initialize trainer with configuration"""
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+    def __init__(self, config, device: Optional[str] = None):
+        """Initialize trainer with configuration
+
+        Args:
+            config: Either a string path to config file or a loaded config dictionary
+            device: Optional device specification
+        """
+        # Handle both config path (string) and loaded config (dict)
+        if isinstance(config, str):
+            with open(config, 'r') as f:
+                self.config = yaml.safe_load(f)
+        elif isinstance(config, dict):
+            self.config = config
+        else:
+            raise TypeError("config must be either a string path or a dictionary")
 
         # Set device - prioritize user specification, then config, then auto-detect
         if device:
