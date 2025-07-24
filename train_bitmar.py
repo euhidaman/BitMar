@@ -58,46 +58,33 @@ logger = logging.getLogger(__name__)
 class BitMarTrainer:
     """BitMar model trainer with episodic memory and attention analysis"""
 
-    def __init__(self, config: Dict):
-        self.config = config
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"Using device: {self.device}")
+    def __init__(self, config_path: str, device: Optional[str] = None):
+        """Initialize trainer with configuration"""
+        with open(config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
 
-        # Force CUDA device pinning if available
-        if torch.cuda.is_available():
-            # Get the device index (0 if not specified)
-            device_index = self.device.index if self.device.index is not None else 0
-            torch.cuda.set_device(device_index)
-            # Update device to have explicit index
-            self.device = torch.device(f"cuda:{device_index}")
-            logger.info(f"Set CUDA device to: {self.device}")
+        # Set device - prioritize user specification, then config, then auto-detect
+        if device:
+            self.device = torch.device(device)
+        elif self.config.get('training', {}).get('device'):
+            self.device = torch.device(self.config['training']['device'])
+        else:
+            # Force CUDA device index specification when available
+            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-            # Set memory management for stable GPU usage
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
+        # Ensure CUDA is initialized if available
+        if self.device.type == 'cuda':
+            torch.cuda.init()
+            logger.info(f"Using CUDA device: {torch.cuda.get_device_name(self.device)}")
+            # Set default tensor type to cuda for global operations
+            torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        else:
+            logger.warning("CUDA not available, using CPU. Training will be slow.")
 
-        # Setup directories
-        self.setup_directories()
-
-        # Initialize enhanced wandb logger and attention analyzer
-        self.wandb_logger = None
-        self.attention_analyzer = None
-        self.attention_evolution_tracker = None
-        self.setup_logging_systems()
-
-        # Create model and data
-        self.model = None
-        self.data_module = None
-        self.optimizer = None
-        self.scheduler = None
-
-        # Training state
-        self.current_epoch = 0
+        # Initialize tracking variables
         self.global_step = 0
+        self.current_epoch = 0
         self.best_val_loss = float('inf')
-
-        # Device consistency tracking
         self._last_model_device = None
         self._device_warnings_count = 0
 
