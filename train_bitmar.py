@@ -266,8 +266,8 @@ class BitMarTrainer:
 
         for batch_idx, batch in enumerate(progress_bar):
             try:
-                # Verify device consistency every 50 steps to catch issues early
-                if self.global_step % 50 == 0:
+                # Verify device consistency less frequently to reduce overhead and prevent issues
+                if self.global_step % 200 == 0:  # Changed from 50 to 200 steps
                     self.verify_device_consistency()
 
                 # Move batch to device with safety check
@@ -723,70 +723,99 @@ class BitMarTrainer:
             if model_device != self.device:
                 logger.warning(f"Model moved from {self.device} to {model_device}. Moving back...")
                 self.model.to(self.device)
-                # Force model to stay on device
-                torch.cuda.synchronize() if torch.cuda.is_available() else None
+                # Force model to stay on device with stronger pinning
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                    # Force all model parameters to stay on the target device
+                    for param in self.model.parameters():
+                        if param.device != self.device:
+                            param.data = param.data.to(self.device)
+                    for buffer in self.model.buffers():
+                        if buffer.device != self.device:
+                            buffer.data = buffer.data.to(self.device)
 
-            # Check optimizer state device more robustly
+            # More conservative optimizer state checking - only recreate if absolutely necessary
             if hasattr(self.optimizer, 'state') and self.optimizer.state:
-                optimizer_needs_recreation = False
+                # Count how many states are on wrong device
+                wrong_device_count = 0
+                total_states = 0
+
                 for param_id, state in self.optimizer.state.items():
                     if isinstance(state, dict):
                         for key, value in state.items():
                             if torch.is_tensor(value):
+                                total_states += 1
                                 if value.device.type != self.device.type:
-                                    logger.warning(f"Optimizer state moved to {value.device}. Recreating optimizer...")
-                                    optimizer_needs_recreation = True
-                                    break
-                    if optimizer_needs_recreation:
-                        break
+                                    wrong_device_count += 1
 
-                if optimizer_needs_recreation:
-                    # Store current learning rate and step count
-                    current_lr = self.optimizer.param_groups[0]['lr']
-
-                    # Recreate optimizer with current state
-                    old_optimizer_type = self.config.get('optimizer', 'adamw').lower()
-                    self.setup_optimizer()
-
-                    # Restore learning rate if it was modified by scheduler
-                    for param_group in self.optimizer.param_groups:
-                        param_group['lr'] = current_lr
-
-                    logger.info(f"Optimizer recreated on {self.device} with LR={current_lr:.2e}")
+                # Only recreate if significant portion of states are on wrong device
+                wrong_device_ratio = wrong_device_count / max(total_states, 1)
+                if wrong_device_ratio > 0.5 and wrong_device_count > 0:  # More than 50% of states on wrong device
+                    logger.warning(f"Optimizer state moved to wrong device ({wrong_device_count}/{total_states} tensors). Recreating optimizer...")
+                    self._recreate_optimizer_with_state_preservation()
 
         except Exception as e:
             logger.error(f"Device verification failed: {e}")
-            # Try to ensure model is on correct device as fallback
+            # Minimal fallback - just ensure model is on correct device
             try:
                 self.model.to(self.device)
             except Exception as fallback_e:
                 logger.error(f"Fallback device move also failed: {fallback_e}")
 
-    def safe_gpu_operation(self, operation_name: str, operation_func):
-        """Safely execute GPU operations with fallback handling"""
+    def _recreate_optimizer_with_state_preservation(self):
+        """Recreate optimizer while preserving as much state as possible"""
         try:
-            return operation_func()
-        except RuntimeError as e:
-            if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
-                logger.error(f"GPU error in {operation_name}: {e}")
-                logger.info("Attempting GPU memory cleanup...")
+            # Store current learning rate and other important state
+            current_lr = self.optimizer.param_groups[0]['lr']
+            current_step_count = getattr(self.optimizer, '_step_count', 0) if hasattr(self.optimizer, '_step_count') else 0
 
-                # Aggressive memory cleanup
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
+            # Store momentum and other state if available (for Adam/AdamW)
+            preserved_state = {}
+            if hasattr(self.optimizer, 'state') and self.optimizer.state:
+                for param_id, state in self.optimizer.state.items():
+                    if isinstance(state, dict):
+                        # Try to preserve momentum terms on correct device
+                        preserved_entry = {}
+                        for key, value in state.items():
+                            if torch.is_tensor(value):
+                                try:
+                                    preserved_entry[key] = value.to(self.device).clone()
+                                except:
+                                    # Skip if can't move to device
+                                    pass
+                            else:
+                                preserved_entry[key] = value
+                        if preserved_entry:
+                            preserved_state[param_id] = preserved_entry
 
-                # Verify device consistency
-                self.verify_device_consistency()
+            # Recreate optimizer
+            old_optimizer_type = self.config.get('optimizer', 'adamw').lower()
+            self.setup_optimizer()
 
-                # Retry once
+            # Restore learning rate
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = current_lr
+
+            # Try to restore preserved state
+            if preserved_state and hasattr(self.optimizer, 'state'):
                 try:
-                    return operation_func()
-                except Exception as retry_e:
-                    logger.error(f"Retry failed for {operation_name}: {retry_e}")
-                    raise retry_e
-            else:
-                raise e
+                    # Only restore if the parameter structure matches
+                    param_ids = list(self.optimizer.state_dict()['param_groups'][0]['params']);
+                    for i, param_id in enumerate(param_ids):
+                        if i < len(preserved_state):
+                            old_param_id = list(preserved_state.keys())[i]
+                            if old_param_id in preserved_state:
+                                # Restore the state for this parameter
+                                self.optimizer.state[param_id] = preserved_state[old_param_id]
+                except Exception as restore_e:
+                    logger.warning(f"Could not restore optimizer state: {restore_e}")
+
+            logger.info(f"Optimizer recreated on {self.device} with LR={current_lr:.2e}")
+
+        except Exception as e:
+            logger.error(f"Optimizer recreation failed: {e}")
+            # Fallback to basic setup
+            self.setup_optimizer()
 
     def train(self, max_samples: Optional[int] = None):
         """Main training loop"""
