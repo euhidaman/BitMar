@@ -87,8 +87,8 @@ class BitMarTrainer:
         if self.device.type == 'cuda':
             torch.cuda.init()
             logger.info(f"Using CUDA device: {torch.cuda.get_device_name(self.device)}")
-            # Set default tensor type to cuda for global operations
-            torch.set_default_tensor_type('torch.cuda.FloatTensor')
+            # Don't set default tensor type to avoid DataLoader issues
+            logger.info("CUDA initialized, model will be moved to GPU explicitly")
         else:
             logger.warning("CUDA not available, using CPU. Training will be slow.")
 
