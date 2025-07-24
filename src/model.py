@@ -420,12 +420,30 @@ class EpisodicMemory(nn.Module):
 
         if self.direct_writing:
             # Direct writing: find least recently used slots
-            _, lru_indices = self.memory_age.topk(batch_size, largest=False)
+            # Ensure we don't request more indices than available memory slots
+            k = min(batch_size, self.memory_size)
+            _, lru_indices = self.memory_age.topk(k, largest=False)
 
-            # Update memory slots
-            self.memory[lru_indices] = episode.detach()
-            self.memory_age[lru_indices] = self.memory_age.max() + 1
-            self.memory_usage[lru_indices] += 1
+            # If batch_size > memory_size, we need to handle multiple batches
+            if batch_size > self.memory_size:
+                # Process in chunks of memory_size
+                for i in range(0, batch_size, self.memory_size):
+                    end_idx = min(i + self.memory_size, batch_size)
+                    chunk_size = end_idx - i
+
+                    # Get LRU indices for this chunk
+                    _, chunk_lru_indices = self.memory_age.topk(chunk_size, largest=False)
+
+                    # Update memory slots
+                    self.memory[chunk_lru_indices] = episode[i:end_idx].detach()
+                    self.memory_age[chunk_lru_indices] = self.memory_age.max() + 1 + i
+                    self.memory_usage[chunk_lru_indices] += 1
+            else:
+                # Normal case: batch_size <= memory_size
+                # Update memory slots
+                self.memory[lru_indices] = episode[:k].detach()
+                self.memory_age[lru_indices] = self.memory_age.max() + 1
+                self.memory_usage[lru_indices] += 1
 
         return episode
 
