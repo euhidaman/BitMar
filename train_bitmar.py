@@ -715,6 +715,32 @@ class BitMarTrainer:
         logger.info("Attention analysis completed")
         return analyzer
 
+    def safe_gpu_operation(self, operation_name: str, operation_func):
+        """Safely execute GPU operations with fallback handling"""
+        try:
+            return operation_func()
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
+                logger.error(f"GPU error in {operation_name}: {e}")
+                logger.info("Attempting GPU memory cleanup...")
+
+                # Aggressive memory cleanup
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
+                # Verify device consistency
+                self.verify_device_consistency()
+
+                # Retry once
+                try:
+                    return operation_func()
+                except Exception as retry_e:
+                    logger.error(f"Retry failed for {operation_name}: {retry_e}")
+                    raise retry_e
+            else:
+                raise e
+
     def verify_device_consistency(self):
         """Verify model and optimizer are on correct device with improved stability"""
         try:
