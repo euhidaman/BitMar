@@ -412,7 +412,7 @@ class BitMarTrainer:
                 # Enhanced logging with wandb logger - fix step counting
                 log_every_n_steps = self.config.get(
                     'wandb', {}).get('log_every_n_steps', 50)
-                if self.wandb_logger and log_every_n_steps > 0 and batch_idx % log_every_n_steps == 0:
+                if self.wandb_logger and log_every_n_steps > 0 and batch_idx % log_every_n_steps == 0 and self.global_step > 0:
                     try:
                         # Log all metrics in a single consolidated call
                         log_quantization = self.global_step % (
@@ -426,7 +426,7 @@ class BitMarTrainer:
                         self.wandb_logger.log_consolidated_metrics(
                             outputs=log_outputs,
                             epoch=epoch,
-                            step=self.global_step,
+                            step=self.global_step,  # Now guaranteed to be > 0
                             lr=self.optimizer.param_groups[0]['lr'],
                             model=self.model,
                             memory_module=memory_module,

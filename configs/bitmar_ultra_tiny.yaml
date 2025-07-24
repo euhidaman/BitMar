@@ -59,16 +59,16 @@ vision_feature_reduction:
       hidden_dim: 128
 
 data:
-  # Dataset configuration (Edge)
+  # Dataset configuration (GPU Optimized)
   dataset_dir: "../babylm_dataset"
   text_encoder_name: "gpt2"
-  max_seq_length: 16 # Ultra-short for edge efficiency
+  max_seq_length: 128 # Increased from 16 for better GPU utilization
 
-  # DataLoader settings (Edge Memory Optimized)
-  batch_size: 1 # Single sample processing
-  num_workers: 1 # Minimal workers
-  pin_memory: false # Disable for memory conservation
-  persistent_workers: false
+  # DataLoader settings (GPU Memory Optimized)
+  batch_size: 16 # Increased from 1 for much better GPU usage
+  num_workers: 4 # More workers for better data loading
+  pin_memory: true # Enable for faster GPU transfers
+  persistent_workers: true # Keep workers alive for efficiency
 
   # Validation (minimal)
   validation_datasets:
