@@ -153,7 +153,25 @@ class BitMarTrainer:
 
         # Create model
         self.model = create_bitmar_model(self.config['model'])
+
+        # Force model to GPU with verification
         self.model.to(self.device)
+        logger.info(f"Model moved to device: {self.device}")
+
+        # Verify model is actually on GPU
+        model_device = next(self.model.parameters()).device
+        logger.info(f"Model parameters are on device: {model_device}")
+
+        # Force all model components to GPU
+        for name, param in self.model.named_parameters():
+            if param.device != self.device:
+                logger.warning(f"Parameter {name} on wrong device {param.device}, moving to {self.device}")
+                param.data = param.data.to(self.device)
+
+        # Check GPU memory usage after model loading
+        if torch.cuda.is_available():
+            memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
+            logger.info(f"GPU memory allocated after model loading: {memory_allocated:.2f} GB")
 
         # Log model info
         param_count = count_parameters(self.model)
@@ -385,6 +403,13 @@ class BitMarTrainer:
                     'loss': f"{loss.item():.4f}",
                     'avg_loss': f"{np.mean(epoch_losses):.4f}"
                 })
+
+                # Log GPU memory usage every 100 steps
+                if self.global_step % 100 == 0 and torch.cuda.is_available():
+                    memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
+                    memory_reserved = torch.cuda.memory_reserved(self.device) / 1024**3  # GB
+                    gpu_util = torch.cuda.utilization(self.device) if hasattr(torch.cuda, 'utilization') else -1
+                    logger.info(f"Step {self.global_step}: GPU Memory - Allocated: {memory_allocated:.2f}GB, Reserved: {memory_reserved:.2f}GB")
 
                 # Enhanced logging with wandb logger - fix step counting
                 log_every_n_steps = self.config.get(
