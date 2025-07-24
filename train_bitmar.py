@@ -508,6 +508,10 @@ class BitMarTrainer:
                     f"Training batch {batch_idx} failed at step {self.global_step}: {e}")
                 logger.error(f"Skipping batch and continuing training...")
 
+                # Add detailed traceback for debugging
+                import traceback
+                logger.error(f"Full traceback: {traceback.format_exc()}")
+
                 # Clear GPU cache after error
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
