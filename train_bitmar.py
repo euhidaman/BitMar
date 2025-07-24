@@ -175,8 +175,10 @@ class BitMarTrainer:
 
     def setup_optimizer(self):
         """Setup optimizer and learning rate scheduler"""
-        # Use AdamW8bit if bitsandbytes is available, otherwise fallback to regular AdamW
-        if BITSANDBYTES_AVAILABLE:
+        optimizer_type = self.config.get('optimizer', 'adamw').lower()
+
+        # Use AdamW8bit if bitsandbytes is available and requested
+        if BITSANDBYTES_AVAILABLE and optimizer_type == 'adamw8bit':
             self.optimizer = bnb.optim.AdamW8bit(
                 self.model.parameters(),
                 lr=self.config['training']['learning_rate'],
@@ -185,7 +187,7 @@ class BitMarTrainer:
                 eps=1e-8
             )
             logger.info(f"Using AdamW8bit optimizer for memory efficiency")
-        else:
+        elif optimizer_type == 'adamw':
             self.optimizer = AdamW(
                 self.model.parameters(),
                 lr=self.config['training']['learning_rate'],
@@ -193,8 +195,34 @@ class BitMarTrainer:
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
-            logger.info(
-                f"Using regular AdamW optimizer (bitsandbytes not available)")
+            logger.info(f"Using AdamW optimizer")
+        elif optimizer_type == 'adam':
+            self.optimizer = torch.optim.Adam(
+                self.model.parameters(),
+                lr=self.config['training']['learning_rate'],
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
+            logger.info(f"Using Adam optimizer")
+        elif optimizer_type == 'sgd':
+            self.optimizer = torch.optim.SGD(
+                self.model.parameters(),
+                lr=self.config['training']['learning_rate'],
+                momentum=0.9,
+                weight_decay=self.config['training']['weight_decay']
+            )
+            logger.info(f"Using SGD optimizer")
+        elif optimizer_type == 'rmsprop':
+            self.optimizer = torch.optim.RMSprop(
+                self.model.parameters(),
+                lr=self.config['training']['learning_rate'],
+                alpha=0.99,
+                eps=1e-8,
+                weight_decay=self.config['training']['weight_decay']
+            )
+            logger.info(f"Using RMSprop optimizer")
+        else:
+            raise ValueError(f"Unsupported optimizer: {optimizer_type}")
 
         # Learning rate scheduler with proper step-based scheduling
         if self.config['training']['scheduler'] == 'cosine':
@@ -217,7 +245,7 @@ class BitMarTrainer:
             self.scheduler_step_mode = 'epoch'
 
         logger.info(
-            f"Optimizer: {'AdamW8bit' if BITSANDBYTES_AVAILABLE else 'AdamW'} with LR={self.config['training']['learning_rate']}")
+            f"Optimizer: {optimizer_type.upper()} with LR={self.config['training']['learning_rate']}")
         if self.scheduler:
             logger.info(
                 f"Scheduler: {self.config['training']['scheduler']} ({'step-based' if self.scheduler_step_mode == 'step' else 'epoch-based'})")
@@ -912,6 +940,13 @@ def main():
         default=1,
         help="Generate attention visualizations every N epochs"
     )
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default="adamw",
+        choices=["adamw", "adamw8bit", "adam", "sgd", "rmsprop"],
+        help="Optimizer to use for training"
+    )
 
     args = parser.parse_args()
 
@@ -929,6 +964,7 @@ def main():
     # Add attention tracking config
     config['track_attention_every_n_steps'] = args.track_attention_every_n_steps
     config['save_attention_every_n_epochs'] = args.save_attention_every_n_epochs
+    config['optimizer'] = args.optimizer
 
     # Create trainer
     trainer = BitMarTrainer(config)
