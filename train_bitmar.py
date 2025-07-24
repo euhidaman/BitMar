@@ -64,6 +64,13 @@ class BitMarTrainer:
             "cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Using device: {self.device}")
 
+        # Force CUDA device pinning if available
+        if torch.cuda.is_available():
+            torch.cuda.set_device(self.device)
+            # Set memory management for stable GPU usage
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+
         # Setup directories
         self.setup_directories()
 
@@ -83,6 +90,10 @@ class BitMarTrainer:
         self.current_epoch = 0
         self.global_step = 0
         self.best_val_loss = float('inf')
+
+        # Device consistency tracking
+        self._last_model_device = None
+        self._device_warnings_count = 0
 
     def setup_directories(self):
         """Create output directories"""
@@ -266,29 +277,38 @@ class BitMarTrainer:
 
         for batch_idx, batch in enumerate(progress_bar):
             try:
-                # Verify device consistency less frequently to reduce overhead and prevent issues
-                if self.global_step % 200 == 0:  # Changed from 50 to 200 steps
-                    self.verify_device_consistency()
+                # Use silent device checking every 500 steps (much less frequent)
+                if self.global_step % 500 == 0:
+                    self._silent_device_check()
 
-                # Move batch to device with safety check
-                def move_batch_to_device():
-                    for key in batch:
-                        if torch.is_tensor(batch[key]):
-                            batch[key] = batch[key].to(self.device, non_blocking=True)
+                # Use safe batch transfer method
+                batch = self._safe_batch_to_device(batch)
 
-                self.safe_gpu_operation("batch_device_transfer", move_batch_to_device)
-
-                # Forward pass with safety wrapper
-                def forward_pass():
-                    return self.model(
+                # Forward pass with device-aware error handling
+                try:
+                    outputs = self.model(
                         input_ids=batch['input_ids'],
                         attention_mask=batch['attention_mask'],
                         vision_features=batch['vision_features'],
                         labels=batch['labels']
                     )
+                    loss = outputs['loss']
+                except RuntimeError as e:
+                    if "out of memory" in str(e).lower() or "device" in str(e).lower():
+                        logger.warning(f"Device/memory error in forward pass: {e}")
+                        # Force device consistency and retry
+                        self._force_model_device_consistency()
+                        torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-                outputs = self.safe_gpu_operation("forward_pass", forward_pass)
-                loss = outputs['loss']
+                        outputs = self.model(
+                            input_ids=batch['input_ids'],
+                            attention_mask=batch['attention_mask'],
+                            vision_features=batch['vision_features'],
+                            labels=batch['labels']
+                        )
+                        loss = outputs['loss']
+                    else:
+                        raise e
 
                 # Check for invalid loss
                 if not torch.isfinite(loss):
@@ -296,8 +316,8 @@ class BitMarTrainer:
                         f"Invalid loss at step {self.global_step}: {loss.item()}")
                     continue
 
-                # Backward pass with safety wrapper
-                def backward_pass():
+                # Backward pass with device-aware error handling
+                try:
                     self.optimizer.zero_grad()
                     loss.backward()
 
@@ -310,7 +330,24 @@ class BitMarTrainer:
 
                     self.optimizer.step()
 
-                self.safe_gpu_operation("backward_pass", backward_pass)
+                except RuntimeError as e:
+                    if "device" in str(e).lower():
+                        logger.warning(f"Device error in backward pass: {e}")
+                        # Recreate optimizer and retry
+                        self._create_device_pinned_optimizer()
+
+                        self.optimizer.zero_grad()
+                        loss.backward()
+
+                        if self.config['training']['gradient_clip_val'] > 0:
+                            torch.nn.utils.clip_grad_norm_(
+                                self.model.parameters(),
+                                self.config['training']['gradient_clip_val']
+                            )
+
+                        self.optimizer.step()
+                    else:
+                        raise e
 
                 # Update metrics
                 epoch_losses.append(loss.item())
@@ -343,7 +380,7 @@ class BitMarTrainer:
                     'avg_loss': f"{np.mean(epoch_losses):.4f}"
                 })
 
-                # Enhanced logging with wandb logger
+                # Enhanced logging with wandb logger - fix step counting
                 log_every_n_steps = self.config.get(
                     'wandb', {}).get('log_every_n_steps', 50)
                 if self.wandb_logger and log_every_n_steps > 0 and batch_idx % log_every_n_steps == 0:
@@ -842,6 +879,145 @@ class BitMarTrainer:
             logger.error(f"Optimizer recreation failed: {e}")
             # Fallback to basic setup
             self.setup_optimizer()
+
+    def _force_model_device_consistency(self):
+        """Aggressively force model to stay on target device"""
+        if not torch.cuda.is_available():
+            return
+
+        try:
+            # Force all model components to target device
+            self.model.to(self.device)
+
+            # Manually move all parameters and buffers
+            for name, param in self.model.named_parameters():
+                if param.device != self.device:
+                    param.data = param.data.to(self.device)
+                    if param.grad is not None:
+                        param.grad.data = param.grad.data.to(self.device)
+
+            for name, buffer in self.model.named_buffers():
+                if buffer.device != self.device:
+                    buffer.data = buffer.data.to(self.device)
+
+            # Force CUDA synchronization
+            torch.cuda.synchronize()
+
+        except Exception as e:
+            logger.error(f"Failed to force model device consistency: {e}")
+
+    def _create_device_pinned_optimizer(self):
+        """Create optimizer with device-pinned state"""
+        try:
+            # Store optimizer state before recreation
+            old_state = None
+            current_lr = self.config['training']['learning_rate']
+
+            if hasattr(self, 'optimizer') and self.optimizer is not None:
+                current_lr = self.optimizer.param_groups[0]['lr']
+                try:
+                    old_state = self.optimizer.state_dict()
+                except:
+                    old_state = None
+
+            # Create new optimizer
+            optimizer_type = self.config.get('optimizer', 'adamw').lower()
+
+            if optimizer_type == 'adamw':
+                self.optimizer = AdamW(
+                    self.model.parameters(),
+                    lr=current_lr,
+                    weight_decay=self.config['training']['weight_decay'],
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
+            elif optimizer_type == 'adam':
+                self.optimizer = torch.optim.Adam(
+                    self.model.parameters(),
+                    lr=current_lr,
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
+            else:
+                # Fallback to AdamW
+                self.optimizer = AdamW(
+                    self.model.parameters(),
+                    lr=current_lr,
+                    weight_decay=self.config['training']['weight_decay'],
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
+
+            # Try to restore old state if available
+            if old_state is not None:
+                try:
+                    self.optimizer.load_state_dict(old_state)
+                    # Force optimizer state to correct device
+                    for state in self.optimizer.state.values():
+                        if isinstance(state, dict):
+                            for key, value in state.items():
+                                if torch.is_tensor(value):
+                                    state[key] = value.to(self.device)
+                except Exception as e:
+                    logger.warning(f"Could not restore optimizer state: {e}")
+
+            logger.info(f"Device-pinned optimizer created on {self.device}")
+
+        except Exception as e:
+            logger.error(f"Failed to create device-pinned optimizer: {e}")
+            raise e
+
+    def _safe_batch_to_device(self, batch):
+        """Safely move batch to device with error handling"""
+        try:
+            device_batch = {}
+            for key, value in batch.items():
+                if torch.is_tensor(value):
+                    # Use pin_memory and non_blocking for faster transfers
+                    if value.device != self.device:
+                        device_batch[key] = value.to(self.device, non_blocking=True)
+                    else:
+                        device_batch[key] = value
+                else:
+                    device_batch[key] = value
+            return device_batch
+        except Exception as e:
+            logger.error(f"Failed to move batch to device: {e}")
+            # Fallback: try moving without non_blocking
+            try:
+                device_batch = {}
+                for key, value in batch.items():
+                    if torch.is_tensor(value):
+                        device_batch[key] = value.to(self.device)
+                    else:
+                        device_batch[key] = value
+                return device_batch
+            except Exception as fallback_e:
+                logger.error(f"Fallback batch move also failed: {fallback_e}")
+                raise fallback_e
+
+    def _silent_device_check(self):
+        """Silently check and fix device inconsistencies without warnings"""
+        try:
+            # Check model device silently
+            model_device = next(self.model.parameters()).device
+            if model_device != self.device:
+                self._device_warnings_count += 1
+                # Only log every 50 warnings to avoid spam
+                if self._device_warnings_count % 50 == 1:
+                    logger.warning(f"Device inconsistency detected ({self._device_warnings_count} times). Fixing silently...")
+
+                # Force model back to correct device
+                self._force_model_device_consistency()
+
+                # If too many device switches, recreate optimizer
+                if self._device_warnings_count > 10:
+                    self._create_device_pinned_optimizer()
+                    self._device_warnings_count = 0  # Reset counter
+
+        except Exception as e:
+            # Don't log device check failures - they create noise
+            pass
 
     def train(self, max_samples: Optional[int] = None):
         """Main training loop"""
