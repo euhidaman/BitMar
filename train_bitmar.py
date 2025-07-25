@@ -1552,18 +1552,20 @@ if __name__ == "__main__":
         if args.optimizer:
             trainer.config['training']['optimizer'] = args.optimizer
 
-        # Set tracking parameters
+        # Override wandb project name if provided
+        if args.wandb_project:
+            trainer.config['wandb']['project'] = args.wandb_project
+
+        # Set tracking parameters as instance variables
         trainer.track_attention_every_n_steps = args.track_attention_every_n_steps
         trainer.save_attention_every_n_epochs = args.save_attention_every_n_epochs
 
-        # Initialize wandb logger
-        trainer.setup_wandb_logger(args.wandb_project)
-
-        # Start training
+        # Start training (wandb setup happens inside train() method)
         logger.info("Starting BitMar training...")
         logger.info(f"Configuration: {args.config}")
         logger.info(f"Device: {trainer.device}")
         logger.info(f"Max epochs: {trainer.config['training']['max_epochs']}")
+        logger.info(f"Wandb project: {trainer.config['wandb']['project']}")
 
         trainer.train()
 
