@@ -695,7 +695,7 @@ class BitMarTrainer:
                 self.global_step += 1
 
                 # Step learning rate scheduler if step-based
-                if self scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
+                if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
                     self.scheduler.step()
 
                 # Memory cleanup every 100 steps to prevent OOM
