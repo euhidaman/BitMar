@@ -918,8 +918,7 @@ class BitMarModel(nn.Module):
         # Prepare decoder input
         memory_context = self.memory_to_decoder(retrieved_memory)
         memory_context_expanded = memory_context.unsqueeze(1).expand(-1, seq_len, -1)
-        step: int = 0,
-        adaptive_controller=None  # NEW: Adaptive training controller
+        fused_with_memory = fused_features + memory_context_expanded
         decoder_input = self.decoder_input_proj(fused_with_memory)
 
         # Generate text using BitNet decoder
@@ -931,11 +930,6 @@ class BitMarModel(nn.Module):
 
         # Compute losses if in training mode
         if mode == "train" and labels is not None:
-        # Get adaptive multiplier from controller if available
-        adaptive_multiplier = 1.0
-        if adaptive_controller is not None:
-            adaptive_multiplier = adaptive_controller.get_loss_weight_multiplier()
-
             # Primary decoder loss
             decoder_loss = decoder_outputs['loss']
 
@@ -956,7 +950,7 @@ class BitMarModel(nn.Module):
                 memory_loss = self.compute_memory_consistency_loss(episode, retrieved_memory)
 
             # Compute balanced loss with adaptive controller support
-        scheduled_cross_modal_weight = adaptive_cross_modal_weight * cross_modal_schedule * adaptive_multiplier
+            loss_dict = self.compute_balanced_loss(
                 decoder_loss, cross_modal_loss, vision_loss, memory_loss, step, adaptive_controller
             )
 
@@ -972,12 +966,21 @@ class BitMarModel(nn.Module):
             'vision_latent': vision_latent,
             'fused_features': fused_features,
             'episode': episode,
-            'adaptive_weight': adaptive_cross_modal_weight if self.adaptive_loss_scaling else torch.tensor(0.0),
-            'adaptive_multiplier': adaptive_multiplier
+            'retrieved_memory': retrieved_memory,
             'cross_attention': cross_attention,
             'memory_attention': memory_attention,
             'text_attention': text_attention,
             'decoder_attention': decoder_outputs.get('attention_patterns', None),
+            'memory_usage': self.memory.memory_usage.clone(),
+        }
+
+        # Add loss breakdown and freezing status
+        if mode == "train":
+            result.update(loss_dict)
+            result.update(freezing_status)
+
+        return result
+
     def apply_adaptive_encoder_freezing(self, adaptive_controller):
         """
         Apply encoder freezing based on adaptive controller decisions
@@ -999,16 +1002,6 @@ class BitMarModel(nn.Module):
             'text_encoder_frozen': freeze_states['freeze_text_encoder'],
             'vision_encoder_frozen': freeze_states['freeze_vision_encoder']
         }
-
-            'memory_usage': self.memory.memory_usage.clone(),
-        }
-
-        # Add loss breakdown and freezing status
-        if mode == "train":
-            result.update(loss_dict)
-            result.update(freezing_status)
-
-        return result
 
     def generate(
         self,
