@@ -1,6 +1,6 @@
-# BitMar Adaptive Training Configuration
-# Dynamic multimodal similarity monitoring and adaptive interventions
-# Prevents sudden drops in cross-modal alignment through intelligent freezing and loss rebalancing
+# BitMar Ultra-Tiny Edge Configuration with Adaptive Training
+# Optimized for ARM Cortex-M7 and similar edge devices with <1MB RAM
+# Includes aggressive DiNOv2 feature compression + Dynamic similarity monitoring
 
 model:
   # BitNet Text Encoder (Ultra-Minimal)
@@ -33,140 +33,151 @@ model:
   memory_alpha: 0.3 # Higher adaptation for fewer slots
   direct_writing: true
   memory_compression: true # Enable memory compression
-  memory_head_dim: 16 # Ultra-small memory heads
 
   # Model configuration (Edge Optimized)
   max_seq_len: 256 # Increased to match data config and better utilize GPU
   dropout: 0.25 # Higher dropout for tiny model regularization
-  layer_norm_eps: 1e-5
-
-  # Cross-modal attention settings (minimal for ultra-tiny)
-  enable_cross_modal_attention: true
-  cross_modal_layers: [1]  # Only one layer for ultra-tiny
-  cross_modal_heads: 1     # Single head for ultra-tiny
 
   # ADAPTIVE TRAINING - Dynamic similarity monitoring
   enable_adaptive_training: true
   adaptive_similarity_monitoring: true
 
-  # Dynamic thresholds (not hardcoded!)
-  base_similarity_threshold: 0.65    # Starting threshold
-  similarity_adaptation_rate: 0.02   # How fast threshold adapts
-  min_similarity_threshold: 0.45     # Lower bound
-  max_similarity_threshold: 0.85     # Upper bound
+# Feature reduction configuration
+vision_feature_reduction:
+  enabled: true
+  method: "top_k_selection" # Select most important 32 dims from 768
+  target_dim: 32 # Compress 768D -> 32D (24x reduction)
+  spatial_pooling: true # 14x14 -> 7x7 patches (4x reduction)
+  pool_method: "average" # Average pooling
 
-training:
-  # Core training parameters
-  batch_size: 8
-  learning_rate: 3e-4
-  weight_decay: 0.01
-  max_epochs: 10
-  gradient_clip_val: 1.0
-  warmup_steps: 1000
-
-  # Optimizer configuration
-  optimizer: "adamw"
-  scheduler: "cosine"
-  min_lr: 1e-6
-  beta1: 0.9
-  beta2: 0.999
-  eps: 1e-8
-
-  # Training efficiency
-  device: "cuda"
-  mixed_precision: true
-  gradient_checkpointing: true
-  compile_model: false
-
-  # Gradient accumulation for larger effective batch size
-  gradient_accumulation_steps: 2
-  effective_batch_size: 16  # batch_size * gradient_accumulation_steps
+  # Alternative methods (for experimentation)
+  alternative_methods:
+    linear_projection:
+      target_dim: 32
+      learnable: false
+    pca_reduction:
+      target_dim: 32
+      explained_variance: 0.95
+    learned_compression:
+      target_dim: 32
+      hidden_dim: 128
 
 data:
-  # Dataset paths
-  dataset_path: "D:/BabyLM/babylm_dataset"
+  # Dataset configuration (High GPU Utilization)
+  dataset_dir: "../babylm_dataset"  # Correct relative path from BitMar directory
+  text_encoder_name: "gpt2"
+  max_seq_length: 256 # Increased from 128 for better GPU utilization
 
-  # Text data
-  text_files:
-    - "train_50M/babylm_100M.train"
-    - "train_50M/babylm_dev"
+  # DataLoader settings (Optimized for RTX A6000)
+  batch_size: 64 # Increased from 16 for much better GPU usage (4x increase)
+  num_workers: 8 # More workers for better data loading pipeline
+  pin_memory: true # Enable for faster GPU transfers
+  persistent_workers: true # Keep workers alive for efficiency
 
-  # Vision features (DINOv2 embeddings)
-  vision_files:
-    - "cc_3M_dino_v2_states_1of2.npy"
-    - "cc_3M_dino_v2_states_2of2.npy"
-    - "local_narr_dino_v2_states.npy"
+  # Validation (minimal)
+  validation_datasets:
+    - "glue/sst2" # Single lightweight dataset
 
-  # Captions for multimodal alignment
-  caption_files:
-    - "cc_3M_captions.json"
-    - "local_narr_captions.json"
-
-  # Data processing
-  max_length: 512
-  batch_size: 8
-  num_workers: 4
-  pin_memory: true
-  persistent_workers: true
-
-  # Data splits
-  val_split: 0.1
-  test_split: 0.05
-
-  # Data augmentation
-  text_augmentation: true
-  vision_augmentation: false  # DINOv2 features are pre-computed
-
-output:
-  # Output directories
-  checkpoint_dir: "./checkpoints"
-  log_dir: "./logs"
-  attention_dir: "./attention_analysis"
-  memory_dir: "./memory_analysis"
-  results_dir: "./results"
-  adaptive_logs_dir: "./logs/adaptive_training"
-
-  # Saving configuration
-  save_every_n_epochs: 1
-  save_top_k: 5
-  save_best_similarity: true  # Save checkpoint when similarity improves
-
-  # Cleanup old checkpoints
-  cleanup_old_checkpoints: true
-  keep_last_n_checkpoints: 10
-
-wandb:
-  # Weights & Biases logging
-  project: "bitmar-adaptive-dynamic"
-  entity: null
-  run_name: null  # Auto-generated
-  tags: ["adaptive", "multimodal", "dynamic"]
-
-  # Logging frequency
-  log_every_n_steps: 25        # Frequent logging for similarity monitoring
-  log_gradients: false
-  log_parameters: false
-  watch_model: false
-
-  # Advanced logging
-  log_attention_weights: true
-  log_memory_usage: true
-  log_adaptive_interventions: true
-
+# Enhanced attention analysis (minimal for edge)
 attention_analysis:
-  # Attention monitoring and analysis
-  enabled: true
-  log_every_n_steps: 50        # Monitor attention patterns
-  viz_every_n_epochs: 1        # Create visualizations every epoch
-  track_top_k: 15              # Track top attention heads
+  track_top_k: 2 # Track only top 2 heads
+  log_every_n_steps: 500 # Infrequent logging
+  viz_every_n_epochs: 10 # Rare visualization
+  save_head_patterns: false # Disable to save storage
+  analyze_memory_attention: false # Disable for performance
+  analyze_cross_modal: true # Keep only essential analysis
 
-  # Save attention matrices for analysis
-  save_attention_matrices: true
-  save_cross_modal_attention: true
+training:
+  # Training configuration (Edge Optimized with improved numerical stability)
+  max_epochs: 50 # More epochs for tiny model
+  accumulate_grad_batches: 8 # Simulate larger batch via accumulation
+  gradient_clip_val: 0.5 # Reduced from 0.25 for better stability
+  val_check_interval: 5000
+  scheduler: "cosine"
+  min_lr: 0.00001 # Increased from 0.000001 to prevent vanishing gradients
+  warmup_steps: 500 # Increased from 200 for better stability
+  learning_rate: 0.0003 # Reduced from 0.0005 for numerical stability
+  weight_decay: 0.01 # Reduced from 0.05 for stability
+  track_attention: false # Disable for performance
 
-  # Attention evolution tracking
-  track_attention_evolution: true
-  evolution_window_size: 100
+  # Additional numerical stability settings
+  loss_scale: 1.0 # Loss scaling factor
+  eps: 1e-6 # Epsilon for numerical stability
+  max_loss_threshold: 50.0 # Maximum allowed loss value
+
+# Weights & Biases (minimal logging)
+wandb:
+  project: "bitmar-ultra-tiny-adaptive"
+  entity: "babylm-ntust"
+  api_key: null
+  log_every_n_steps: 500 # Very infrequent logging
+  log_attention: false # Disable for performance
+  log_memory: true
+  log_gradients: false # Disable for performance
+  log_quantization: false # Disable for performance
+  log_features: false # Disable for performance
+  save_code: true
+  create_plots: true # Disable for performance
+  plot_attention_heatmaps: true
+  plot_memory_usage: false
+  plot_quantization_dist: false
+
+# Evaluation (ultra-lightweight)
+evaluation:
+  metrics: ["bleu"] # Single metric only
+  generate_samples: false # Disable for performance
+  num_samples: 5 # Minimal samples
+  max_generation_length: 16 # Short generation
+  temperature: 0.9
+  top_p: 0.95
+
+# Output directories
+output:
+  checkpoint_dir: "checkpoints_ultra_tiny"
+  log_dir: "logs_ultra_tiny"
+  attention_dir: "attention_ultra_tiny"
+  memory_dir: "memory_ultra_tiny"
+  results_dir: "results_ultra_tiny"
+
+# Edge deployment testing
+edge_test:
+  batch_size: 1 # Single sample inference
+  max_samples: 20 # Minimal testing
+  reduced_model_size: true
+  memory_size: 4 # 4 slots for testing
+  enable_external_memory: false
+
+# Memory optimization settings (aggressive)
+memory_optimization:
+  use_gradient_checkpointing: true # Trade compute for memory
+  use_fp16: true # Half precision everywhere
+  use_int8_vision: true # 8-bit vision features
+  empty_cache_frequency: 5 # Aggressive cache clearing
+  max_memory_slots_in_ram: 4 # Keep only 4 slots in RAM
+  compress_episodic_memory: true # Compress memory slots
+
+  # Vision feature optimization
+  vision_feature_caching: false # Don't cache for memory saving
+  vision_batch_processing: false # Process one image at a time
+
+  # Model size optimization
+  tie_word_embeddings: true # Share input/output embeddings
+  use_shared_attention: true # Share attention weights across layers
+
+# Performance targets for edge deployment
+performance_targets:
+  max_model_size_mb: 2 # 2MB total model size
+  max_inference_memory_mb: 4 # 4MB inference memory
+  target_inference_time_ms: 100 # 100ms inference time
+  min_accuracy_threshold: 0.70 # 70% of full model accuracy
+
+# Hardware-specific optimizations
+hardware_optimization:
+  target_device: "arm_cortex_m7"
+  enable_neon_simd: true # ARM NEON optimization
+  use_quantized_inference: true # Full quantization
+  optimize_for_cache: true # Cache-friendly memory layout
+  enable_model_compression: true # Additional model compression
 
 # ADAPTIVE TRAINING CONTROLLER - Step-based dynamic similarity management
 adaptive_training:
@@ -286,62 +297,3 @@ adaptive_training:
     log_strategy_selection: true
     log_recovery_progress: true
     phase_summary_frequency: 10000             # Log phase summary every 10k steps
-
-# MEMORY ANALYSIS AND OPTIMIZATION
-memory_analysis:
-  enabled: true
-  log_memory_usage: true
-  optimize_memory_usage: true
-
-  # Memory efficiency monitoring
-  track_gpu_memory: true
-  memory_warning_threshold: 0.85       # Warn at 85% GPU memory usage
-  memory_cleanup_frequency: 100        # Steps between memory cleanup
-
-  # Memory consolidation
-  consolidation_frequency: 1000        # Steps between consolidations
-  consolidation_threshold: 0.8         # Similarity threshold for consolidation
-
-# EVALUATION AND BENCHMARKING
-evaluation:
-  # Evaluation frequency
-  eval_every_n_epochs: 1
-  eval_steps: 500                      # Max evaluation steps per epoch
-
-  # Metrics to track
-  track_perplexity: true
-  track_bleu_score: true
-  track_cross_modal_alignment: true
-  track_memory_efficiency: true
-
-  # Benchmarking
-  run_benchmarks: false                # Disable during training for speed
-  benchmark_frequency: 5               # Every N epochs if enabled
-
-# EARLY STOPPING AND CONVERGENCE
-early_stopping:
-  enabled: true
-  patience: 5                          # Epochs to wait for improvement
-  min_delta: 0.001                     # Minimum improvement threshold
-  monitor_metric: "val_loss"           # Primary metric to monitor
-
-  # Adaptive early stopping
-  similarity_based_stopping: true      # Stop if similarity converges
-  similarity_convergence_threshold: 0.001  # Similarity change threshold
-  convergence_window: 100              # Steps to check convergence
-
-# RESOURCE OPTIMIZATION
-optimization:
-  # Computational efficiency
-  use_flash_attention: false           # Not available for this model size
-  use_gradient_checkpointing: true
-  use_mixed_precision: true
-
-  # Memory optimization
-  offload_to_cpu: false                # Keep on GPU for speed
-  use_8bit_optimizer: false            # Standard precision for stability
-
-  # Training speed optimization
-  dataloader_optimization: true
-  pin_memory: true
-  persistent_workers: true
