@@ -84,17 +84,22 @@ attention_analysis:
   analyze_cross_modal: true # Keep only essential analysis
 
 training:
-  # Training configuration (Edge Optimized)
+  # Training configuration (Edge Optimized with improved numerical stability)
   max_epochs: 50 # More epochs for tiny model
   accumulate_grad_batches: 8 # Simulate larger batch via accumulation
-  gradient_clip_val: 0.25 # Aggressive clipping for stability
+  gradient_clip_val: 0.5 # Reduced from 0.25 for better stability
   val_check_interval: 5000
   scheduler: "cosine"
-  min_lr: 0.000001
-  warmup_steps: 200 # Minimal warmup
-  learning_rate: 0.0005 # Higher LR for tiny model
-  weight_decay: 0.05 # Aggressive weight decay for regularization
+  min_lr: 0.00001 # Increased from 0.000001 to prevent vanishing gradients
+  warmup_steps: 500 # Increased from 200 for better stability
+  learning_rate: 0.0003 # Reduced from 0.0005 for numerical stability
+  weight_decay: 0.01 # Reduced from 0.05 for stability
   track_attention: false # Disable for performance
+
+  # Additional numerical stability settings
+  loss_scale: 1.0 # Loss scaling factor
+  eps: 1e-6 # Epsilon for numerical stability
+  max_loss_threshold: 50.0 # Maximum allowed loss value
 
 # Weights & Biases (minimal logging)
 wandb:

@@ -34,12 +34,12 @@ class BitNetLinear(nn.Module):
 
     def quantize_weights_1_58_bit(self, weight: torch.Tensor) -> torch.Tensor:
         """BitNet b1.58 weight quantization: {-1, 0, +1}"""
-        # Compute scaling factor
+        # Compute scaling factor with numerical stability
         scale = weight.abs().mean()
-        self.weight_scale.data = scale.clamp(min=1e-5)
+        self.weight_scale.data = scale.clamp(min=1e-5, max=1e3)  # Prevent extreme scales
 
-        # Normalize weights
-        weight_norm = weight / self.weight_scale
+        # Normalize weights with gradient clipping
+        weight_norm = torch.clamp(weight / self.weight_scale, min=-10.0, max=10.0)
 
         # 1.58-bit quantization with threshold
         threshold = 2.0 / 3.0  # Optimal threshold for ternary quantization
@@ -53,15 +53,24 @@ class BitNetLinear(nn.Module):
         return quantized
 
     def quantize_activations_8bit(self, x: torch.Tensor) -> torch.Tensor:
-        """8-bit activation quantization"""
+        """8-bit activation quantization with numerical stability"""
+        # Clamp extreme values to prevent overflow
+        x_clamped = torch.clamp(x, min=-1e6, max=1e6)
+
         # Compute quantization parameters
-        x_min, x_max = x.min(), x.max()
-        scale = (x_max - x_min) / 255.0
-        self.input_scale.data = scale.clamp(min=1e-5)
+        x_min, x_max = x_clamped.min(), x_clamped.max()
+
+        # Prevent division by zero
+        range_val = x_max - x_min
+        if range_val < 1e-8:
+            return x_clamped
+
+        scale = range_val / 255.0
+        self.input_scale.data = scale.clamp(min=1e-8, max=1e3)
 
         # Quantize to 8-bit
         zero_point = (-x_min / scale).round().clamp(0, 255)
-        quantized = ((x / scale) + zero_point).round().clamp(0, 255)
+        quantized = ((x_clamped / scale) + zero_point).round().clamp(0, 255)
 
         # Dequantize
         dequantized = scale * (quantized - zero_point)

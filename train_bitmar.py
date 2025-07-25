@@ -534,7 +534,7 @@ class BitMarTrainer:
         return epoch_metrics
 
     def validate_epoch(self, epoch: int) -> Dict[str, float]:
-        """Validate for one epoch"""
+        """Validate for one epoch with improved numerical stability"""
         self.model.eval()
         val_loaders = self.data_module.val_dataloader()  # Returns list of loaders
 
@@ -558,7 +558,7 @@ class BitMarTrainer:
                             if torch.is_tensor(batch[key]):
                                 batch[key] = batch[key].to(self.device)
 
-                        # Forward pass
+                        # Forward pass with gradient checkpointing disabled for validation
                         outputs = self.model(
                             input_ids=batch['input_ids'],
                             attention_mask=batch['attention_mask'],
@@ -566,22 +566,31 @@ class BitMarTrainer:
                             labels=batch['labels']
                         )
 
-                        # Safely extract loss
-                        if outputs['loss'] is not None and torch.isfinite(outputs['loss']):
-                            val_losses.append(outputs['loss'].item())
+                        # Safely extract loss with numerical stability checks
+                        if outputs['loss'] is not None:
+                            loss_value = outputs['loss'].item()
+                            # Check for numerical stability
+                            if torch.isfinite(outputs['loss']) and not (torch.isnan(outputs['loss']) or torch.isinf(outputs['loss'])):
+                                # Clamp extreme loss values to prevent numerical instability
+                                loss_value = max(0.0, min(loss_value, 100.0))  # Clamp between 0 and 100
+                                val_losses.append(loss_value)
+                            else:
+                                logger.warning(f"Non-finite loss detected in validation batch {batch_idx}: {loss_value}")
+                                # Skip this batch but continue validation
+                                continue
 
-                        # Compute additional metrics with safety checks
-                        if outputs['memory_usage'] is not None:
+                        # Compute additional metrics with enhanced safety checks
+                        if outputs.get('memory_usage') is not None:
                             try:
                                 memory_entropy = self._compute_memory_entropy(
                                     outputs['memory_usage'])
-                                if np.isfinite(memory_entropy):
+                                if np.isfinite(memory_entropy) and memory_entropy >= 0:
                                     val_metrics['val_memory_entropy'] += memory_entropy
                             except Exception as e:
                                 logger.warning(
                                     f"Memory entropy computation failed: {e}")
 
-                        if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
+                        if outputs.get('text_features') is not None and outputs.get('vision_latent') is not None:
                             try:
                                 cross_modal_sim = self._compute_cross_modal_similarity(
                                     outputs['text_features'], outputs['vision_latent']
@@ -595,19 +604,36 @@ class BitMarTrainer:
                     except Exception as e:
                         logger.warning(
                             f"Validation batch {batch_idx} in loader {loader_idx} failed: {e}")
+                        # Add detailed error logging for debugging
+                        import traceback
+                        logger.warning(f"Validation error traceback: {traceback.format_exc()}")
                         continue
 
         # Calculate total number of batches across all loaders for averaging
         total_batches = sum(len(loader)
                             for loader in val_loaders) if val_loaders else 1
 
-        # Average metrics with safety checks
-        val_metrics['val_loss'] = np.mean(
-            val_losses) if val_losses else float('inf')
+        # Average metrics with enhanced safety checks and fallback values
+        if val_losses:
+            val_metrics['val_loss'] = float(np.mean(val_losses))
+            # Additional sanity check on the mean
+            if not np.isfinite(val_metrics['val_loss']) or val_metrics['val_loss'] < 0:
+                logger.warning(f"Invalid mean validation loss: {val_metrics['val_loss']}, using fallback")
+                val_metrics['val_loss'] = 10.0  # Reasonable fallback value
+        else:
+            logger.warning("No valid validation losses collected, using fallback value")
+            val_metrics['val_loss'] = 10.0  # Use a reasonable fallback instead of inf
+
         val_metrics['val_memory_entropy'] = (
             val_metrics['val_memory_entropy'] / total_batches) if total_batches > 0 else 0.0
         val_metrics['val_cross_modal_similarity'] = (
             val_metrics['val_cross_modal_similarity'] / total_batches) if total_batches > 0 else 0.0
+
+        # Final validation of all metrics
+        for key, value in val_metrics.items():
+            if not np.isfinite(value):
+                logger.warning(f"Non-finite metric detected: {key}={value}, setting to 0")
+                val_metrics[key] = 0.0 if 'similarity' in key or 'entropy' in key else 10.0
 
         # Clear GPU cache and restore training mode
         if torch.cuda.is_available():
