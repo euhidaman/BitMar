@@ -3,40 +3,47 @@
 # Prevents sudden drops in cross-modal alignment through intelligent freezing and loss rebalancing
 
 model:
-  # Core architecture
-  vocab_size: 32000
-  max_seq_len: 2048
-  dropout: 0.1
+  # BitNet Text Encoder (Ultra-Minimal)
+  vocab_size: 50257 # GPT-2 vocabulary (cannot reduce)
+  text_encoder_dim: 64 # Further reduced from 128
+  text_encoder_layers: 2 # Minimal layers for edge
+  text_encoder_heads: 2 # Minimal heads
+
+  # BitNet Text Decoder (Ultra-Minimal)
+  text_decoder_dim: 64 # Further reduced from 128
+  text_decoder_layers: 2 # Minimal layers for edge
+  text_decoder_heads: 2 # Minimal heads
+
+  # Vision processing (Compressed DiNOv2 features)
+  vision_encoder_dim: 768 # DiNOv2 input (fixed)
+  vision_latent_size: 32 # Heavily compressed (768 -> 32)
+  vision_hidden_size: 16 # Ultra-small hidden layer
+  vision_compression_method: "top_k_selection" # Best for edge devices
+  vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
+  vision_pool_size: 2 # 2x2 pooling
+
+  # Cross-modal fusion (Ultra-Minimal)
+  fusion_hidden_size: 32 # Minimal fusion
+  fusion_num_heads: 1 # Single head for basic cross-modal
+  fusion_num_layers: 1 # Single fusion layer
+
+  # Episodic Memory (Ultra-Compact for Edge)
+  memory_size: 8 # 8 memory slots only
+  episode_dim: 32 # Match vision_latent_size
+  memory_alpha: 0.3 # Higher adaptation for fewer slots
+  direct_writing: true
+  memory_compression: true # Enable memory compression
+  memory_head_dim: 16 # Ultra-small memory heads
+
+  # Model configuration (Edge Optimized)
+  max_seq_len: 256 # Increased to match data config and better utilize GPU
+  dropout: 0.25 # Higher dropout for tiny model regularization
   layer_norm_eps: 1e-5
 
-  # Text encoder configuration (BitNet)
-  text_encoder_dim: 512
-  text_encoder_layers: 6
-  text_encoder_heads: 8
-
-  # Text decoder configuration (BitNet)
-  text_decoder_dim: 512
-  text_decoder_layers: 6
-  text_decoder_heads: 8
-
-  # Vision encoder configuration
-  vision_encoder: "dinov2"
-  vision_d_model: 768
-  vision_patch_size: 14
-  vision_image_size: 224
-  vision_dropout: 0.1
-
-  # Cross-modal attention settings
+  # Cross-modal attention settings (minimal for ultra-tiny)
   enable_cross_modal_attention: true
-  cross_modal_layers: [3, 4, 5]  # Which layers have cross-modal attention
-  cross_modal_heads: 4           # Dedicated heads for cross-modal attention
-
-  # Episodic memory configuration
-  memory_size: 1024
-  memory_head_dim: 64
-  memory_update_rate: 0.1
-  memory_decay_factor: 0.99
-  memory_consolidation_threshold: 0.8
+  cross_modal_layers: [1]  # Only one layer for ultra-tiny
+  cross_modal_heads: 1     # Single head for ultra-tiny
 
   # ADAPTIVE TRAINING - Dynamic similarity monitoring
   enable_adaptive_training: true
