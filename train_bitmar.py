@@ -695,7 +695,7 @@ class BitMarTrainer:
                 self.global_step += 1
 
                 # Step learning rate scheduler if step-based
-                if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
+                if self scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
                     self.scheduler.step()
 
                 # Memory cleanup every 100 steps to prevent OOM
@@ -1535,7 +1535,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", type=int, help="Maximum number of epochs to train (overrides config)")
     parser.add_argument("--track_attention_every_n_steps", type=int, default=1000, help="Track attention evolution every N steps")
     parser.add_argument("--save_attention_every_n_epochs", type=int, default=5, help="Save attention analysis every N epochs")
-    parser.add_argument("--optimizer", type=str, choices=["adam", "adamw", "sgd"], help="Optimizer to use (overrides config)")
+    parser.add_argument("--optimizer", type=str, choices=["adam", "adamw", "adamw8bit", "sgd"], help="Optimizer to use (overrides config)")
     parser.add_argument("--device", type=str, help="Device to use for training (cuda, cpu)")
     parser.add_argument("--resume_from_checkpoint", type=str, help="Path to checkpoint to resume from")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")

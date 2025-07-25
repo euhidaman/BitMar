@@ -757,6 +757,21 @@ class BitMarModel(nn.Module):
         """
         batch_size = text_features.shape[0]
 
+        # Handle dimension mismatch between text and vision features
+        text_dim = text_features.shape[-1]
+        vision_dim = vision_features.shape[-1]
+
+        if text_dim != vision_dim:
+            # Project to smaller dimension to maintain compatibility
+            target_dim = min(text_dim, vision_dim)
+
+            if text_dim > vision_dim:
+                # Project text features to vision dimension
+                text_features = text_features[:, :target_dim]
+            else:
+                # Project vision features to text dimension
+                vision_features = vision_features[:, :target_dim]
+
         # Normalize features
         text_features = F.normalize(text_features, dim=-1)
         vision_features = F.normalize(vision_features, dim=-1)
