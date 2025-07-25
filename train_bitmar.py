@@ -3,6 +3,14 @@ Training script for BitMar model
 Handles multimodal training with episodic memory and attention analysis
 """
 
+# CodeCarbon for carbon footprint tracking
+try:
+    from codecarbon import EmissionsTracker
+    CODECARBON_AVAILABLE = True
+except ImportError:
+    CODECARBON_AVAILABLE = False
+    print("Warning: CodeCarbon not available. Install with: pip install codecarbon")
+
 from src.attention_analysis import analyze_model_attention
 from src.dataset import create_data_module
 from src.model import create_bitmar_model, count_parameters
@@ -30,6 +38,14 @@ try:
 except ImportError:
     BITSANDBYTES_AVAILABLE = False
     print("Warning: bitsandbytes not available. Install with: pip install bitsandbytes")
+
+# Import adaptive training controller
+try:
+    from src.adaptive_training_controller import AdaptiveTrainingController, compute_cross_modal_similarity
+    ADAPTIVE_TRAINING_AVAILABLE = True
+except ImportError:
+    ADAPTIVE_TRAINING_AVAILABLE = False
+    print("Warning: Adaptive training controller not available")
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
@@ -98,6 +114,126 @@ class BitMarTrainer:
         self.best_val_loss = float('inf')
         self._last_model_device = None
         self._device_warnings_count = 0
+
+        # Initialize CodeCarbon tracker
+        self.setup_carbon_tracking()
+
+        # Initialize adaptive training controller
+        self.setup_adaptive_controller()
+
+    def setup_carbon_tracking(self):
+        """Initialize CodeCarbon emissions tracker for remote machine usage"""
+        try:
+            # Create carbon logs directory
+            carbon_logs_dir = Path("./carbon_logs")
+            carbon_logs_dir.mkdir(exist_ok=True)
+
+            # Configure tracker for remote/cloud environment
+            tracker_config = {
+                "project_name": f"BitMar-BabyLM-Training-{self.config.get('training', {}).get('max_epochs', 'unknown')}epochs",
+                "experiment_id": f"bitmar-{self.device.type}-training",
+                "output_dir": str(carbon_logs_dir),
+                "output_file": "emissions.csv",
+                "log_level": "INFO",
+                "save_to_file": True,
+                "save_to_api": False,  # Disabled for remote machines by default
+                "measure_power_secs": 15,  # Measure every 15 seconds
+                "tracking_mode": "machine"  # Track entire machine
+            }
+
+            # Auto-detect cloud provider for remote machines
+            if torch.cuda.is_available():
+                tracker_config["gpu_ids"] = [0]  # Track primary GPU
+                logger.info(f"Carbon tracking configured for GPU: {torch.cuda.get_device_name(0)}")
+
+            # Initialize the tracker but don't start it yet
+            self.carbon_tracker = EmissionsTracker(**tracker_config)
+            self.carbon_tracking_enabled = True
+
+            logger.info("🌱 CodeCarbon emissions tracker initialized for remote training")
+            logger.info(f"Carbon logs will be saved to: {carbon_logs_dir}/emissions.csv")
+
+        except Exception as e:
+            logger.warning(f"Failed to initialize CodeCarbon tracker: {e}")
+            logger.warning("Training will continue without carbon tracking")
+            self.carbon_tracker = None
+            self.carbon_tracking_enabled = False
+
+    def start_carbon_tracking(self):
+        """Start carbon emissions tracking"""
+        if self.carbon_tracking_enabled and self.carbon_tracker:
+            try:
+                self.carbon_tracker.start()
+                logger.info("🌱 Started carbon emissions tracking")
+            except Exception as e:
+                logger.warning(f"Failed to start carbon tracking: {e}")
+                self.carbon_tracking_enabled = False
+
+    def stop_carbon_tracking(self):
+        """Stop carbon emissions tracking and log results"""
+        if self.carbon_tracking_enabled and self.carbon_tracker:
+            try:
+                emissions = self.carbon_tracker.stop()
+
+                # Log emissions data
+                if emissions:
+                    logger.info(f"🌱 Training Carbon Footprint Summary:")
+                    logger.info(f"   Total CO2 emissions: {emissions:.6f} kg CO2")
+                    logger.info(f"   Equivalent to: {emissions * 1000:.3f} g CO2")
+
+                    # Log to wandb if available
+                    if self.wandb_logger:
+                        try:
+                            carbon_metrics = {
+                                "carbon_emissions_kg": emissions,
+                                "carbon_emissions_g": emissions * 1000,
+                                "training_duration_hours": (self.global_step * self.config.get('data', {}).get('batch_size', 1)) / 3600,  # Rough estimate
+                                "emissions_per_epoch": emissions / max(self.current_epoch, 1)
+                            }
+
+                            # Log final carbon metrics
+                            wandb.log(carbon_metrics)
+                            logger.info("🌱 Carbon metrics logged to wandb")
+
+                        except Exception as e:
+                            logger.warning(f"Failed to log carbon metrics to wandb: {e}")
+
+                    return emissions
+                else:
+                    logger.warning("No emissions data collected")
+                    return 0.0
+
+            except Exception as e:
+                logger.warning(f"Failed to stop carbon tracking: {e}")
+                return 0.0
+
+        return 0.0
+
+    def log_carbon_metrics_periodic(self, epoch: int, step: int):
+        """Log periodic carbon metrics during training"""
+        if not self.carbon_tracking_enabled or not self.carbon_tracker:
+            return
+
+        try:
+            # Get current emissions (this doesn't stop tracking)
+            current_emissions = getattr(self.carbon_tracker, '_total_energy', 0.0)
+
+            # Log periodic metrics every 10 epochs or every 1000 steps
+            if (epoch > 0 and epoch % 10 == 0) or (step > 0 and step % 1000 == 0):
+                if self.wandb_logger and current_emissions > 0:
+                    try:
+                        periodic_metrics = {
+                            "carbon_emissions_current_kg": current_emissions,
+                            "carbon_emissions_per_step": current_emissions / max(step, 1),
+                            "carbon_emissions_per_epoch": current_emissions / max(epoch, 1)
+                        }
+                        wandb.log(periodic_metrics)
+                        logger.info(f"🌱 Periodic carbon update - Current emissions: {current_emissions:.6f} kg CO2")
+                    except Exception as e:
+                        logger.debug(f"Failed to log periodic carbon metrics: {e}")
+
+        except Exception as e:
+            logger.debug(f"Failed to get periodic carbon metrics: {e}")
 
     def setup_directories(self):
         """Create output directories"""
@@ -313,7 +449,8 @@ class BitMarTrainer:
                         attention_mask=batch['attention_mask'],
                         vision_features=batch['vision_features'],
                         labels=batch['labels'],
-                        step=self.global_step  # Add step parameter for loss balancing
+                        step=self.global_step,  # Add step parameter for loss balancing
+                        adaptive_controller=self.adaptive_controller  # Pass adaptive controller
                     )
                     loss = outputs['loss']
                 except RuntimeError as e:
@@ -328,7 +465,8 @@ class BitMarTrainer:
                             attention_mask=batch['attention_mask'],
                             vision_features=batch['vision_features'],
                             labels=batch['labels'],
-                            step=self.global_step  # Add step parameter for retry too
+                            step=self.global_step,  # Add step parameter for retry too
+                            adaptive_controller=self.adaptive_controller  # Pass adaptive controller
                         )
                         loss = outputs['loss']
                     else:
@@ -339,6 +477,65 @@ class BitMarTrainer:
                     logger.warning(
                         f"Invalid loss at step {self.global_step}: {loss.item()}")
                     continue
+
+                # ADAPTIVE TRAINING MONITORING (NEW!)
+                if self.adaptive_controller is not None and outputs['text_features'] is not None and outputs['vision_latent'] is not None:
+                    try:
+                        # Compute cross-modal similarity for adaptive controller
+                        similarity_score = compute_cross_modal_similarity(
+                            outputs['text_features'],
+                            outputs['vision_latent']
+                        )
+
+                        # Update adaptive controller and get intervention decisions
+                        controller_info = self.adaptive_controller.update_similarity(
+                            similarity_score,
+                            self.global_step
+                        )
+
+                        # Log intervention if triggered
+                        if controller_info['intervention_info']['intervention_triggered']:
+                            intervention = controller_info['intervention_info']
+                            logger.info(f"🚨 STEP {self.global_step}: ADAPTIVE INTERVENTION TRIGGERED!")
+                            logger.info(f"   Type: {intervention['intervention_type']}")
+                            logger.info(f"   Reason: {intervention['trigger_reason']}")
+                            logger.info(f"   Text Encoder Frozen: {controller_info['text_encoder_frozen']}")
+                            logger.info(f"   Vision Encoder Frozen: {controller_info['vision_encoder_frozen']}")
+                            logger.info(f"   Loss Multiplier: {controller_info['cross_modal_weight_multiplier']:.2f}")
+
+                            # Log to wandb if available
+                            if self.wandb_logger:
+                                intervention_metrics = {
+                                    'adaptive/intervention_triggered': 1,
+                                    'adaptive/intervention_type_encoded': hash(intervention['intervention_type']) % 100,  # Simple encoding for wandb
+                                    'adaptive/similarity_drop': intervention['similarity_drop'],
+                                    'adaptive/text_encoder_frozen': int(controller_info['text_encoder_frozen']),
+                                    'adaptive/vision_encoder_frozen': int(controller_info['vision_encoder_frozen']),
+                                    'adaptive/cross_modal_weight_multiplier': controller_info['cross_modal_weight_multiplier'],
+                                    'adaptive/similarity_ema': controller_info['similarity_ema'],
+                                    'adaptive/similarity_current': similarity_score
+                                }
+                                wandb.log(intervention_metrics, step=self.global_step)
+
+                        # Always log similarity metrics (less frequently)
+                        if self.global_step % 50 == 0 and self.wandb_logger:
+                            adaptive_metrics = {
+                                'adaptive/cross_modal_similarity': similarity_score,
+                                'adaptive/similarity_ema': controller_info['similarity_ema'],
+                                'adaptive/text_frozen_status': int(controller_info['text_encoder_frozen']),
+                                'adaptive/vision_frozen_status': int(controller_info['vision_encoder_frozen']),
+                                'adaptive/loss_multiplier': controller_info['cross_modal_weight_multiplier']
+                            }
+                            wandb.log(adaptive_metrics, step=self.global_step)
+
+                        # Update best similarity for checkpointing
+                        if similarity_score > self.best_similarity:
+                            self.best_similarity = similarity_score
+                            # Save best similarity checkpoint
+                            self.save_checkpoint(epoch, is_best=False, suffix='best_similarity')
+
+                    except Exception as e:
+                        logger.warning(f"Adaptive controller update failed at step {self.global_step}: {e}")
 
                 # Backward pass with device-aware error handling
                 try:
@@ -719,7 +916,7 @@ class BitMarTrainer:
             logger.warning(f"Cross-modal similarity computation failed: {e}")
             return 0.0
 
-    def save_checkpoint(self, epoch: int, is_best: bool = False):
+    def save_checkpoint(self, epoch: int, is_best: bool = False, suffix: str = ''):
         """Save model checkpoint"""
         try:
             checkpoint = {
@@ -812,6 +1009,44 @@ class BitMarTrainer:
 
         logger.info("Attention analysis completed")
         return analyzer
+
+    def setup_adaptive_controller(self):
+        """Initialize adaptive training controller if enabled"""
+        if not ADAPTIVE_TRAINING_AVAILABLE:
+            logger.info("Adaptive training controller not available")
+            self.adaptive_controller = None
+            return
+
+        # Check if adaptive training is enabled in config
+        model_config = self.config.get('model', {})
+        adaptive_config = self.config.get('adaptive_training', {})
+
+        if not model_config.get('enable_adaptive_training', False):
+            logger.info("Adaptive training disabled in config")
+            self.adaptive_controller = None
+            return
+
+        # Create adaptive logs directory
+        adaptive_logs_dir = Path("./logs/adaptive_training")
+        adaptive_logs_dir.mkdir(parents=True, exist_ok=True)
+
+        self.adaptive_controller = AdaptiveTrainingController(
+            similarity_window_size=adaptive_config.get('similarity_window_size', 100),
+            drop_threshold=adaptive_config.get('drop_threshold', 0.15),
+            min_steps_between_interventions=adaptive_config.get('min_steps_between_interventions', 1000),
+            freeze_duration_steps=adaptive_config.get('freeze_duration_steps', 2000),
+            loss_rebalance_factor=adaptive_config.get('loss_rebalance_factor', 2.5),
+            similarity_smoothing_alpha=adaptive_config.get('similarity_smoothing_alpha', 0.1),
+            save_dir=str(adaptive_logs_dir)
+        )
+
+        logger.info("🤖 Adaptive training controller initialized!")
+        logger.info(f"   Drop threshold: {adaptive_config.get('drop_threshold', 0.15)}")
+        logger.info(f"   Window size: {adaptive_config.get('similarity_window_size', 100)} steps")
+        logger.info(f"   Intervention cooldown: {adaptive_config.get('min_steps_between_interventions', 1000)} steps")
+        logger.info(f"   Logs saved to: {adaptive_logs_dir}")
+
+        self.best_similarity = 0.0  # Track best similarity for checkpointing
 
     def safe_gpu_operation(self, operation_name: str, operation_func):
         """Safely execute GPU operations with fallback handling"""
@@ -1081,7 +1316,7 @@ class BitMarTrainer:
             pass
 
     def train(self, max_samples: Optional[int] = None):
-        """Main training loop"""
+        """Main training loop with carbon footprint tracking"""
         logger.info("Starting BitMar training...")
 
         # Setup directories first
@@ -1093,282 +1328,197 @@ class BitMarTrainer:
         # Setup model and data
         self.setup_model_and_data(max_samples=max_samples)
 
-        # Training loop
-        for epoch in range(self.current_epoch, self.config['training']['max_epochs']):
-            logger.info(
-                f"\nEpoch {epoch + 1}/{self.config['training']['max_epochs']}")
+        # Start carbon emissions tracking
+        self.start_carbon_tracking()
 
-            # Train
-            train_metrics = self.train_epoch(epoch)
-
-            # Validate
-            val_metrics = self.validate_epoch(epoch)
-
-            # Update learning rate scheduler (only for epoch-based schedulers)
-            if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'epoch':
-                self.scheduler.step()
+        try:
+            # Training loop
+            for epoch in range(self.current_epoch, self.config['training']['max_epochs']):
                 logger.info(
-                    f"Scheduler stepped (epoch-based), new LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+                    f"\nEpoch {epoch + 1}/{self.config['training']['max_epochs']}")
 
-            # Log validation metrics with enhanced logger
-            if self.wandb_logger:
-                self.wandb_logger.log_validation_metrics(
-                    val_metrics['val_loss'],
-                    np.exp(val_metrics['val_loss']),  # Perplexity
-                    self.global_step,
-                    memory_entropy=val_metrics['val_memory_entropy'],
-                    cross_modal_similarity=val_metrics['val_cross_modal_similarity']
-                )
+                # Train
+                train_metrics = self.train_epoch(epoch)
 
-            # Combine metrics
-            all_metrics = {**train_metrics, **val_metrics}
-            all_metrics['epoch'] = epoch
-            all_metrics['learning_rate'] = self.optimizer.param_groups[0]['lr']
+                # Validate
+                val_metrics = self.validate_epoch(epoch)
 
-            # Log epoch summary
-            if self.wandb_logger:
-                self.wandb_logger.log_epoch_summary(
-                    epoch=epoch,
-                    train_loss=train_metrics['train_loss'],
-                    val_loss=val_metrics['val_loss'],
-                    memory_efficiency=train_metrics['memory_usage_entropy'],
-                    step=self.global_step,
-                    cross_modal_similarity=train_metrics['cross_modal_similarity']
-                )
+                # Log periodic carbon metrics
+                self.log_carbon_metrics_periodic(epoch, self.global_step)
 
-            # Log metrics
-            logger.info(f"Train Loss: {train_metrics['train_loss']:.4f}")
-            logger.info(f"Val Loss: {val_metrics['val_loss']:.4f}")
-            logger.info(
-                f"Memory Entropy: {train_metrics['memory_usage_entropy']:.4f}")
-            logger.info(
-                f"Cross-Modal Similarity: {train_metrics['cross_modal_similarity']:.4f}")
-
-            # Create attention visualizations (every few epochs to avoid overhead)
-            if (self.attention_analyzer and
-                    (epoch + 1) % self.config.get('attention_analysis', {}).get('viz_every_n_epochs', 2) == 0):
-
-                logger.info("Creating attention visualizations...")
-
-                try:
-                    # Create attention head heatmaps
-                    for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                        self.attention_analyzer.create_attention_head_heatmap(
-                            self.global_step, attention_type
-                        )
-
-                    # Create timeline plots
-                    self.attention_analyzer.create_attention_timeline_plot(
-                        self.global_step)
-
-                    # Save top attention heads
-                    for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                        self.attention_analyzer.save_top_heads(
-                            self.global_step, attention_type)
-
-                except Exception as e:
-                    logger.warning(
-                        f"Attention visualization creation failed: {e}")
-
-            # Generate attention evolution visualizations (NEW!)
-            if (self.attention_evolution_tracker and
-                    (epoch + 1) % self.config.get('save_attention_every_n_epochs', 1) == 0):
-
-                logger.info(
-                    "🎨 Generating attention evolution visualizations...")
-
-                try:
-                    # Create epoch comparison grids
-                    if epoch > 0:  # Need at least 2 epochs
-                        # Get sample IDs from this epoch
-                        if epoch in self.attention_evolution_tracker.attention_history:
-                            sample_ids = list(
-                                self.attention_evolution_tracker.attention_history[epoch].keys())
-                            if sample_ids:
-                                self.attention_evolution_tracker.create_epoch_comparison_grid(
-                                    sample_id=sample_ids[0],
-                                    epochs=[epoch-1, epoch]
-                                )
-
-                    # Generate learning summary
-                    if epoch >= 2:  # Need at least 3 epochs
-                        self.attention_evolution_tracker.create_attention_learning_summary(
-                            max_epochs=epoch)
-
-                    # Create token evolution plots for common tokens
-                    if epoch >= 3:  # Need several epochs for meaningful evolution
-                        common_tokens = ['the', 'a', 'dog', 'cat', 'person']
-                        for token_text in common_tokens:
-                            try:
-                                token_ids = self.attention_evolution_tracker.tokenizer.encode(
-                                    token_text)
-                                if token_ids:
-                                    self.attention_evolution_tracker.create_token_evolution_plot(
-                                        token_text=token_text,
-                                        token_id=token_ids[0]
-                                    )
-                            except Exception as e:
-                                continue  # Skip if token not found
-
+                # Update learning rate scheduler (only for epoch-based schedulers)
+                if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'epoch':
+                    self.scheduler.step()
                     logger.info(
-                        f"✅ Attention evolution visualizations complete for epoch {epoch}")
+                        f"Scheduler stepped (epoch-based), new LR: {self.optimizer.param_groups[0]['lr']:.2e}")
 
-                except Exception as e:
-                    logger.warning(
-                        f"Attention evolution visualization failed: {e}")
+                # Log validation metrics with enhanced logger
+                if self.wandb_logger:
+                    self.wandb_logger.log_validation_metrics(
+                        val_metrics['val_loss'],
+                        np.exp(val_metrics['val_loss']),  # Perplexity
+                        self.global_step,
+                        memory_entropy=val_metrics['val_memory_entropy'],
+                        cross_modal_similarity=val_metrics['val_cross_modal_similarity']
+                    )
 
-                # Create visualizations with wandb logger
-                if self.wandb_logger and hasattr(self.model, 'memory'):
+                # Combine metrics
+                all_metrics = {**train_metrics, **val_metrics}
+                all_metrics['epoch'] = epoch
+                all_metrics['learning_rate'] = self.optimizer.param_groups[0]['lr']
+
+                # Log epoch summary
+                if self.wandb_logger:
+                    self.wandb_logger.log_epoch_summary(
+                        epoch=epoch,
+                        train_loss=train_metrics['train_loss'],
+                        val_loss=val_metrics['val_loss'],
+                        memory_efficiency=train_metrics['memory_usage_entropy'],
+                        step=self.global_step,
+                        cross_modal_similarity=train_metrics['cross_modal_similarity']
+                    )
+
+                # Log metrics
+                logger.info(f"Train Loss: {train_metrics['train_loss']:.4f}")
+                logger.info(f"Val Loss: {val_metrics['val_loss']:.4f}")
+                logger.info(
+                    f"Memory Entropy: {train_metrics['memory_usage_entropy']:.4f}")
+                logger.info(
+                    f"Cross-Modal Similarity: {train_metrics['cross_modal_similarity']:.4f}")
+
+                # Create attention visualizations (every few epochs to avoid overhead)
+                if (self.attention_analyzer and
+                        (epoch + 1) % self.config.get('attention_analysis', {}).get('viz_every_n_epochs', 2) == 0):
+
+                    logger.info("Creating attention visualizations...")
+
                     try:
-                        # Memory heatmaps
-                        self.wandb_logger.create_memory_heatmap(
-                            self.model.memory.memory_usage,
-                            self.model.memory.memory_age,
-                            self.global_step
-                        )
+                        # Create attention head heatmaps
+                        for attention_type in ['encoder', 'decoder', 'cross_modal']:
+                            self.attention_analyzer.create_attention_head_heatmap(
+                                self.global_step, attention_type
+                            )
 
-                        # Quantization plots
-                        self.wandb_logger.create_quantization_plot(
-                            self.model, self.global_step)
+                        # Create timeline plots
+                        self.attention_analyzer.create_attention_timeline_plot(
+                            self.global_step)
+
+                        # Save top attention heads
+                        for attention_type in ['encoder', 'decoder', 'cross_modal']:
+                            self.attention_analyzer.save_top_heads(
+                                self.global_step, attention_type)
 
                     except Exception as e:
                         logger.warning(
-                            f"Wandb visualization creation failed: {e}")
+                            f"Attention visualization creation failed: {e}")
 
-            if self.use_wandb:
-                wandb.log(all_metrics)
+                # Generate attention evolution visualizations (NEW!)
+                if (self.attention_evolution_tracker and
+                        (epoch + 1) % self.config.get('save_attention_every_n_epochs', 1) == 0):
 
-            # Save checkpoint
-            is_best = val_metrics['val_loss'] < self.best_val_loss
-            if is_best:
-                self.best_val_loss = val_metrics['val_loss']
+                    logger.info(
+                        "🎨 Generating attention evolution visualizations...")
 
-            self.save_checkpoint(epoch, is_best=is_best)
+                    try:
+                        # Create epoch comparison grids
+                        if epoch > 0:  # Need at least 2 epochs
+                            # Get sample IDs from this epoch
+                            if epoch in self.attention_evolution_tracker.attention_history:
+                                sample_ids = list(
+                                    self.attention_evolution_tracker.attention_history[epoch].keys())
+                                if sample_ids:
+                                    self.attention_evolution_tracker.create_epoch_comparison_grid(
+                                        sample_id=sample_ids[0],
+                                        epochs=[epoch-1, epoch]
+                                    )
 
-        # Final analysis and cleanup
-        logger.info("Training completed! Running final analysis...")
+                        # Generate learning summary
+                        if epoch >= 2:  # Need at least 3 epochs
+                            self.attention_evolution_tracker.create_attention_learning_summary(
+                                max_epochs=epoch)
 
-        if self.attention_analyzer:
-            # Generate final attention report
-            final_report = self.attention_analyzer.generate_attention_report(
-                self.global_step)
-            logger.info(f"Final attention analysis: {final_report}")
+                        # Create token evolution plots for common tokens
+                        if epoch >= 3:  # Need several epochs for meaningful evolution
+                            common_tokens = ['the', 'a', 'dog', 'cat', 'person']
+                            for token_text in common_tokens:
+                                try:
+                                    token_ids = self.attention_evolution_tracker.tokenizer.encode(
+                                        token_text)
+                                    if token_ids:
+                                        self.attention_evolution_tracker.create_token_evolution_plot(
+                                            token_text=token_text,
+                                            token_id=token_ids[0]
+                                        )
+                                except Exception as e:
+                                    continue  # Skip if token not found
 
-            # Save final top heads
-            for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                self.attention_analyzer.save_top_heads(
-                    self.global_step, attention_type, k=20)
+                        logger.info(
+                            f"✅ Attention evolution visualizations complete for epoch {epoch}")
 
-        # Close wandb logger
-        if self.wandb_logger:
-            self.wandb_logger.finish()
+                    except Exception as e:
+                        logger.warning(
+                            f"Attention evolution visualization failed: {e}")
 
-        logger.info("Training completed!")
+                    # Create visualizations with wandb logger
+                    if self.wandb_logger and hasattr(self.model, 'memory'):
+                        try:
+                            # Memory heatmaps
+                            self.wandb_logger.create_memory_heatmap(
+                                self.model.memory.memory_usage,
+                                self.model.memory.memory_age,
+                                self.global_step
+                            )
 
+                            # Quantization plots
+                            self.wandb_logger.create_quantization_plot(
+                                self.model, self.global_step)
 
-def load_config(config_path: str) -> Dict:
-    """Load configuration from YAML file"""
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    return config
+                        except Exception as e:
+                            logger.warning(
+                                f"Wandb visualization creation failed: {e}")
 
+                if self.use_wandb:
+                    wandb.log(all_metrics)
 
-def main():
-    parser = argparse.ArgumentParser(description="Train BitMar model")
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="configs/bitmar_ultra_tiny.yaml",
-        help="Path to configuration file"
-    )
-    parser.add_argument(
-        "--max_epochs",
-        type=int,
-        default=None,
-        help="Override max epochs from config"
-    )
-    parser.add_argument(
-        "--epochs",
-        type=int,
-        default=None,
-        help="Override max epochs from config (alias for --max_epochs)"
-    )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=None,
-        help="Override batch size from config"
-    )
-    parser.add_argument(
-        "--max_samples",
-        type=int,
-        default=None,
-        help="Limit number of training samples (for testing)"
-    )
-    parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="Resume training from checkpoint"
-    )
-    parser.add_argument(
-        "--wandb_project",
-        type=str,
-        default=None,
-        help="Override W&B project name"
-    )
-    parser.add_argument(
-        "--track_attention_every_n_steps",
-        type=int,
-        default=50,
-        help="Save attention evolution data every N steps"
-    )
-    parser.add_argument(
-        "--save_attention_every_n_epochs",
-        type=int,
-        default=1,
-        help="Generate attention visualizations every N epochs"
-    )
-    parser.add_argument(
-        "--optimizer",
-        type=str,
-        default="adamw",
-        choices=["adamw", "adamw8bit", "adam", "sgd", "rmsprop"],
-        help="Optimizer to use for training"
-    )
+                # Save checkpoint
+                is_best = val_metrics['val_loss'] < self.best_val_loss
+                if is_best:
+                    self.best_val_loss = val_metrics['val_loss']
 
-    args = parser.parse_args()
+                self.save_checkpoint(epoch, is_best=is_best)
 
-    # Load configuration
-    config = load_config(args.config)
+                # Update current epoch for carbon tracking
+                self.current_epoch = epoch
 
-    # Override config with command line arguments
-    # Handle both --max_epochs and --epochs
-    if args.max_epochs:
-        config['training']['max_epochs'] = args.max_epochs
-    elif args.epochs:
-        config['training']['max_epochs'] = args.epochs
-    if args.batch_size:
-        config['data']['batch_size'] = args.batch_size
-    if args.wandb_project:
-        config['wandb']['project'] = args.wandb_project
+        except KeyboardInterrupt:
+            logger.info("Training interrupted by user")
+        except Exception as e:
+            logger.error(f"Training failed with error: {e}")
+            raise e
+        finally:
+            # Stop carbon tracking and log final results
+            total_emissions = self.stop_carbon_tracking()
 
-    # Add attention tracking config
-    config['track_attention_every_n_steps'] = args.track_attention_every_n_steps
-    config['save_attention_every_n_epochs'] = args.save_attention_every_n_epochs
-    config['optimizer'] = args.optimizer
+            # Final analysis and cleanup
+            logger.info("Training completed! Running final analysis...")
 
-    # Create trainer
-    trainer = BitMarTrainer(config)
+            if self.attention_analyzer:
+                # Generate final attention report
+                final_report = self.attention_analyzer.generate_attention_report(
+                    self.global_step)
+                logger.info(f"Final attention analysis: {final_report}")
 
-    # Resume from checkpoint if specified
-    if args.resume:
-        trainer.setup_model_and_data(max_samples=args.max_samples)
-        trainer.load_checkpoint(args.resume)
+                # Save final top heads
+                for attention_type in ['encoder', 'decoder', 'cross_modal']:
+                    self.attention_analyzer.save_top_heads(
+                        self.global_step, attention_type, k=20)
 
-    # Start training
-    trainer.train(max_samples=args.max_samples)
+            # Close wandb logger
+            if self.wandb_logger:
+                self.wandb_logger.finish()
 
+            logger.info("Training completed!")
+            if total_emissions > 0:
+                logger.info(f"🌱 Final Carbon Footprint: {total_emissions:.6f} kg CO2 ({total_emissions * 1000:.3f} g CO2)")
 
-if __name__ == "__main__":
-    main()
+            return total_emissions

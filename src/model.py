@@ -801,7 +801,8 @@ class BitMarModel(nn.Module):
         cross_modal_loss: torch.Tensor,
         vision_loss: Optional[torch.Tensor] = None,
         memory_loss: Optional[torch.Tensor] = None,
-        step: int = 0
+        step: int = 0,
+        adaptive_controller=None  # NEW: Adaptive training controller
     ) -> Dict[str, torch.Tensor]:
         """
         Compute balanced multi-objective loss with adaptive scaling
@@ -882,16 +883,20 @@ class BitMarModel(nn.Module):
         vision_features: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
         mode: str = "train",
-        step: int = 0
+        step: int = 0,
+        adaptive_controller=None  # NEW: Adaptive training controller
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass through BitMar model with balanced losses
+        Forward pass through BitMar model with adaptive training support
         """
         batch_size, seq_len = input_ids.shape
 
-        # Apply encoder freezing if in training mode
+        # Apply adaptive encoder freezing if controller is provided
         freezing_status = {}
-        if mode == "train":
+        if mode == "train" and adaptive_controller is not None:
+            freezing_status = self.apply_adaptive_encoder_freezing(adaptive_controller)
+        elif mode == "train":
+            # Fallback to step-based freezing
             freezing_status = self.apply_encoder_freezing(step)
 
         # Encode text and vision
@@ -913,7 +918,8 @@ class BitMarModel(nn.Module):
         # Prepare decoder input
         memory_context = self.memory_to_decoder(retrieved_memory)
         memory_context_expanded = memory_context.unsqueeze(1).expand(-1, seq_len, -1)
-        fused_with_memory = fused_features + memory_context_expanded
+        step: int = 0,
+        adaptive_controller=None  # NEW: Adaptive training controller
         decoder_input = self.decoder_input_proj(fused_with_memory)
 
         # Generate text using BitNet decoder
@@ -925,6 +931,11 @@ class BitMarModel(nn.Module):
 
         # Compute losses if in training mode
         if mode == "train" and labels is not None:
+        # Get adaptive multiplier from controller if available
+        adaptive_multiplier = 1.0
+        if adaptive_controller is not None:
+            adaptive_multiplier = adaptive_controller.get_loss_weight_multiplier()
+
             # Primary decoder loss
             decoder_loss = decoder_outputs['loss']
 
@@ -944,9 +955,9 @@ class BitMarModel(nn.Module):
             if self.config.get('use_memory_consistency_loss', True):
                 memory_loss = self.compute_memory_consistency_loss(episode, retrieved_memory)
 
-            # Compute balanced loss
-            loss_dict = self.compute_balanced_loss(
-                decoder_loss, cross_modal_loss, vision_loss, memory_loss, step
+            # Compute balanced loss with adaptive controller support
+        scheduled_cross_modal_weight = adaptive_cross_modal_weight * cross_modal_schedule * adaptive_multiplier
+                decoder_loss, cross_modal_loss, vision_loss, memory_loss, step, adaptive_controller
             )
 
             final_loss = loss_dict['total_loss']
@@ -961,11 +972,34 @@ class BitMarModel(nn.Module):
             'vision_latent': vision_latent,
             'fused_features': fused_features,
             'episode': episode,
-            'retrieved_memory': retrieved_memory,
+            'adaptive_weight': adaptive_cross_modal_weight if self.adaptive_loss_scaling else torch.tensor(0.0),
+            'adaptive_multiplier': adaptive_multiplier
             'cross_attention': cross_attention,
             'memory_attention': memory_attention,
             'text_attention': text_attention,
             'decoder_attention': decoder_outputs.get('attention_patterns', None),
+    def apply_adaptive_encoder_freezing(self, adaptive_controller):
+        """
+        Apply encoder freezing based on adaptive controller decisions
+        """
+        if adaptive_controller is None:
+            return {'text_encoder_frozen': False, 'vision_encoder_frozen': False}
+        
+        freeze_states = adaptive_controller.get_encoder_freeze_states()
+        
+        # Freeze/unfreeze text encoder
+        for param in self.text_encoder.parameters():
+            param.requires_grad = not freeze_states['freeze_text_encoder']
+        
+        # Freeze/unfreeze vision encoder
+        for param in self.vision_encoder.parameters():
+            param.requires_grad = not freeze_states['freeze_vision_encoder']
+        
+        return {
+            'text_encoder_frozen': freeze_states['freeze_text_encoder'],
+            'vision_encoder_frozen': freeze_states['freeze_vision_encoder']
+        }
+
             'memory_usage': self.memory.memory_usage.clone(),
         }
 

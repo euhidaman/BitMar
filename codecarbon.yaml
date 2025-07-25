@@ -1,0 +1,37 @@
+# CodeCarbon configuration for remote training
+# Optimized for cloud/remote machine environments
+
+# Project settings
+project_name: "BitMar-BabyLM-Training"
+experiment_id: "bitmar-multimodal-training"
+
+# Tracking configuration
+tracking:
+  log_level: "INFO"
+  save_to_file: true
+  save_to_api: false  # Set to true if you want to use CodeCarbon API
+  output_dir: "./carbon_logs"
+  output_file: "emissions.csv"
+
+# Cloud configuration (for remote machines)
+cloud:
+  provider: "auto"  # Will auto-detect AWS, GCP, Azure, etc.
+  region: "auto"    # Will auto-detect region
+
+# GPU tracking
+gpu:
+  gpu_ids: [0]  # Track GPU 0, adjust if using multiple GPUs
+
+# Measurement settings
+measure_power_secs: 15  # Power measurement interval in seconds
+log_level: "INFO"
+
+# Geographic location (will be auto-detected for cloud providers)
+# Override these if needed for specific location
+# country_name: "United States"
+# country_iso_code: "USA"
+# region: "us-east-1"
+
+# API settings (optional - for CodeCarbon dashboard)
+# api_endpoint: "https://api.codecarbon.io"
+# api_key: "your_api_key_here"  # Set this if using CodeCarbon API
