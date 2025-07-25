@@ -5,13 +5,19 @@
 model:
   # Core architecture
   vocab_size: 32000
-  d_model: 512
-  n_heads: 8
-  n_layers: 6
-  d_ff: 2048
   max_seq_len: 2048
   dropout: 0.1
   layer_norm_eps: 1e-5
+
+  # Text encoder configuration (BitNet)
+  text_encoder_dim: 512
+  text_encoder_layers: 6
+  text_encoder_heads: 8
+
+  # Text decoder configuration (BitNet)
+  text_decoder_dim: 512
+  text_decoder_layers: 6
+  text_decoder_heads: 8
 
   # Vision encoder configuration
   vision_encoder: "dinov2"
