@@ -1522,3 +1522,53 @@ class BitMarTrainer:
                 logger.info(f"🌱 Final Carbon Footprint: {total_emissions:.6f} kg CO2 ({total_emissions * 1000:.3f} g CO2)")
 
             return total_emissions
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train BitMar model with episodic memory and attention analysis")
+
+    # Required arguments
+    parser.add_argument("--config", type=str, required=True, help="Path to configuration file")
+
+    # Optional arguments
+    parser.add_argument("--wandb_project", type=str, default="bitmar-training", help="Weights & Biases project name")
+    parser.add_argument("--max_epochs", type=int, help="Maximum number of epochs to train (overrides config)")
+    parser.add_argument("--track_attention_every_n_steps", type=int, default=1000, help="Track attention evolution every N steps")
+    parser.add_argument("--save_attention_every_n_epochs", type=int, default=5, help="Save attention analysis every N epochs")
+    parser.add_argument("--optimizer", type=str, choices=["adam", "adamw", "sgd"], help="Optimizer to use (overrides config)")
+    parser.add_argument("--device", type=str, help="Device to use for training (cuda, cpu)")
+    parser.add_argument("--resume_from_checkpoint", type=str, help="Path to checkpoint to resume from")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+
+    args = parser.parse_args()
+
+    try:
+        # Initialize trainer
+        trainer = BitMarTrainer(args.config, device=args.device)
+
+        # Override config values with command line arguments
+        if args.max_epochs:
+            trainer.config['training']['max_epochs'] = args.max_epochs
+        if args.optimizer:
+            trainer.config['training']['optimizer'] = args.optimizer
+
+        # Set tracking parameters
+        trainer.track_attention_every_n_steps = args.track_attention_every_n_steps
+        trainer.save_attention_every_n_epochs = args.save_attention_every_n_epochs
+
+        # Initialize wandb logger
+        trainer.setup_wandb_logger(args.wandb_project)
+
+        # Start training
+        logger.info("Starting BitMar training...")
+        logger.info(f"Configuration: {args.config}")
+        logger.info(f"Device: {trainer.device}")
+        logger.info(f"Max epochs: {trainer.config['training']['max_epochs']}")
+
+        trainer.train()
+
+    except Exception as e:
+        logger.error(f"Training failed with error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
