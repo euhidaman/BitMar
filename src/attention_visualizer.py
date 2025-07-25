@@ -157,8 +157,15 @@ class AttentionHeadAnalyzer:
             # Compute statistics
             avg_attention = attention_weights.mean(0)  # [seq_len, vision_dim]
             
-            # Attention distribution across text positions
-            attention_var = torch.var(avg_attention, dim=1).mean()  # Variance across vision dims
+            # Attention distribution across text positions with safe variance computation
+            try:
+                if avg_attention.shape[1] > 1:  # Need at least 2 elements for variance
+                    attention_var = torch.var(avg_attention, dim=1, unbiased=False).mean()  # Use population variance
+                else:
+                    attention_var = torch.tensor(0.0)  # Fallback for single element
+            except RuntimeError:
+                attention_var = torch.tensor(0.0)  # Fallback on any variance computation error
+
             attention_max = torch.max(avg_attention)
             attention_mean = torch.mean(avg_attention)
             
