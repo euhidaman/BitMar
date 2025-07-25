@@ -1,0 +1,334 @@
+# BitMar Adaptive Training Configuration
+# Dynamic multimodal similarity monitoring and adaptive interventions
+# Prevents sudden drops in cross-modal alignment through intelligent freezing and loss rebalancing
+
+model:
+  # Core architecture
+  vocab_size: 32000
+  d_model: 512
+  n_heads: 8
+  n_layers: 6
+  d_ff: 2048
+  max_seq_len: 2048
+  dropout: 0.1
+  layer_norm_eps: 1e-5
+
+  # Vision encoder configuration
+  vision_encoder: "dinov2"
+  vision_d_model: 768
+  vision_patch_size: 14
+  vision_image_size: 224
+  vision_dropout: 0.1
+
+  # Cross-modal attention settings
+  enable_cross_modal_attention: true
+  cross_modal_layers: [3, 4, 5]  # Which layers have cross-modal attention
+  cross_modal_heads: 4           # Dedicated heads for cross-modal attention
+
+  # Episodic memory configuration
+  memory_size: 1024
+  memory_head_dim: 64
+  memory_update_rate: 0.1
+  memory_decay_factor: 0.99
+  memory_consolidation_threshold: 0.8
+
+  # ADAPTIVE TRAINING - Dynamic similarity monitoring
+  enable_adaptive_training: true
+  adaptive_similarity_monitoring: true
+
+  # Dynamic thresholds (not hardcoded!)
+  base_similarity_threshold: 0.65    # Starting threshold
+  similarity_adaptation_rate: 0.02   # How fast threshold adapts
+  min_similarity_threshold: 0.45     # Lower bound
+  max_similarity_threshold: 0.85     # Upper bound
+
+training:
+  # Core training parameters
+  batch_size: 8
+  learning_rate: 3e-4
+  weight_decay: 0.01
+  max_epochs: 10
+  gradient_clip_val: 1.0
+  warmup_steps: 1000
+
+  # Optimizer configuration
+  optimizer: "adamw"
+  scheduler: "cosine"
+  min_lr: 1e-6
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-8
+
+  # Training efficiency
+  device: "cuda"
+  mixed_precision: true
+  gradient_checkpointing: true
+  compile_model: false
+
+  # Gradient accumulation for larger effective batch size
+  gradient_accumulation_steps: 2
+  effective_batch_size: 16  # batch_size * gradient_accumulation_steps
+
+data:
+  # Dataset paths
+  dataset_path: "D:/BabyLM/babylm_dataset"
+
+  # Text data
+  text_files:
+    - "train_50M/babylm_100M.train"
+    - "train_50M/babylm_dev"
+
+  # Vision features (DINOv2 embeddings)
+  vision_files:
+    - "cc_3M_dino_v2_states_1of2.npy"
+    - "cc_3M_dino_v2_states_2of2.npy"
+    - "local_narr_dino_v2_states.npy"
+
+  # Captions for multimodal alignment
+  caption_files:
+    - "cc_3M_captions.json"
+    - "local_narr_captions.json"
+
+  # Data processing
+  max_length: 512
+  batch_size: 8
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+
+  # Data splits
+  val_split: 0.1
+  test_split: 0.05
+
+  # Data augmentation
+  text_augmentation: true
+  vision_augmentation: false  # DINOv2 features are pre-computed
+
+output:
+  # Output directories
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"
+  attention_dir: "./attention_analysis"
+  memory_dir: "./memory_analysis"
+  results_dir: "./results"
+  adaptive_logs_dir: "./logs/adaptive_training"
+
+  # Saving configuration
+  save_every_n_epochs: 1
+  save_top_k: 5
+  save_best_similarity: true  # Save checkpoint when similarity improves
+
+  # Cleanup old checkpoints
+  cleanup_old_checkpoints: true
+  keep_last_n_checkpoints: 10
+
+wandb:
+  # Weights & Biases logging
+  project: "bitmar-adaptive-dynamic"
+  entity: null
+  run_name: null  # Auto-generated
+  tags: ["adaptive", "multimodal", "dynamic"]
+
+  # Logging frequency
+  log_every_n_steps: 25        # Frequent logging for similarity monitoring
+  log_gradients: false
+  log_parameters: false
+  watch_model: false
+
+  # Advanced logging
+  log_attention_weights: true
+  log_memory_usage: true
+  log_adaptive_interventions: true
+
+attention_analysis:
+  # Attention monitoring and analysis
+  enabled: true
+  log_every_n_steps: 50        # Monitor attention patterns
+  viz_every_n_epochs: 1        # Create visualizations every epoch
+  track_top_k: 15              # Track top attention heads
+
+  # Save attention matrices for analysis
+  save_attention_matrices: true
+  save_cross_modal_attention: true
+
+  # Attention evolution tracking
+  track_attention_evolution: true
+  evolution_window_size: 100
+
+# ADAPTIVE TRAINING CONTROLLER - Step-based dynamic similarity management
+adaptive_training:
+  # Core adaptive settings
+  enabled: true
+
+  # STEP-BY-STEP MONITORING (Every single step!)
+  monitor_every_step: true              # Compute similarity every step
+  similarity_window_size: 100           # 100-step sliding window for drop detection
+  similarity_smoothing_alpha: 0.1       # Light smoothing to reduce noise
+
+  # DROP DETECTION (15% threshold)
+  drop_threshold: 0.15                  # Trigger when similarity drops >15%
+  drop_detection_window: 100            # Steps to look back for drop detection
+  min_steps_between_interventions: 500  # Cooldown between interventions
+
+  # TRAINING PHASE DETECTION (Step-based thresholds)
+  early_training_threshold: 50000       # Steps < 50k = early training
+  mid_training_threshold: 150000        # Steps 50k-150k = mid training
+  # Steps > 150k = late training
+
+  # EARLY TRAINING INTERVENTIONS (< 50k steps)
+  early_training:
+    primary_strategy: "freeze_vision_encoder"    # Prevent vision dominance
+    freeze_duration_steps: 2000                  # Freeze for 2000 steps
+    auto_recovery: true                          # Auto-unfreeze after duration
+    backup_strategies:
+      - "boost_cross_modal_loss"                 # Backup: boost cross-modal loss
+      - "reduce_learning_rate"                   # Last resort: reduce LR
+    intervention_message: "Early training: Freezing vision encoder to prevent dominance"
+
+  # MID TRAINING INTERVENTIONS (50k-150k steps)
+  mid_training:
+    primary_strategy: "freeze_text_encoder"      # Prevent text overfitting
+    freeze_duration_steps: 2000                  # Freeze for 2000 steps
+    auto_recovery: true                          # Auto-unfreeze after duration
+    backup_strategies:
+      - "freeze_vision_encoder"                  # Backup: freeze vision instead
+      - "boost_cross_modal_loss"                 # Secondary: boost loss
+    intervention_message: "Mid training: Freezing text encoder to prevent overfitting"
+
+  # LATE TRAINING INTERVENTIONS (> 150k steps)
+  late_training:
+    primary_strategy: "gentle_loss_rebalancing"  # Only gentle adjustments
+    loss_boost_factor: 1.5                      # Gentle 1.5x boost (not aggressive)
+    boost_duration_steps: 2000                   # Boost for 2000 steps
+    auto_recovery: true                          # Auto-reduce after duration
+    backup_strategies:
+      - "reduce_learning_rate"                   # Backup: slight LR reduction
+    intervention_message: "Late training: Applying gentle loss rebalancing"
+
+  # AUTO-RECOVERY SYSTEM
+  auto_recovery:
+    enabled: true                               # Enable automatic recovery
+    unfreeze_after_steps: 2000                  # Unfreeze encoders after 2000 steps
+    reduce_loss_boost_after_steps: 2000         # Reduce loss boost after 2000 steps
+    recovery_check_frequency: 100               # Check recovery every 100 steps
+    recovery_success_threshold: 0.70            # Consider recovered if similarity > 70%
+    gradual_recovery: true                      # Gradually unfreeze/reduce boost
+    recovery_steps: 200                         # Steps to gradually recover
+
+  # SMART INTERVENTION LOGIC
+  intervention_strategies:
+    freeze_vision_encoder:
+      description: "Freeze vision encoder parameters"
+      freeze_vision_layers: true
+      freeze_cross_modal_attention: false       # Keep cross-modal active
+      freeze_duration: 2000
+
+    freeze_text_encoder:
+      description: "Freeze text encoder parameters"
+      freeze_text_layers: true
+      freeze_cross_modal_attention: false       # Keep cross-modal active
+      freeze_duration: 2000
+
+    gentle_loss_rebalancing:
+      description: "Gentle cross-modal loss boost"
+      cross_modal_weight_multiplier: 1.5        # Gentle boost
+      boost_duration: 2000
+      gradual_reduction: true
+
+    boost_cross_modal_loss:
+      description: "Strong cross-modal loss boost"
+      cross_modal_weight_multiplier: 2.5        # Stronger boost for early/mid
+      boost_duration: 2000
+      gradual_reduction: true
+
+    reduce_learning_rate:
+      description: "Temporary learning rate reduction"
+      lr_scale_factor: 0.5                      # Halve the learning rate
+      duration_steps: 2000
+      gradual_recovery: true
+
+  # INTERVENTION LOGGING AND TRACKING
+  log_interventions: true                       # Detailed intervention logging
+  log_similarity_every_step: false             # Don't spam logs (only on drops)
+  log_training_phase_changes: true             # Log when phase changes
+  save_intervention_history: true              # Save history for analysis
+
+  # INTERVENTION LIMITS (Prevent over-intervention)
+  max_interventions_per_phase: 5               # Max 5 interventions per phase
+  max_consecutive_interventions: 2             # Max 2 consecutive interventions
+  intervention_cooldown_multiplier: 1.5        # Increase cooldown after each intervention
+
+  # SIMILARITY RECOVERY MONITORING
+  recovery_monitoring:
+    enabled: true
+    target_similarity: 0.75                    # Target similarity after intervention
+    patience_steps: 1000                       # Wait 1000 steps for recovery
+    failure_threshold: 0.50                    # Below 50% = intervention failed
+    retry_with_backup: true                    # Try backup strategy if primary fails
+    max_retries: 2                             # Max 2 retries per drop event
+
+  # PHASE-SPECIFIC LOGGING
+  phase_logging:
+    log_phase_transitions: true
+    log_strategy_selection: true
+    log_recovery_progress: true
+    phase_summary_frequency: 10000             # Log phase summary every 10k steps
+
+# MEMORY ANALYSIS AND OPTIMIZATION
+memory_analysis:
+  enabled: true
+  log_memory_usage: true
+  optimize_memory_usage: true
+
+  # Memory efficiency monitoring
+  track_gpu_memory: true
+  memory_warning_threshold: 0.85       # Warn at 85% GPU memory usage
+  memory_cleanup_frequency: 100        # Steps between memory cleanup
+
+  # Memory consolidation
+  consolidation_frequency: 1000        # Steps between consolidations
+  consolidation_threshold: 0.8         # Similarity threshold for consolidation
+
+# EVALUATION AND BENCHMARKING
+evaluation:
+  # Evaluation frequency
+  eval_every_n_epochs: 1
+  eval_steps: 500                      # Max evaluation steps per epoch
+
+  # Metrics to track
+  track_perplexity: true
+  track_bleu_score: true
+  track_cross_modal_alignment: true
+  track_memory_efficiency: true
+
+  # Benchmarking
+  run_benchmarks: false                # Disable during training for speed
+  benchmark_frequency: 5               # Every N epochs if enabled
+
+# EARLY STOPPING AND CONVERGENCE
+early_stopping:
+  enabled: true
+  patience: 5                          # Epochs to wait for improvement
+  min_delta: 0.001                     # Minimum improvement threshold
+  monitor_metric: "val_loss"           # Primary metric to monitor
+
+  # Adaptive early stopping
+  similarity_based_stopping: true      # Stop if similarity converges
+  similarity_convergence_threshold: 0.001  # Similarity change threshold
+  convergence_window: 100              # Steps to check convergence
+
+# RESOURCE OPTIMIZATION
+optimization:
+  # Computational efficiency
+  use_flash_attention: false           # Not available for this model size
+  use_gradient_checkpointing: true
+  use_mixed_precision: true
+
+  # Memory optimization
+  offload_to_cpu: false                # Keep on GPU for speed
+  use_8bit_optimizer: false            # Standard precision for stability
+
+  # Training speed optimization
+  dataloader_optimization: true
+  pin_memory: true
+  persistent_workers: true
