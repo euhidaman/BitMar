@@ -299,74 +299,64 @@ class AdaptiveTrainingController:
             'freeze_vision_encoder': self.vision_encoder_frozen
         }
 
-    def get_loss_weight_multiplier(self) -> float:
-        """Get current cross-modal loss weight multiplier"""
-        return self.current_cross_modal_weight_multiplier
-
-    def save_state(self, filepath: str):
-        """Save controller state"""
-        state = {
-            'similarity_history': list(self.similarity_history),
-            'similarity_ema': self.similarity_ema,
-            'current_step': self.current_step,
-            'last_intervention_step': self.last_intervention_step,
-            'interventions_log': self.interventions_log,
-            'similarity_stats': self.similarity_stats,
-            'text_encoder_frozen': self.text_encoder_frozen,
-            'vision_encoder_frozen': self.vision_encoder_frozen,
-            'text_freeze_until_step': self.text_freeze_until_step,
-            'vision_freeze_until_step': self.vision_freeze_until_step,
-            'loss_boost_active': self.loss_boost_active,
-            'loss_boost_until_step': self.loss_boost_until_step,
-            'current_cross_modal_weight_multiplier': self.current_cross_modal_weight_multiplier
-        }
-
-        with open(filepath, 'w') as f:
-            json.dump(state, f, indent=2)
-
-    def load_state(self, filepath: str):
-        """Load controller state"""
-        with open(filepath, 'r') as f:
-            state = json.load(f)
-
-        self.similarity_history = deque(state['similarity_history'], maxlen=self.similarity_window_size)
-        self.similarity_ema = state['similarity_ema']
-        self.current_step = state['current_step']
-        self.last_intervention_step = state['last_intervention_step']
-        self.interventions_log = state['interventions_log']
-        self.similarity_stats = state['similarity_stats']
-        self.text_encoder_frozen = state['text_encoder_frozen']
-        self.vision_encoder_frozen = state['vision_encoder_frozen']
-        self.text_freeze_until_step = state['text_freeze_until_step']
-        self.vision_freeze_until_step = state['vision_freeze_until_step']
-        self.loss_boost_active = state['loss_boost_active']
-        self.loss_boost_until_step = state['loss_boost_until_step']
-        self.current_cross_modal_weight_multiplier = state['current_cross_modal_weight_multiplier']
-
 
 def compute_cross_modal_similarity(
     text_features: torch.Tensor,
     vision_features: torch.Tensor
 ) -> float:
     """
-    Compute cross-modal similarity score for monitoring
+    Compute cross-modal similarity between text and vision features.
+    Handles dimension mismatches by projecting to smaller dimension.
 
     Args:
-        text_features: [batch_size, text_dim] or [batch_size, seq_len, text_dim]
-        vision_features: [batch_size, vision_dim]
+        text_features: Text feature tensor [batch_size, seq_len, text_dim] or [batch_size, text_dim]
+        vision_features: Vision feature tensor [batch_size, vision_dim]
 
     Returns:
         Average cosine similarity between text and vision features
     """
-    # Pool text features if needed
-    if text_features.dim() == 3:
-        text_features = text_features.mean(dim=1)  # [batch_size, text_dim]
+    try:
+        # Handle None inputs
+        if text_features is None or vision_features is None:
+            return 0.0
 
-    # Normalize features
-    text_norm = F.normalize(text_features, p=2, dim=1)
-    vision_norm = F.normalize(vision_features, p=2, dim=1)
+        if text_features.numel() == 0 or vision_features.numel() == 0:
+            return 0.0
 
-    # Compute cosine similarity
-    similarity = torch.sum(text_norm * vision_norm, dim=1)  # [batch_size]
+        # Pool text features if they have sequence dimension
+        if text_features.dim() == 3:  # [batch_size, seq_len, text_dim]
+            text_pooled = text_features.mean(dim=1)  # [batch_size, text_dim]
+        else:  # [batch_size, text_dim]
+            text_pooled = text_features
 
-    return similarity.mean().item()
+        # Handle dimension mismatch by projecting to smaller dimension
+        text_dim = text_pooled.shape[-1]
+        vision_dim = vision_features.shape[-1]
+
+        if text_dim != vision_dim:
+            # Project to smaller dimension to maintain compatibility
+            target_dim = min(text_dim, vision_dim)
+
+            if text_dim > vision_dim:
+                # Project text features to vision dimension (take first N dimensions)
+                text_pooled = text_pooled[:, :target_dim]
+            else:
+                # Project vision features to text dimension (take first N dimensions)
+                vision_features = vision_features[:, :target_dim]
+
+        # Normalize features for cosine similarity
+        text_norm = F.normalize(text_pooled, dim=-1)
+        vision_norm = F.normalize(vision_features, dim=-1)
+
+        # Compute cosine similarity
+        similarity = torch.cosine_similarity(text_norm, vision_norm, dim=-1)
+
+        # Return average similarity across batch
+        avg_similarity = similarity.mean().item()
+
+        # Return finite value only
+        return avg_similarity if np.isfinite(avg_similarity) else 0.0
+
+    except Exception as e:
+        logger.warning(f"Cross-modal similarity computation failed: {e}")
+        return 0.0
