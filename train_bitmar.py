@@ -312,7 +312,8 @@ class BitMarTrainer:
                         input_ids=batch['input_ids'],
                         attention_mask=batch['attention_mask'],
                         vision_features=batch['vision_features'],
-                        labels=batch['labels']
+                        labels=batch['labels'],
+                        step=self.global_step  # Add step parameter for loss balancing
                     )
                     loss = outputs['loss']
                 except RuntimeError as e:
@@ -326,7 +327,8 @@ class BitMarTrainer:
                             input_ids=batch['input_ids'],
                             attention_mask=batch['attention_mask'],
                             vision_features=batch['vision_features'],
-                            labels=batch['labels']
+                            labels=batch['labels'],
+                            step=self.global_step  # Add step parameter for retry too
                         )
                         loss = outputs['loss']
                     else:

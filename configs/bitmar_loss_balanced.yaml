@@ -1,0 +1,133 @@
+model:
+  # BitNet Text Encoder (Ultra-Minimal)
+  vocab_size: 50257 # GPT-2 vocabulary (cannot reduce)
+  text_encoder_dim: 64 # Further reduced from 128
+  text_encoder_layers: 2 # Minimal layers for edge
+  text_encoder_heads: 2 # Minimal heads
+
+  # BitNet Text Decoder (Ultra-Minimal)
+  text_decoder_dim: 64 # Further reduced from 128
+  text_decoder_layers: 2 # Minimal layers for edge
+  text_decoder_heads: 2 # Minimal heads
+
+  # Vision processing (Compressed DiNOv2 features)
+  vision_encoder_dim: 768 # DiNOv2 input (fixed)
+  vision_latent_size: 32 # Heavily compressed (768 -> 32)
+  vision_hidden_size: 16 # Ultra-small hidden layer
+  vision_compression_method: "top_k_selection" # Best for edge devices
+  vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
+  vision_pool_size: 2 # 2x2 pooling
+
+  # Cross-modal fusion (Ultra-Minimal)
+  fusion_hidden_size: 32 # Minimal fusion
+  fusion_num_heads: 1 # Single head for basic cross-modal
+  fusion_num_layers: 1 # Single fusion layer
+
+  # Episodic Memory (Ultra-Compact for Edge)
+  memory_size: 8 # 8 memory slots only
+  episode_dim: 32 # Match vision_latent_size
+  memory_alpha: 0.3 # Higher adaptation for fewer slots
+  direct_writing: true
+  memory_compression: true # Enable memory compression
+
+  # Model configuration (Edge Optimized)
+  max_seq_len: 256 # Increased to match data config and better utilize GPU
+  dropout: 0.25 # Higher dropout for tiny model regularization
+
+  # LOSS BALANCING PARAMETERS (NEW!)
+  cross_modal_loss_weight: 0.25  # Strong cross-modal contrastive loss for tiny model
+  text_loss_weight: 1.0  # Standard language modeling weight
+  vision_loss_weight: 0.1  # Optional vision reconstruction loss
+  memory_loss_weight: 0.05  # Memory consistency regularization
+  adaptive_loss_scaling: true  # Dynamic loss rebalancing
+  loss_scale_temperature: 0.07  # CLIP-style temperature
+  use_memory_consistency_loss: true
+  use_vision_reconstruction: false  # Disabled for tiny model efficiency
+
+  # ENCODER FREEZING PARAMETERS (NEW!)
+  freeze_text_encoder_steps: 25000  # Freeze text encoder for first 25k steps
+  freeze_vision_encoder_steps: 15000  # Freeze vision encoder for first 15k steps
+
+# Feature reduction configuration
+vision_feature_reduction:
+  enabled: true
+  method: "top_k_selection" # Select most important 32 dims from 768
+  target_dim: 32 # Compress 768D -> 32D (24x reduction)
+  spatial_pooling: true # 14x14 -> 7x7 patches (4x reduction)
+  pool_method: "average" # Average pooling
+
+  # Alternative methods (for experimentation)
+  alternative_methods:
+    linear_projection:
+      target_dim: 32
+      learnable: false
+    pca_reduction:
+      target_dim: 32
+      explained_variance: 0.95
+    learned_compression:
+      target_dim: 32
+      hidden_dim: 128
+
+data:
+  # Dataset configuration (High GPU Utilization)
+  dataset_dir: "../babylm_dataset"  # Correct relative path from BitMar directory
+  text_encoder_name: "gpt2"
+  max_seq_length: 256 # Increased from 128 for better GPU utilization
+
+  # DataLoader settings (Optimized for RTX A6000)
+  batch_size: 64 # Increased from 16 for much better GPU usage (4x increase)
+  num_workers: 8 # More workers for better data loading pipeline
+  pin_memory: true # Enable for faster GPU transfers
+  persistent_workers: true # Keep workers alive for efficiency
+
+  # Validation (minimal)
+  validation_datasets:
+    - "glue/sst2" # Single lightweight dataset
+
+# Enhanced attention analysis (minimal for edge)
+attention_analysis:
+  # Enable attention head tracking and visualization
+  track_top_k: 2 # Track only top 2 heads
+  log_every_n_steps: 500 # Infrequent logging
+  viz_every_n_epochs: 10 # Rare visualization
+  save_head_patterns: false # Disable to save storage
+  analyze_memory_attention: false # Disable for performance
+  analyze_cross_modal: true # Keep only essential analysis
+
+training:
+  # Training configuration (Edge Optimized with improved numerical stability)
+  max_epochs: 50 # More epochs for tiny model
+  accumulate_grad_batches: 8 # Simulate larger batch via accumulation
+  gradient_clip_val: 0.5 # Reduced from 0.25 for better stability
+  val_check_interval: 5000
+  scheduler: "cosine"
+  min_lr: 0.00001 # Increased from 0.000001 to prevent vanishing gradients
+  warmup_steps: 500 # Increased from 200 for better stability
+  learning_rate: 0.0003 # Reduced from 0.0005 for numerical stability
+  weight_decay: 0.01 # Reduced from 0.05 for stability
+  track_attention: false # Disable for performance
+
+  # Additional numerical stability settings
+  loss_scale: 1.0 # Loss scaling factor
+  eps: 1e-6 # Epsilon for numerical stability
+
+# Weights & Biases configuration (optional)
+wandb:
+  project: "bitmar-loss-balanced-ultra-tiny"
+  entity: null  # Use default or set via environment
+  api_key: null  # Use WANDB_API_KEY environment variable
+  log_every_n_steps: 100
+  log_attention: true
+  log_memory: true
+  log_gradients: false # Disable for performance
+  log_quantization: false # Disable for performance
+  log_features: true
+  save_code: true
+
+# Output directories
+output:
+  checkpoint_dir: "checkpoints_loss_balanced"
+  log_dir: "logs_loss_balanced"
+  attention_dir: "attention_analysis_loss_balanced"
+  memory_dir: "memory_analysis_loss_balanced"
+  results_dir: "results_loss_balanced"

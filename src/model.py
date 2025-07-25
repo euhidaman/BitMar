@@ -627,13 +627,28 @@ class VisionEncoder(nn.Module):
 
 class BitMarModel(nn.Module):
     """
-    BitMar: Vision-Language Episodic Memory Transformer
-    Combines BitNet quantization, DiNOv2 vision, and Larimar episodic memory
+    BitMar: BitNet-quantized Vision-Language Episodic Memory Transformer
+    Combines 1.58-bit quantization, DiNOv2 vision features, and Larimar episodic memory
     """
 
     def __init__(self, config: Dict):
         super().__init__()
         self.config = config
+
+        # Loss balancing parameters
+        self.cross_modal_loss_weight = config.get('cross_modal_loss_weight', 0.1)
+        self.text_loss_weight = config.get('text_loss_weight', 1.0)
+        self.vision_loss_weight = config.get('vision_loss_weight', 0.1)
+        self.memory_loss_weight = config.get('memory_loss_weight', 0.05)
+
+        # Dynamic loss scaling
+        self.adaptive_loss_scaling = config.get('adaptive_loss_scaling', True)
+        self.loss_scale_temperature = config.get('loss_scale_temperature', 0.07)
+
+        # Encoder freezing parameters
+        self.freeze_text_encoder_steps = config.get('freeze_text_encoder_steps', 0)
+        self.freeze_vision_encoder_steps = config.get('freeze_vision_encoder_steps', 0)
+        self.current_step = 0
 
         # BitNet text encoder/decoder
         self.text_encoder = BitNetTextEncoder(
@@ -731,64 +746,174 @@ class BitMarModel(nn.Module):
 
         return episode
 
+    def compute_cross_modal_contrastive_loss(
+        self,
+        text_features: torch.Tensor,
+        vision_features: torch.Tensor,
+        temperature: float = 0.07
+    ) -> torch.Tensor:
+        """
+        Compute cross-modal contrastive loss similar to CLIP
+        """
+        batch_size = text_features.shape[0]
+
+        # Normalize features
+        text_features = F.normalize(text_features, dim=-1)
+        vision_features = F.normalize(vision_features, dim=-1)
+
+        # Compute similarity matrix
+        logits = torch.matmul(text_features, vision_features.T) / temperature
+
+        # Create labels (diagonal should be positive pairs)
+        labels = torch.arange(batch_size, device=logits.device)
+
+        # Compute cross-entropy loss for both directions
+        text_to_vision_loss = F.cross_entropy(logits, labels)
+        vision_to_text_loss = F.cross_entropy(logits.T, labels)
+
+        return (text_to_vision_loss + vision_to_text_loss) / 2
+
+    def compute_vision_reconstruction_loss(
+        self,
+        original_vision: torch.Tensor,
+        reconstructed_vision: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute vision reconstruction loss to prevent vision encoder collapse
+        """
+        return F.mse_loss(reconstructed_vision, original_vision)
+
+    def compute_memory_consistency_loss(
+        self,
+        episode: torch.Tensor,
+        retrieved_memory: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute memory consistency loss to encourage meaningful memory usage
+        """
+        # L2 regularization on memory difference
+        memory_diff = episode - retrieved_memory
+        return torch.mean(torch.norm(memory_diff, dim=-1))
+
+    def compute_balanced_loss(
+        self,
+        decoder_loss: torch.Tensor,
+        cross_modal_loss: torch.Tensor,
+        vision_loss: Optional[torch.Tensor] = None,
+        memory_loss: Optional[torch.Tensor] = None,
+        step: int = 0
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Compute balanced multi-objective loss with adaptive scaling
+        """
+        losses = {'decoder_loss': decoder_loss, 'cross_modal_loss': cross_modal_loss}
+
+        if vision_loss is not None:
+            losses['vision_loss'] = vision_loss
+        if memory_loss is not None:
+            losses['memory_loss'] = memory_loss
+
+        if self.adaptive_loss_scaling:
+            # Adaptive scaling based on loss magnitudes
+            with torch.no_grad():
+                # Compute relative loss scales
+                decoder_scale = decoder_loss.detach()
+                cross_modal_scale = cross_modal_loss.detach()
+
+                # Prevent division by zero
+                if decoder_scale > 1e-8:
+                    adaptive_cross_modal_weight = (decoder_scale / cross_modal_scale.clamp(min=1e-8)) * self.cross_modal_loss_weight
+                else:
+                    adaptive_cross_modal_weight = self.cross_modal_loss_weight
+
+                # Clamp adaptive weights
+                adaptive_cross_modal_weight = torch.clamp(adaptive_cross_modal_weight, 0.01, 1.0)
+        else:
+            adaptive_cross_modal_weight = self.cross_modal_loss_weight
+
+        # Apply loss scheduling (increase cross-modal importance over time)
+        cross_modal_schedule = min(1.0, step / 50000)  # Ramp up over 50k steps
+        scheduled_cross_modal_weight = adaptive_cross_modal_weight * cross_modal_schedule
+
+        # Compute weighted total loss
+        total_loss = (
+            self.text_loss_weight * decoder_loss +
+            scheduled_cross_modal_weight * cross_modal_loss
+        )
+
+        if vision_loss is not None:
+            total_loss += self.vision_loss_weight * vision_loss
+        if memory_loss is not None:
+            total_loss += self.memory_loss_weight * memory_loss
+
+        losses.update({
+            'total_loss': total_loss,
+            'cross_modal_weight': scheduled_cross_modal_weight,
+            'adaptive_weight': adaptive_cross_modal_weight if self.adaptive_loss_scaling else torch.tensor(0.0)
+        })
+
+        return losses
+
+    def apply_encoder_freezing(self, step: int):
+        """
+        Apply temporary encoder freezing based on training step
+        """
+        self.current_step = step
+
+        # Freeze text encoder if within freezing window
+        freeze_text = step < self.freeze_text_encoder_steps
+        for param in self.text_encoder.parameters():
+            param.requires_grad = not freeze_text
+
+        # Freeze vision encoder if within freezing window
+        freeze_vision = step < self.freeze_vision_encoder_steps
+        for param in self.vision_encoder.parameters():
+            param.requires_grad = not freeze_vision
+
+        return {
+            'text_encoder_frozen': freeze_text,
+            'vision_encoder_frozen': freeze_vision
+        }
+
     def forward(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         vision_features: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
-        mode: str = "train"
+        mode: str = "train",
+        step: int = 0
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass through BitMar model
-
-        Args:
-            input_ids: [batch_size, seq_len]
-            attention_mask: [batch_size, seq_len]
-            vision_features: [batch_size, vision_dim]
-            labels: [batch_size, seq_len] - for training
-            mode: "train" or "inference"
-
-        Returns:
-            Dictionary containing outputs and analysis
+        Forward pass through BitMar model with balanced losses
         """
         batch_size, seq_len = input_ids.shape
 
+        # Apply encoder freezing if in training mode
+        freezing_status = {}
+        if mode == "train":
+            freezing_status = self.apply_encoder_freezing(step)
+
         # Encode text and vision
-        text_features, text_attention = self.encode_text(
-            input_ids, attention_mask)
+        text_features, text_attention = self.encode_text(input_ids, attention_mask)
         vision_latent = self.encode_vision(vision_features)
 
         # Cross-modal fusion
-        fused_features, cross_attention = self.fusion(
-            text_features, vision_latent)
+        fused_features, cross_attention = self.fusion(text_features, vision_latent)
 
         # Create multimodal episode
-        episode = self.create_episode(
-            text_features, vision_latent, cross_attention)
+        episode = self.create_episode(text_features, vision_latent, cross_attention)
 
         # Episodic memory interaction
         if mode == "train":
-            # Write and read from memory
-            retrieved_memory, memory_attention = self.memory(
-                episode, mode="read_write")
+            retrieved_memory, memory_attention = self.memory(episode, mode="read_write")
         else:
-            # Only read from memory during inference
-            retrieved_memory, memory_attention = self.memory(
-                episode, mode="read")
+            retrieved_memory, memory_attention = self.memory(episode, mode="read")
 
         # Prepare decoder input
-        memory_context = self.memory_to_decoder(
-            retrieved_memory)  # [batch_size, fusion_hidden_size]
-
-        # Add memory context to fused features
-        # Broadcast memory context to sequence length
-        memory_context_expanded = memory_context.unsqueeze(
-            1).expand(-1, seq_len, -1)
+        memory_context = self.memory_to_decoder(retrieved_memory)
+        memory_context_expanded = memory_context.unsqueeze(1).expand(-1, seq_len, -1)
         fused_with_memory = fused_features + memory_context_expanded
-
-        # Project to decoder dimension
-        # [batch_size, seq_len, text_decoder_dim]
         decoder_input = self.decoder_input_proj(fused_with_memory)
 
         # Generate text using BitNet decoder
@@ -798,8 +923,39 @@ class BitMarModel(nn.Module):
             labels=labels
         )
 
-        return {
-            'loss': decoder_outputs['loss'],
+        # Compute losses if in training mode
+        if mode == "train" and labels is not None:
+            # Primary decoder loss
+            decoder_loss = decoder_outputs['loss']
+
+            # Cross-modal contrastive loss
+            text_pooled = text_features.mean(dim=1)  # Pool text features
+            cross_modal_loss = self.compute_cross_modal_contrastive_loss(
+                text_pooled, vision_latent, temperature=self.loss_scale_temperature
+            )
+
+            # Optional additional losses
+            vision_loss = None
+            if hasattr(self, 'vision_reconstruction') and self.config.get('use_vision_reconstruction', False):
+                reconstructed_vision = self.vision_reconstruction(vision_latent)
+                vision_loss = self.compute_vision_reconstruction_loss(vision_features, reconstructed_vision)
+
+            memory_loss = None
+            if self.config.get('use_memory_consistency_loss', True):
+                memory_loss = self.compute_memory_consistency_loss(episode, retrieved_memory)
+
+            # Compute balanced loss
+            loss_dict = self.compute_balanced_loss(
+                decoder_loss, cross_modal_loss, vision_loss, memory_loss, step
+            )
+
+            final_loss = loss_dict['total_loss']
+        else:
+            final_loss = decoder_outputs['loss'] if 'loss' in decoder_outputs else None
+            loss_dict = {}
+
+        result = {
+            'loss': final_loss,
             'logits': decoder_outputs['logits'],
             'text_features': text_features,
             'vision_latent': vision_latent,
@@ -809,9 +965,16 @@ class BitMarModel(nn.Module):
             'cross_attention': cross_attention,
             'memory_attention': memory_attention,
             'text_attention': text_attention,
-            'decoder_attention': decoder_outputs['attention_patterns'],
+            'decoder_attention': decoder_outputs.get('attention_patterns', None),
             'memory_usage': self.memory.memory_usage.clone(),
         }
+
+        # Add loss breakdown and freezing status
+        if mode == "train":
+            result.update(loss_dict)
+            result.update(freezing_status)
+
+        return result
 
     def generate(
         self,
