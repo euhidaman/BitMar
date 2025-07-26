@@ -39,6 +39,14 @@ except ImportError:
     BITSANDBYTES_AVAILABLE = False
     print("Warning: bitsandbytes not available. Install with: pip install bitsandbytes")
 
+# Try to import Lion optimizer
+try:
+    from lion_pytorch import Lion
+    LION_AVAILABLE = True
+except ImportError:
+    LION_AVAILABLE = False
+    print("Warning: Lion optimizer not available. Install with: pip install lion-pytorch")
+
 # Import adaptive training controller
 try:
     from src.adaptive_training_controller import AdaptiveTrainingController, compute_cross_modal_similarity
@@ -390,11 +398,73 @@ class BitMarTrainer:
                 weight_decay=self.config['training']['weight_decay']
             )
             logger.info(f"Using RMSprop optimizer")
+        elif optimizer_type == 'lion' and LION_AVAILABLE:
+            # Use Lion optimizer if available and requested
+            optimizer_params = self.config['training'].get('optimizer_config', {})
+            self.optimizer = Lion(
+                self.model.parameters(),
+                lr=self.config['training']['learning_rate'],
+                betas=optimizer_params.get('betas', [0.9, 0.99]),
+                weight_decay=self.config['training']['weight_decay']
+            )
+            logger.info(f"Using Lion optimizer with betas={optimizer_params.get('betas', [0.9, 0.99])}")
+        elif optimizer_type == 'lion' and not LION_AVAILABLE:
+            logger.warning("Lion optimizer requested but not available. Falling back to AdamW.")
+            self.optimizer = AdamW(
+                self.model.parameters(),
+                lr=self.config['training']['learning_rate'],
+                weight_decay=self.config['training']['weight_decay'],
+                betas=(0.9, 0.999),
+                eps=1e-8
+            )
+            logger.info(f"Using AdamW optimizer (Lion fallback)")
         else:
             raise ValueError(f"Unsupported optimizer: {optimizer_type}")
 
-        # Learning rate scheduler with proper step-based scheduling
-        if self.config['training']['scheduler'] == 'cosine':
+        # Learning rate scheduler with warmup and cosine restarts
+        scheduler_type = self.config['training'].get('scheduler', 'cosine')
+        warmup_steps = self.config['training'].get('warmup_steps', 1000)
+
+        if scheduler_type == 'cosine_with_restarts':
+            # Calculate total training steps for proper cosine annealing with restarts
+            train_loader = self.data_module.train_dataloader()
+            steps_per_epoch = len(train_loader)
+            total_steps = steps_per_epoch * \
+                self.config['training']['max_epochs']
+
+            scheduler_config = self.config['training'].get('scheduler_config', {})
+            T_0 = scheduler_config.get('T_0', 1000)
+            T_mult = scheduler_config.get('T_mult', 2)
+            eta_min_ratio = scheduler_config.get('eta_min_ratio', 0.1)
+            eta_min = self.config['training']['learning_rate'] * eta_min_ratio
+
+            from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+            self.scheduler = CosineAnnealingWarmRestarts(
+                self.optimizer,
+                T_0=T_0,
+                T_mult=T_mult,
+                eta_min=eta_min
+            )
+            self.scheduler_step_mode = 'step'
+
+            # Add warmup scheduler wrapper if warmup_steps > 0
+            if warmup_steps > 0:
+                from transformers import get_cosine_with_hard_restarts_schedule_with_warmup
+                try:
+                    self.scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(
+                        self.optimizer,
+                        num_warmup_steps=warmup_steps,
+                        num_training_steps=total_steps,
+                        num_cycles=max(1, total_steps // T_0)
+                    )
+                    logger.info(f"Cosine with restarts + warmup scheduler: {warmup_steps} warmup steps, T_0={T_0}, T_mult={T_mult}")
+                except ImportError:
+                    logger.warning("Transformers warmup scheduler not available, using basic cosine with restarts")
+                    logger.info(f"Cosine with restarts scheduler: T_0={T_0}, T_mult={T_mult}, eta_min={eta_min}")
+            else:
+                logger.info(f"Cosine with restarts scheduler: T_0={T_0}, T_mult={T_mult}, eta_min={eta_min}")
+
+        elif scheduler_type == 'cosine':
             # Calculate total training steps for proper cosine annealing
             train_loader = self.data_module.train_dataloader()
             steps_per_epoch = len(train_loader)
@@ -1535,7 +1605,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", type=int, help="Maximum number of epochs to train (overrides config)")
     parser.add_argument("--track_attention_every_n_steps", type=int, default=1000, help="Track attention evolution every N steps")
     parser.add_argument("--save_attention_every_n_epochs", type=int, default=5, help="Save attention analysis every N epochs")
-    parser.add_argument("--optimizer", type=str, choices=["adam", "adamw", "adamw8bit", "sgd"], help="Optimizer to use (overrides config)")
+    parser.add_argument("--optimizer", type=str, choices=["adam", "adamw", "adamw8bit", "sgd", "lion"], help="Optimizer to use (overrides config)")
     parser.add_argument("--device", type=str, help="Device to use for training (cuda, cpu)")
     parser.add_argument("--resume_from_checkpoint", type=str, help="Path to checkpoint to resume from")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")

@@ -280,89 +280,98 @@ adaptive_training:
 
   # STEP-BY-STEP MONITORING (Every single step!)
   monitor_every_step: true              # Compute similarity every step
-  similarity_window_size: 100           # 100-step sliding window for drop detection
-  similarity_smoothing_alpha: 0.1       # Light smoothing to reduce noise
+  similarity_window_size: 200           # INCREASED: 200-step sliding window for more stable detection
+  similarity_smoothing_alpha: 0.05      # REDUCED: More smoothing to reduce noise
 
-  # DROP DETECTION (15% threshold)
-  drop_threshold: 0.15                  # Trigger when similarity drops >15%
-  drop_detection_window: 100            # Steps to look back for drop detection
-  min_steps_between_interventions: 500  # Cooldown between interventions
+  # DROP DETECTION (More conservative threshold)
+  drop_threshold: 0.25                  # INCREASED: Trigger when similarity drops >25% (was 15%)
+  drop_detection_window: 200            # INCREASED: Steps to look back for drop detection
+  min_steps_between_interventions: 1500 # INCREASED: Longer cooldown between interventions
 
   # TRAINING PHASE DETECTION (Step-based thresholds)
   early_training_threshold: 50000       # Steps < 50k = early training
   mid_training_threshold: 150000        # Steps 50k-150k = mid training
   # Steps > 150k = late training
 
-  # EARLY TRAINING INTERVENTIONS (< 50k steps)
+  # Don't trigger interventions until we have enough stability data
+  min_steps_before_interventions: 1000  # NEW: Wait 1000 steps before any interventions
+
+  # EARLY TRAINING INTERVENTIONS (< 50k steps) - More conservative
   early_training:
-    primary_strategy: "freeze_vision_encoder"    # Prevent vision dominance
-    freeze_duration_steps: 2000                  # Freeze for 2000 steps
+    primary_strategy: "rebalance_loss_gentle"    # CHANGED: Start with gentle rebalancing
+    freeze_duration_steps: 1500                  # REDUCED: Shorter freeze duration
     auto_recovery: true                          # Auto-unfreeze after duration
     backup_strategies:
-      - "boost_cross_modal_loss"                 # Backup: boost cross-modal loss
+      - "freeze_vision_encoder"                  # Backup: freeze vision if gentle fails
       - "reduce_learning_rate"                   # Last resort: reduce LR
-    intervention_message: "Early training: Freezing vision encoder to prevent dominance"
+    intervention_message: "Early training: Applying gentle loss rebalancing"
 
   # MID TRAINING INTERVENTIONS (50k-150k steps)
   mid_training:
-    primary_strategy: "freeze_text_encoder"      # Prevent text overfitting
-    freeze_duration_steps: 2000                  # Freeze for 2000 steps
+    primary_strategy: "rebalance_loss_gentle"    # CHANGED: Also start gentle
+    freeze_duration_steps: 1500                  # REDUCED: Shorter freeze duration
     auto_recovery: true                          # Auto-unfreeze after duration
     backup_strategies:
-      - "freeze_vision_encoder"                  # Backup: freeze vision instead
-      - "boost_cross_modal_loss"                 # Secondary: boost loss
-    intervention_message: "Mid training: Freezing text encoder to prevent overfitting"
+      - "freeze_text_encoder"                    # Backup: freeze text if needed
+      - "freeze_vision_encoder"                  # Secondary: freeze vision instead
+    intervention_message: "Mid training: Applying gentle loss rebalancing"
 
   # LATE TRAINING INTERVENTIONS (> 150k steps)
   late_training:
     primary_strategy: "gentle_loss_rebalancing"  # Only gentle adjustments
-    loss_boost_factor: 1.5                      # Gentle 1.5x boost (not aggressive)
-    boost_duration_steps: 2000                   # Boost for 2000 steps
+    loss_boost_factor: 1.2                      # REDUCED: Very gentle 1.2x boost
+    boost_duration_steps: 1000                   # REDUCED: Shorter boost duration
     auto_recovery: true                          # Auto-reduce after duration
     backup_strategies:
       - "reduce_learning_rate"                   # Backup: slight LR reduction
-    intervention_message: "Late training: Applying gentle loss rebalancing"
+    intervention_message: "Late training: Applying very gentle loss rebalancing"
 
   # AUTO-RECOVERY SYSTEM
   auto_recovery:
     enabled: true                               # Enable automatic recovery
-    unfreeze_after_steps: 2000                  # Unfreeze encoders after 2000 steps
-    reduce_loss_boost_after_steps: 2000         # Reduce loss boost after 2000 steps
-    recovery_check_frequency: 100               # Check recovery every 100 steps
-    recovery_success_threshold: 0.70            # Consider recovered if similarity > 70%
+    unfreeze_after_steps: 1500                  # REDUCED: Unfreeze encoders after 1500 steps
+    reduce_loss_boost_after_steps: 1500         # REDUCED: Reduce loss boost after 1500 steps
+    recovery_check_frequency: 200               # INCREASED: Check recovery every 200 steps
+    recovery_success_threshold: 0.60            # REDUCED: Consider recovered if similarity > 60%
     gradual_recovery: true                      # Gradually unfreeze/reduce boost
-    recovery_steps: 200                         # Steps to gradually recover
+    recovery_steps: 300                         # INCREASED: More steps to gradually recover
 
-  # SMART INTERVENTION LOGIC
+  # SMART INTERVENTION LOGIC - More conservative
   intervention_strategies:
+    rebalance_loss_gentle:
+      description: "Very gentle cross-modal loss boost"
+      cross_modal_weight_multiplier: 1.3        # REDUCED: Very gentle boost
+      boost_duration: 1000                      # REDUCED: Shorter duration
+      gradual_reduction: true
+
     freeze_vision_encoder:
       description: "Freeze vision encoder parameters"
       freeze_vision_layers: true
       freeze_cross_modal_attention: false       # Keep cross-modal active
-      freeze_duration: 2000
+      freeze_duration: 1500                     # REDUCED: Shorter freeze
 
     freeze_text_encoder:
       description: "Freeze text encoder parameters"
       freeze_text_layers: true
       freeze_cross_modal_attention: false       # Keep cross-modal active
-      freeze_duration: 2000
+      freeze_duration: 1500                     # REDUCED: Shorter freeze
 
     gentle_loss_rebalancing:
       description: "Gentle cross-modal loss boost"
-      cross_modal_weight_multiplier: 1.5        # Gentle boost
-      boost_duration: 2000
+      cross_modal_weight_multiplier: 1.2        # REDUCED: More gentle
+      boost_duration: 1000                      # REDUCED: Shorter duration
       gradual_reduction: true
 
     boost_cross_modal_loss:
-      description: "Strong cross-modal loss boost"
-      cross_modal_weight_multiplier: 2.5        # Stronger boost for early/mid
-      boost_duration: 2000
+      description: "Moderate cross-modal loss boost"
+      cross_modal_weight_multiplier: 1.8        # REDUCED: Less aggressive boost
+      boost_duration: 1500                      # REDUCED: Shorter duration
       gradual_reduction: true
 
     reduce_learning_rate:
       description: "Temporary learning rate reduction"
-      lr_scale_factor: 0.5                      # Halve the learning rate
-      duration_steps: 2000
+      lr_scale_factor: 0.7                      # LESS aggressive: 70% instead of 50%
+      duration_steps: 1500                      # REDUCED: Shorter duration
       gradual_recovery: true
 
   # INTERVENTION LOGGING AND TRACKING
@@ -371,24 +380,23 @@ adaptive_training:
   log_training_phase_changes: true             # Log when phase changes
   save_intervention_history: true              # Save history for analysis
 
-  # INTERVENTION LIMITS (Prevent over-intervention)
-  max_interventions_per_phase: 5               # Max 5 interventions per phase
-  max_consecutive_interventions: 2             # Max 2 consecutive interventions
-  intervention_cooldown_multiplier: 1.5        # Increase cooldown after each intervention
+  # INTERVENTION LIMITS (Prevent over-intervention) - More restrictive
+  max_interventions_per_phase: 3               # REDUCED: Max 3 interventions per phase
+  max_consecutive_interventions: 1             # REDUCED: Max 1 consecutive intervention
+  intervention_cooldown_multiplier: 2.0        # INCREASED: Double cooldown after each intervention
 
-  # SIMILARITY RECOVERY MONITORING
+  # SIMILARITY RECOVERY MONITORING - More patient
   recovery_monitoring:
     enabled: true
-    target_similarity: 0.75                    # Target similarity after intervention
-    patience_steps: 1000                       # Wait 1000 steps for recovery
-    failure_threshold: 0.50                    # Below 50% = intervention failed
+    target_similarity: 0.65                    # REDUCED: Lower target similarity
+    patience_steps: 2000                       # INCREASED: Wait 2000 steps for recovery
+    failure_threshold: 0.40                    # REDUCED: Below 40% = intervention failed
     retry_with_backup: true                    # Try backup strategy if primary fails
-    max_retries: 2                             # Max 2 retries per drop event
+    max_retries: 1                             # REDUCED: Max 1 retry per drop event
 
   # PHASE-SPECIFIC LOGGING
   phase_logging:
     log_phase_transitions: true
     log_strategy_selection: true
     log_recovery_progress: true
-    phase_summary_frequency: 10000             # Log phase summary every 10k steps
-
+    phase_summary_frequency: 15000             # INCREASED: Log phase summary every 15k steps
