@@ -407,9 +407,11 @@ class BitMarTrainer:
                 betas=optimizer_params.get('betas', [0.9, 0.99]),
                 weight_decay=self.config['training']['weight_decay']
             )
-            logger.info(f"Using Lion optimizer with betas={optimizer_params.get('betas', [0.9, 0.99])}")
+            logger.info(f"✅ Using Lion optimizer with betas={optimizer_params.get('betas', [0.9, 0.99])}")
         elif optimizer_type == 'lion' and not LION_AVAILABLE:
-            logger.warning("Lion optimizer requested but not available. Falling back to AdamW.")
+            logger.error("❌ Lion optimizer requested but not available!")
+            logger.error("📦 Install with: pip install lion-pytorch")
+            logger.warning("🔄 Falling back to AdamW optimizer...")
             self.optimizer = AdamW(
                 self.model.parameters(),
                 lr=self.config['training']['learning_rate'],
