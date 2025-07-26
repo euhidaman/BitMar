@@ -352,7 +352,7 @@ class BitMarTrainer:
 
     def setup_optimizer(self):
         """Setup optimizer and learning rate scheduler"""
-        optimizer_type = self.config.get('optimizer', 'adamw').lower()
+        optimizer_type = self.config['training'].get('optimizer', 'adamw').lower()
 
         # Use AdamW8bit if bitsandbytes is available and requested
         if BITSANDBYTES_AVAILABLE and optimizer_type == 'adamw8bit':
