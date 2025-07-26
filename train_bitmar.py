@@ -485,8 +485,25 @@ class BitMarTrainer:
             self.scheduler = None
             self.scheduler_step_mode = 'epoch'
 
+        # Dynamic logging based on actual optimizer type
+        actual_optimizer_name = type(self.optimizer).__name__
+        if hasattr(self.optimizer, '__module__') and 'lion' in self.optimizer.__module__.lower():
+            optimizer_display_name = "LION"
+        elif actual_optimizer_name == 'AdamW':
+            optimizer_display_name = "ADAMW"
+        elif actual_optimizer_name == 'Adam':
+            optimizer_display_name = "ADAM"
+        elif actual_optimizer_name == 'SGD':
+            optimizer_display_name = "SGD"
+        elif actual_optimizer_name == 'RMSprop':
+            optimizer_display_name = "RMSPROP"
+        elif 'AdamW8bit' in actual_optimizer_name:
+            optimizer_display_name = "ADAMW8BIT"
+        else:
+            optimizer_display_name = actual_optimizer_name.upper()
+
         logger.info(
-            f"Optimizer: {optimizer_type.upper()} with LR={self.config['training']['learning_rate']}")
+            f"Optimizer: {optimizer_display_name} with LR={self.config['training']['learning_rate']}")
         if self.scheduler:
             logger.info(
                 f"Scheduler: {self.config['training']['scheduler']} ({'step-based' if self.scheduler_step_mode == 'step' else 'epoch-based'})")
