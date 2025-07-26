@@ -30,17 +30,67 @@ model:
   # Episodic Memory (Ultra-Compact for Edge)
   memory_size: 8 # 8 memory slots only
   episode_dim: 32 # Match vision_latent_size
-  memory_alpha: 0.3 # Higher adaptation for fewer slots
+  memory_alpha: 0.2 # Reduced from 0.3 for gentler updates
   direct_writing: true
   memory_compression: true # Enable memory compression
 
   # Model configuration (Edge Optimized)
   max_seq_len: 256 # Increased to match data config and better utilize GPU
-  dropout: 0.25 # Higher dropout for tiny model regularization
+  dropout: 0.15 # Reduced from 0.25 for better initial convergence
 
   # ADAPTIVE TRAINING - Dynamic similarity monitoring
   enable_adaptive_training: true
   adaptive_similarity_monitoring: true
+
+  # CRITICAL: Better initialization for lower initial loss
+  initialization:
+    # Text encoder initialization
+    text_embedding_init: "normal"
+    text_embedding_std: 0.01 # Very small for stability
+
+    # Vision encoder initialization
+    vision_projection_init: "xavier_uniform"
+    vision_projection_gain: 0.3 # Small gain for stability
+
+    # Cross-modal fusion initialization
+    fusion_init: "kaiming_normal"
+    fusion_init_mode: "fan_in"
+    fusion_init_gain: 0.2 # Very conservative
+
+    # Memory initialization
+    memory_init: "zeros" # Start with zero memory for stability
+    memory_query_init: "xavier_uniform"
+    memory_key_init: "xavier_uniform"
+    memory_value_init: "xavier_uniform"
+    memory_init_gain: 0.1 # Very small for memory stability
+
+    # BitNet quantization initialization
+    bitnet_weight_init: "uniform"
+    bitnet_weight_bound: 0.05 # Very small initial weights
+    bitnet_scale_init: 0.01 # Small scale factor
+
+    # Layer normalization
+    layernorm_weight_init: 1.0
+    layernorm_bias_init: 0.0
+
+  # Enhanced loss configuration for multimodal training
+  loss_config:
+    # Use label smoothing to prevent overconfident predictions
+    label_smoothing: 0.1
+
+    # Focal loss parameters for hard example mining
+    use_focal_loss: true
+    focal_alpha: 0.25
+    focal_gamma: 2.0
+
+    # Cross-modal alignment loss
+    cross_modal_alignment_weight: 0.1
+    alignment_temperature: 0.5
+
+    # Contrastive learning for better multimodal representation
+    use_contrastive_loss: true
+    contrastive_temperature: 0.1
+    contrastive_margin: 0.5
 
 # Feature reduction configuration
 vision_feature_reduction:
@@ -88,22 +138,66 @@ attention_analysis:
   analyze_cross_modal: true # Keep only essential analysis
 
 training:
-  # Training configuration (Edge Optimized with improved numerical stability)
-  max_epochs: 50 # More epochs for tiny model
-  accumulate_grad_batches: 8 # Simulate larger batch via accumulation
-  gradient_clip_val: 0.5 # Reduced from 0.25 for better stability
+  # Training configuration (Optimized for lower initial loss)
+  max_epochs: 50
+  accumulate_grad_batches: 8
+  gradient_clip_val: 1.0 # Increased from 0.5 for better stability
   val_check_interval: 5000
-  scheduler: "cosine"
-  min_lr: 0.00001 # Increased from 0.000001 to prevent vanishing gradients
-  warmup_steps: 500 # Increased from 200 for better stability
-  learning_rate: 0.0003 # Reduced from 0.0005 for numerical stability
-  weight_decay: 0.01 # Reduced from 0.05 for stability
-  track_attention: false # Disable for performance
+  scheduler: "cosine_with_restarts" # Better than plain cosine for multimodal
+  min_lr: 0.000005 # Reduced minimum LR
+  warmup_steps: 2000 # Increased warmup for better initialization
+  learning_rate: 0.0001 # Reduced from 0.0003 - too aggressive for tiny model
+  weight_decay: 0.005 # Reduced from 0.01 for stability
+  track_attention: false
 
-  # Additional numerical stability settings
-  loss_scale: 1.0 # Loss scaling factor
-  eps: 1e-6 # Epsilon for numerical stability
-  max_loss_threshold: 50.0 # Maximum allowed loss value
+  # CRITICAL: Better optimizer configuration
+  optimizer: "lion" # Lion optimizer often better for small models
+  optimizer_config:
+    betas: [0.9, 0.99] # More conservative momentum
+    eps: 1e-8
+    use_triton: false # Disable for compatibility
+
+  # Loss balancing (CRITICAL for reducing initial loss)
+  loss_balancing:
+    text_loss_weight: 0.7 # Reduced from 1.0
+    cross_modal_loss_weight: 0.2 # Reduced from default
+    vision_loss_weight: 0.05 # Very small for stability
+    memory_loss_weight: 0.05 # Very small for stability
+
+    # Adaptive loss scaling
+    adaptive_loss_scaling: true
+    loss_temperature: 2.0 # Soften loss scaling
+
+    # Loss clipping to prevent explosions
+    max_loss_clip: 20.0 # Clip individual losses
+    loss_smoothing_alpha: 0.1 # Smooth loss transitions
+
+  # Model initialization improvements
+  weight_initialization:
+    method: "xavier_uniform" # Better than default for small models
+    gain: 0.5 # Smaller gain for stability
+    bias_init: "zero"
+
+    # BitNet specific initialization
+    bitnet_weight_scale: 0.1 # Smaller initial scale
+    activation_scale: 0.5 # Smaller activation scale
+
+  # Enhanced numerical stability
+  numerical_stability:
+    loss_scale: 1.0
+    eps: 1e-8
+    max_loss_threshold: 25.0 # Reduced from 50.0
+    gradient_accumulation_steps: 8
+
+    # Mixed precision improvements
+    fp16_epsilon: 1e-4 # Larger epsilon for fp16
+    loss_scaling: "dynamic" # Dynamic loss scaling
+
+  # Scheduler improvements for multimodal
+  scheduler_config:
+    T_0: 1000 # First restart at 1000 steps
+    T_mult: 2 # Double period each restart
+    eta_min_ratio: 0.1 # Minimum LR as ratio of max_lr
 
 # Weights & Biases (minimal logging)
 wandb:
@@ -297,3 +391,4 @@ adaptive_training:
     log_strategy_selection: true
     log_recovery_progress: true
     phase_summary_frequency: 10000             # Log phase summary every 10k steps
+

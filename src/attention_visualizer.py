@@ -168,7 +168,7 @@ class AttentionHeadAnalyzer:
 
             attention_max = torch.max(avg_attention)
             attention_mean = torch.mean(avg_attention)
-            
+
             # Ensure values are Python floats
             if isinstance(attention_var, torch.Tensor):
                 attention_var = attention_var.item()
