@@ -22,10 +22,14 @@ model:
   vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
   vision_pool_size: 2 # 2x2 pooling
 
-  # Cross-modal fusion (Ultra-Minimal)
-  fusion_hidden_size: 32 # Minimal fusion
-  fusion_num_heads: 1 # Single head for basic cross-modal
-  fusion_num_layers: 1 # Single fusion layer
+  # Cross-modal fusion (Enhanced QFormer-style alignment)
+  fusion_hidden_size: 64 # Increased for better alignment
+  fusion_num_heads: 4 # More heads for better cross-modal attention
+  fusion_num_layers: 2 # Keep minimal for edge devices
+
+  # QFormer-specific parameters for enhanced text-image alignment
+  num_query_tokens: 16 # Learnable query tokens for cross-modal alignment (reduced for edge)
+  num_qformer_layers: 3 # QFormer layers for sophisticated alignment (minimal for edge)
 
   # Episodic Memory (Ultra-Compact for Edge)
   memory_size: 8 # 8 memory slots only

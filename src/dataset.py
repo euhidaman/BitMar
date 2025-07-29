@@ -1,6 +1,7 @@
 """
 Dataset processing for BitMar
 Handles complete BabyLM multimodal dataset (Conceptual Captions + Localized Narratives)
++ Human-inspired learning with train_50M text-only data
 """
 
 import json
@@ -14,8 +15,32 @@ import logging
 import random
 import os
 from pathlib import Path
+import zipfile
 
 logger = logging.getLogger(__name__)
+
+
+def extract_train_50M_if_needed(dataset_dir: Path):
+    """Extract train_50M.zip if not already extracted"""
+    zip_path = dataset_dir / "train_50M.zip"
+    extract_path = dataset_dir / "train_50M"
+
+    if not zip_path.exists():
+        logger.warning(f"train_50M.zip not found at {zip_path}. Text-only training will be skipped.")
+        return None
+
+    if extract_path.exists() and any(extract_path.iterdir()):
+        logger.info(f"✅ train_50M already extracted at {extract_path}")
+        return extract_path
+
+    logger.info(f"📦 Extracting train_50M.zip to {extract_path}...")
+    extract_path.mkdir(exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(extract_path.parent)
+
+    logger.info(f"✅ Successfully extracted train_50M.zip!")
+    return extract_path
 
 
 class CompleteBabyLMDataset(Dataset):
@@ -56,7 +81,7 @@ class CompleteBabyLMDataset(Dataset):
         logger.info(f"Loaded {len(self.indices)} samples for {split} split")
 
     def _load_all_data(self):
-        """Load all multimodal data sources"""
+        """Load all multimodal data sources with enhanced error handling"""
         logger.info("Loading complete BabyLM multimodal dataset...")
 
         # Load Conceptual Captions 3M
@@ -64,25 +89,92 @@ class CompleteBabyLMDataset(Dataset):
         cc_feat1_file = self.dataset_dir / "cc_3M_dino_v2_states_1of2.npy"
         cc_feat2_file = self.dataset_dir / "cc_3M_dino_v2_states_2of2.npy"
 
-        with open(cc_captions_file, 'r', encoding='utf-8') as f:
-            cc_captions = json.load(f)
+        # Validate files exist
+        missing_files = []
+        for file_path in [cc_captions_file, cc_feat1_file, cc_feat2_file]:
+            if not file_path.exists():
+                missing_files.append(str(file_path))
 
-        cc_feat1 = np.load(cc_feat1_file, mmap_mode='r')
-        cc_feat2 = np.load(cc_feat2_file, mmap_mode='r')
-        cc_features = VisionFeaturesConcatenated(cc_feat1, cc_feat2)
+        if missing_files:
+            error_msg = f"Missing required files: {missing_files}"
+            logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
 
-        logger.info(f"Loaded Conceptual Captions: {len(cc_captions)} samples")
+        # Load captions with error handling
+        try:
+            with open(cc_captions_file, 'r', encoding='utf-8') as f:
+                cc_captions = json.load(f)
+
+            if not isinstance(cc_captions, list):
+                raise ValueError(f"Expected list of captions, got {type(cc_captions)}")
+
+            logger.info(f"Loaded {len(cc_captions)} CC captions")
+
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.error(f"Error loading CC captions: {e}")
+            raise ValueError(f"Corrupted captions file: {cc_captions_file}")
+
+        # Load features with enhanced error handling
+        try:
+            cc_feat1 = np.load(cc_feat1_file, mmap_mode='r')
+            cc_feat2 = np.load(cc_feat2_file, mmap_mode='r')
+
+            # Validate feature shapes
+            expected_dim = 768  # DiNOv2 dimension
+            if cc_feat1.shape[1] != expected_dim:
+                logger.warning(f"Unexpected CC feat1 dimension: {cc_feat1.shape[1]}, expected {expected_dim}")
+            if cc_feat2.shape[1] != expected_dim:
+                logger.warning(f"Unexpected CC feat2 dimension: {cc_feat2.shape[1]}, expected {expected_dim}")
+
+            cc_features = VisionFeaturesConcatenated(cc_feat1, cc_feat2)
+            logger.info(f"Loaded CC features: {len(cc_features)} samples, dim={cc_feat1.shape[1]}")
+
+        except Exception as e:
+            logger.error(f"Error loading CC features: {e}")
+            raise RuntimeError(f"Failed to load CC vision features: {e}")
 
         # Load Localized Narratives  
         ln_captions_file = self.dataset_dir / "local_narr_captions.json"
         ln_feat_file = self.dataset_dir / "local_narr_dino_v2_states.npy"
 
-        with open(ln_captions_file, 'r', encoding='utf-8') as f:
-            ln_captions = json.load(f)
+        # Validate LN files exist
+        missing_ln_files = []
+        for file_path in [ln_captions_file, ln_feat_file]:
+            if not file_path.exists():
+                missing_ln_files.append(str(file_path))
 
-        ln_features = np.load(ln_feat_file, mmap_mode='r')
+        if missing_ln_files:
+            error_msg = f"Missing LN files: {missing_ln_files}"
+            logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
 
-        logger.info(f"Loaded Localized Narratives: {len(ln_captions)} samples")
+        # Load LN captions with error handling
+        try:
+            with open(ln_captions_file, 'r', encoding='utf-8') as f:
+                ln_captions = json.load(f)
+
+            if not isinstance(ln_captions, list):
+                raise ValueError(f"Expected list of LN captions, got {type(ln_captions)}")
+
+            logger.info(f"Loaded {len(ln_captions)} LN captions")
+
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.error(f"Error loading LN captions: {e}")
+            raise ValueError(f"Corrupted LN captions file: {ln_captions_file}")
+
+        # Load LN features with error handling
+        try:
+            ln_features = np.load(ln_feat_file, mmap_mode='r')
+
+            # Validate LN feature shape
+            if ln_features.shape[1] != expected_dim:
+                logger.warning(f"Unexpected LN feature dimension: {ln_features.shape[1]}, expected {expected_dim}")
+
+            logger.info(f"Loaded LN features: {ln_features.shape[0]} samples, dim={ln_features.shape[1]}")
+
+        except Exception as e:
+            logger.error(f"Error loading LN features: {e}")
+            raise RuntimeError(f"Failed to load LN vision features: {e}")
 
         # Combine all data
         self.all_captions = cc_captions + ln_captions
@@ -90,9 +182,36 @@ class CompleteBabyLMDataset(Dataset):
 
         logger.info(f"Total multimodal samples: {len(self.all_captions)}")
 
-        # Verify alignment
-        if len(self.all_captions) != len(self.all_features):
-            raise ValueError(f"Data alignment error: {len(self.all_captions)} captions vs {len(self.all_features)} features")
+        # Enhanced alignment verification with detailed checks
+        expected_features = len(self.all_captions)
+        actual_features = len(self.all_features)
+
+        if expected_features != actual_features:
+            error_msg = f"CRITICAL: Data alignment error - {expected_features} captions vs {actual_features} features"
+            logger.error(error_msg)
+            logger.error(f"CC captions: {len(cc_captions)}, CC features: {len(cc_features)}")
+            logger.error(f"LN captions: {len(ln_captions)}, LN features: {ln_features.shape[0]}")
+            raise ValueError(error_msg)
+
+        # Additional validation - sample a few indices to verify alignment
+        try:
+            test_indices = [0, len(self.all_captions) // 2, len(self.all_captions) - 1]
+            for idx in test_indices:
+                if idx < len(self.all_captions):
+                    caption = self.all_captions[idx]
+                    feature = self.all_features[idx]
+
+                    if not isinstance(caption, str) or len(caption.strip()) == 0:
+                        logger.warning(f"Invalid caption at index {idx}: {type(caption)}")
+
+                    if feature.shape[0] != expected_dim:
+                        logger.warning(f"Invalid feature shape at index {idx}: {feature.shape}")
+
+            logger.info("✅ Data alignment and integrity verification passed")
+
+        except Exception as e:
+            logger.error(f"Error during data validation: {e}")
+            raise RuntimeError(f"Data validation failed: {e}")
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -393,6 +512,148 @@ class BabyLMDataModule:
                 batch[key] = torch.stack([sample[key] for sample in samples])
 
         return batch
+
+
+class TextOnlyDataset(Dataset):
+    """Dataset for Stage 3: Pure text learning from train_50M"""
+
+    def __init__(
+        self,
+        dataset_dir: str,
+        tokenizer_name: str = "gpt2",
+        max_seq_length: int = 256,
+        max_samples: Optional[int] = None
+    ):
+        self.dataset_dir = Path(dataset_dir)
+        self.max_seq_length = max_seq_length
+
+        # Initialize tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Extract train_50M.zip if needed
+        train_50m_dir = extract_train_50M_if_needed(self.dataset_dir)
+        if train_50m_dir is None:
+            logger.warning("train_50M data not available. Creating empty dataset.")
+            self.texts = []
+            return
+
+        # Load all text files
+        text_files = [
+            train_50m_dir / 'childes.train',
+            train_50m_dir / 'gutenberg.train',
+            train_50m_dir / 'open_subtitles.train',
+            train_50m_dir / 'simple_wiki.train',
+            train_50m_dir / 'bnc_spoken.train',
+            train_50m_dir / 'switchboard.train'
+        ]
+
+        self.texts = []
+        for text_file in text_files:
+            if text_file.exists():
+                logger.info(f"Loading {text_file.name}...")
+                with open(text_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                    self.texts.extend([line.strip() for line in lines if line.strip()])
+            else:
+                logger.warning(f"Text file not found: {text_file}")
+
+        # Limit samples if specified
+        if max_samples is not None and len(self.texts) > max_samples:
+            random.seed(42)
+            self.texts = random.sample(self.texts, max_samples)
+
+        logger.info(f"Loaded {len(self.texts)} text samples for Stage 3 training")
+
+    def __len__(self):
+        return len(self.texts)
+
+    def __getitem__(self, idx):
+        text = self.texts[idx]
+
+        encoded = self.tokenizer(
+            text,
+            max_length=self.max_seq_length,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        )
+
+        input_ids = encoded['input_ids'].squeeze(0)
+        attention_mask = encoded['attention_mask'].squeeze(0)
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
+
+        return {
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'labels': labels,
+            'vision_features': torch.zeros(768, dtype=torch.float32),  # No vision for text-only
+            'caption': text,
+            'index': idx
+        }
+
+
+class VisualOnlyDataset(Dataset):
+    """Dataset for Stage 1: Visual-only learning"""
+
+    def __init__(
+        self,
+        dataset_dir: str,
+        max_samples: Optional[int] = None
+    ):
+        self.dataset_dir = Path(dataset_dir)
+
+        # Load vision features from both datasets
+        cc_feat1_file = self.dataset_dir / "cc_3M_dino_v2_states_1of2.npy"
+        cc_feat2_file = self.dataset_dir / "cc_3M_dino_v2_states_2of2.npy"
+        ln_feat_file = self.dataset_dir / "local_narr_dino_v2_states.npy"
+
+        # Load features
+        cc_feat1 = np.load(cc_feat1_file, mmap_mode='r') if cc_feat1_file.exists() else None
+        cc_feat2 = np.load(cc_feat2_file, mmap_mode='r') if cc_feat2_file.exists() else None
+        ln_features = np.load(ln_feat_file, mmap_mode='r') if ln_feat_file.exists() else None
+
+        # Combine features
+        all_features = []
+        if cc_feat1 is not None:
+            all_features.append(cc_feat1)
+        if cc_feat2 is not None:
+            all_features.append(cc_feat2)
+        if ln_features is not None:
+            all_features.append(ln_features)
+
+        if not all_features:
+            raise FileNotFoundError("No vision feature files found!")
+
+        # Create combined features object
+        if len(all_features) == 1:
+            self.vision_features = all_features[0]
+        else:
+            # Concatenate multiple feature arrays
+            cc_combined = VisionFeaturesConcatenated(cc_feat1, cc_feat2) if cc_feat1 is not None and cc_feat2 is not None else (cc_feat1 or cc_feat2)
+            self.vision_features = CombinedVisionFeatures(cc_combined, ln_features)
+
+        # Create indices
+        self.indices = list(range(len(self.vision_features)))
+        if max_samples is not None and len(self.indices) > max_samples:
+            random.seed(42)
+            self.indices = random.sample(self.indices, max_samples)
+
+        logger.info(f"Loaded {len(self.indices)} vision samples for Stage 1 training")
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        actual_idx = self.indices[idx]
+        vision_feature = self.vision_features[actual_idx]
+
+        return {
+            'vision_features': torch.tensor(vision_feature.copy(), dtype=torch.float32),
+            'index': actual_idx
+        }
 
 
 def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:

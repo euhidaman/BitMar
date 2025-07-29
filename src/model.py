@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class BitNetLinear(nn.Module):
-    """1.58-bit Linear layer following BitNet b1.58 architecture"""
+    """1.58-bit Linear layer following BitNet b1.58 architecture with enhanced stability"""
 
     def __init__(self, in_features: int, out_features: int, bias: bool = True):
         super().__init__()
@@ -25,51 +25,71 @@ class BitNetLinear(nn.Module):
         self.out_features = out_features
 
         # Weight parameters (full precision for training)
-        self.weight = nn.Parameter(torch.randn(out_features, in_features))
+        self.weight = nn.Parameter(torch.randn(out_features, in_features) * 0.02)
         self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
 
-        # Quantization scaling factors
+        # Quantization scaling factors with better initialization
         self.register_buffer('weight_scale', torch.ones(1))
         self.register_buffer('input_scale', torch.ones(1))
 
+        # Gradient monitoring for debugging
+        self.register_buffer('gradient_norm', torch.zeros(1))
+        self.register_buffer('weight_utilization', torch.zeros(3))  # [-1, 0, +1] counts
+
     def quantize_weights_1_58_bit(self, weight: torch.Tensor) -> torch.Tensor:
-        """BitNet b1.58 weight quantization: {-1, 0, +1}"""
-        # Compute scaling factor with numerical stability
-        scale = weight.abs().mean()
-        self.weight_scale.data = scale.clamp(min=1e-5, max=1e3)  # Prevent extreme scales
+        """BitNet b1.58 weight quantization: {-1, 0, +1} with enhanced stability"""
+        # Compute scaling factor with improved stability
+        weight_abs_mean = weight.abs().mean()
+        # Adaptive scaling based on weight distribution
+        weight_std = weight.std()
+        scale = max(weight_abs_mean, weight_std * 0.5)
+        self.weight_scale.data = scale.clamp(min=1e-8, max=100.0)
 
-        # Normalize weights with gradient clipping
-        weight_norm = torch.clamp(weight / self.weight_scale, min=-10.0, max=10.0)
+        # Normalize weights with adaptive clipping
+        weight_norm = weight / self.weight_scale
+        # Adaptive threshold based on weight distribution
+        threshold = min(2.0/3.0, weight_norm.abs().quantile(0.7))
 
-        # 1.58-bit quantization with threshold
-        threshold = 2.0 / 3.0  # Optimal threshold for ternary quantization
-
-        # Create ternary weights
+        # Create ternary weights with smoother transitions
         quantized = torch.zeros_like(weight_norm)
-        quantized[weight_norm > threshold] = 1.0
-        quantized[weight_norm < -threshold] = -1.0
-        # Values between -threshold and threshold remain 0
+        pos_mask = weight_norm > threshold
+        neg_mask = weight_norm < -threshold
+
+        quantized[pos_mask] = 1.0
+        quantized[neg_mask] = -1.0
+        # Middle values remain 0
+
+        # Track weight utilization for monitoring
+        with torch.no_grad():
+            self.weight_utilization[0] = neg_mask.float().mean()  # -1 weights
+            self.weight_utilization[1] = (~(pos_mask | neg_mask)).float().mean()  # 0 weights
+            self.weight_utilization[2] = pos_mask.float().mean()  # +1 weights
 
         return quantized
 
     def quantize_activations_8bit(self, x: torch.Tensor) -> torch.Tensor:
-        """8-bit activation quantization with numerical stability"""
-        # Clamp extreme values to prevent overflow
-        x_clamped = torch.clamp(x, min=-1e6, max=1e6)
+        """8-bit activation quantization with improved stability"""
+        # Handle edge cases
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            x = torch.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
 
-        # Compute quantization parameters
-        x_min, x_max = x_clamped.min(), x_clamped.max()
+        # Robust quantization parameters
+        x_flat = x.view(-1)
+        # Use percentiles for robust min/max estimation
+        x_min = torch.quantile(x_flat, 0.01)
+        x_max = torch.quantile(x_flat, 0.99)
 
         # Prevent division by zero
         range_val = x_max - x_min
         if range_val < 1e-8:
-            return x_clamped
+            return x
 
         scale = range_val / 255.0
-        self.input_scale.data = scale.clamp(min=1e-8, max=1e3)
+        self.input_scale.data = scale.clamp(min=1e-8, max=1e6)
 
-        # Quantize to 8-bit
+        # Quantize with proper clamping
         zero_point = (-x_min / scale).round().clamp(0, 255)
+        x_clamped = x.clamp(x_min, x_max)
         quantized = ((x_clamped / scale) + zero_point).round().clamp(0, 255)
 
         # Dequantize
@@ -77,23 +97,41 @@ class BitNetLinear(nn.Module):
         return dequantized
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Monitor gradient norms for debugging
+        if self.training and self.weight.grad is not None:
+            self.gradient_norm.data = self.weight.grad.norm().clamp(max=1e6)
+
         if self.training:
-            # Full precision training with straight-through estimator
-            # Forward pass with quantized weights but gradients flow through original weights
+            # Training: use straight-through estimator with improved gradient flow
             weight_q = self.quantize_weights_1_58_bit(self.weight)
             weight_forward = weight_q * self.weight_scale
 
-            # Use original weight for gradient computation
-            weight_forward = weight_forward + \
-                (self.weight - self.weight.detach())
+            # Enhanced straight-through estimator
+            # Forward: quantized, Backward: full precision
+            weight_ste = weight_forward + (self.weight - self.weight.detach())
 
-            return F.linear(x, weight_forward, self.bias)
+            # Add small amount of noise for better gradient flow
+            if torch.rand(1) < 0.1:  # 10% of the time
+                noise = torch.randn_like(self.weight) * 1e-5
+                weight_ste = weight_ste + noise
+
+            return F.linear(x, weight_ste, self.bias)
         else:
-            # Inference with full quantization
-            weight_q = self.quantize_weights_1_58_bit(
-                self.weight) * self.weight_scale
+            # Inference: full quantization
+            weight_q = self.quantize_weights_1_58_bit(self.weight) * self.weight_scale
             x_q = self.quantize_activations_8bit(x)
             return F.linear(x_q, weight_q, self.bias)
+
+    def get_quantization_stats(self) -> Dict[str, float]:
+        """Get quantization statistics for monitoring"""
+        return {
+            'weight_scale': self.weight_scale.item(),
+            'input_scale': self.input_scale.item(),
+            'gradient_norm': self.gradient_norm.item(),
+            'weight_neg1_ratio': self.weight_utilization[0].item(),
+            'weight_zero_ratio': self.weight_utilization[1].item(),
+            'weight_pos1_ratio': self.weight_utilization[2].item(),
+        }
 
 
 class BitNetMLP(nn.Module):
@@ -676,13 +714,14 @@ class BitMarModel(nn.Module):
             output_dim=config['vision_latent_size']
         )
 
-        # Cross-modal fusion with BitNet
-        self.fusion = CrossModalFusion(
+        # Enhanced cross-modal fusion with QFormer-style alignment
+        self.fusion = EnhancedCrossModalFusion(
             text_dim=config['text_encoder_dim'],
             vision_dim=config['vision_latent_size'],
-            hidden_dim=config['fusion_hidden_size'],
-            num_heads=config['fusion_num_heads'],
-            num_layers=config['fusion_num_layers']
+            hidden_dim=config.get('fusion_hidden_size', 768),
+            num_query_tokens=config.get('num_query_tokens', 32),
+            num_qformer_layers=config.get('num_qformer_layers', 6),
+            num_heads=config.get('fusion_num_heads', 12)
         )
 
         # Episodic memory with BitNet quantization
@@ -817,10 +856,10 @@ class BitMarModel(nn.Module):
         vision_loss: Optional[torch.Tensor] = None,
         memory_loss: Optional[torch.Tensor] = None,
         step: int = 0,
-        adaptive_controller=None  # NEW: Adaptive training controller
+        adaptive_controller=None
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute balanced multi-objective loss with adaptive scaling
+        Enhanced balanced multi-objective loss with sophisticated adaptive scaling
         """
         losses = {'decoder_loss': decoder_loss, 'cross_modal_loss': cross_modal_loss}
 
@@ -829,46 +868,107 @@ class BitMarModel(nn.Module):
         if memory_loss is not None:
             losses['memory_loss'] = memory_loss
 
+        # Enhanced adaptive loss scaling with curriculum learning
         if self.adaptive_loss_scaling:
-            # Adaptive scaling based on loss magnitudes
             with torch.no_grad():
-                # Compute relative loss scales
-                decoder_scale = decoder_loss.detach()
-                cross_modal_scale = cross_modal_loss.detach()
+                # Compute relative loss magnitudes for adaptive weighting
+                decoder_scale = decoder_loss.detach().clamp(min=1e-8)
+                cross_modal_scale = cross_modal_loss.detach().clamp(min=1e-8)
 
-                # Prevent division by zero
-                if decoder_scale > 1e-8:
-                    adaptive_cross_modal_weight = (decoder_scale / cross_modal_scale.clamp(min=1e-8)) * self.cross_modal_loss_weight
+                # Dynamic weight adjustment based on loss convergence
+                loss_ratio = decoder_scale / cross_modal_scale
+
+                # Adaptive cross-modal weight with smoothing
+                if hasattr(self, '_loss_ratio_history'):
+                    self._loss_ratio_history.append(loss_ratio.item())
+                    if len(self._loss_ratio_history) > 100:  # Keep last 100 values
+                        self._loss_ratio_history.pop(0)
+
+                    # Use moving average for stability
+                    avg_ratio = sum(self._loss_ratio_history) / len(self._loss_ratio_history)
+                    adaptive_cross_modal_weight = (avg_ratio ** 0.5) * self.cross_modal_loss_weight
                 else:
+                    self._loss_ratio_history = [loss_ratio.item()]
                     adaptive_cross_modal_weight = self.cross_modal_loss_weight
 
-                # Clamp adaptive weights
-                adaptive_cross_modal_weight = torch.clamp(adaptive_cross_modal_weight, 0.01, 1.0)
+                # Clamp adaptive weights with tighter bounds
+                adaptive_cross_modal_weight = torch.clamp(
+                    torch.tensor(adaptive_cross_modal_weight), 0.005, 0.5
+                ).item()
         else:
             adaptive_cross_modal_weight = self.cross_modal_loss_weight
 
-        # Apply loss scheduling (increase cross-modal importance over time)
-        cross_modal_schedule = min(1.0, step / 50000)  # Ramp up over 50k steps
+        # Curriculum learning: gradually increase cross-modal importance
+        # Start with text-only learning, then introduce multimodal objectives
+        warmup_steps = 10000
+        if step < warmup_steps:
+            # Warm-up phase: focus on text generation
+            cross_modal_schedule = (step / warmup_steps) ** 2  # Quadratic ramp-up
+            memory_schedule = max(0, (step - warmup_steps // 2) / (warmup_steps // 2))
+        else:
+            # Full training phase
+            cross_modal_schedule = 1.0
+            memory_schedule = 1.0
+
+        # Final scheduled weights
         scheduled_cross_modal_weight = adaptive_cross_modal_weight * cross_modal_schedule
+        scheduled_memory_weight = self.memory_loss_weight * memory_schedule
 
-        # Compute weighted total loss
-        total_loss = (
-            self.text_loss_weight * decoder_loss +
-            scheduled_cross_modal_weight * cross_modal_loss
-        )
+        # Compute weighted total loss with improved balancing
+        total_loss = self.text_loss_weight * decoder_loss
 
+        # Add cross-modal loss with scheduling
+        if cross_modal_loss is not None:
+            total_loss += scheduled_cross_modal_weight * cross_modal_loss
+
+        # Add vision reconstruction loss
         if vision_loss is not None:
-            total_loss += self.vision_loss_weight * vision_loss
+            vision_schedule = min(1.0, step / 20000)  # Introduce vision loss gradually
+            total_loss += self.vision_loss_weight * vision_schedule * vision_loss
+
+        # Add memory consistency loss
         if memory_loss is not None:
-            total_loss += self.memory_loss_weight * memory_loss
+            total_loss += scheduled_memory_weight * memory_loss
+
+        # Add regularization losses for BitNet quantization
+        quantization_loss = self._compute_quantization_regularization()
+        total_loss += 1e-5 * quantization_loss  # Small regularization weight
 
         losses.update({
             'total_loss': total_loss,
             'cross_modal_weight': scheduled_cross_modal_weight,
-            'adaptive_weight': adaptive_cross_modal_weight if self.adaptive_loss_scaling else torch.tensor(0.0)
+            'memory_weight': scheduled_memory_weight,
+            'adaptive_weight': adaptive_cross_modal_weight,
+            'quantization_loss': quantization_loss,
+            'cross_modal_schedule': cross_modal_schedule,
+            'memory_schedule': memory_schedule
         })
 
         return losses
+
+    def _compute_quantization_regularization(self) -> torch.Tensor:
+        """Compute regularization loss for BitNet quantization stability"""
+        reg_loss = torch.tensor(0.0, device=next(self.parameters()).device)
+
+        # Collect quantization statistics from all BitNet layers
+        for name, module in self.named_modules():
+            if isinstance(module, BitNetLinear):
+                stats = module.get_quantization_stats()
+
+                # Encourage balanced weight utilization (avoid all weights becoming 0)
+                weight_entropy = -(
+                    stats['weight_neg1_ratio'] * torch.log(torch.tensor(stats['weight_neg1_ratio'] + 1e-8)) +
+                    stats['weight_zero_ratio'] * torch.log(torch.tensor(stats['weight_zero_ratio'] + 1e-8)) +
+                    stats['weight_pos1_ratio'] * torch.log(torch.tensor(stats['weight_pos1_ratio'] + 1e-8))
+                )
+
+                # Penalize extreme weight distributions
+                target_entropy = torch.log(torch.tensor(3.0))  # log(3) for uniform distribution
+                entropy_loss = (weight_entropy - target_entropy) ** 2
+
+                reg_loss += entropy_loss
+
+        return reg_loss
 
     def apply_encoder_freezing(self, step: int):
         """
@@ -1125,3 +1225,6 @@ def create_bitmar_model(config: Dict) -> BitMarModel:
         f"Trainable parameters: {param_count['trainable_parameters']:,}")
 
     return model
+
+# Import the enhanced QFormer cross-modal alignment
+from .qformer_cross_modal import EnhancedCrossModalFusion

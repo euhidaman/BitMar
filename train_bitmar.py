@@ -1,6 +1,6 @@
 """
-Training script for BitMar model
-Handles multimodal training with episodic memory and attention analysis
+Training script for BitMar model with QFormer Cross-Modal Alignment
+Handles multimodal training with episodic memory, attention analysis, and human-inspired learning
 """
 
 # CodeCarbon for carbon footprint tracking
@@ -12,7 +12,7 @@ except ImportError:
     print("Warning: CodeCarbon not available. Install with: pip install codecarbon")
 
 from src.attention_analysis import analyze_model_attention
-from src.dataset import create_data_module
+from src.dataset import create_data_module, TextOnlyDataset, VisualOnlyDataset, extract_train_50M_if_needed
 from src.model import create_bitmar_model, count_parameters
 from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
@@ -25,6 +25,7 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.utils.data import DataLoader
 import wandb
 from pathlib import Path
 from typing import Dict, Optional
