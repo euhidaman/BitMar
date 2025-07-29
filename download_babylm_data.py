@@ -77,24 +77,25 @@ def verify_existing_data():
     # Check parent directory for BabyLM data
     dataset_dir = Path("../babylm_dataset")
     
-    # Required multimodal files from OSF dataset
+    # ALL required files from OSF dataset (including train_50M.zip)
     required_files = [
         "cc_3M_captions.json",  # Conceptual Captions 3M captions
         "cc_3M_dino_v2_states_1of2.npy",  # DiNOv2 embeddings part 1
         "cc_3M_dino_v2_states_2of2.npy",  # DiNOv2 embeddings part 2
         "local_narr_captions.json",  # Localized Narratives captions
         "local_narr_dino_v2_states.npy",  # Localized Narratives DiNOv2 embeddings
+        "train_50M.zip",  # Text-only training data (now required)
     ]
     
     # Optional files
     optional_files = [
-        "train_50M.zip",  # Text-only training data
         "README.pdf",  # Dataset documentation
     ]
 
     existing_files = []
     missing_files = []
     
+    # Check required files (including train_50M.zip)
     for filename in required_files:
         filepath = dataset_dir / filename
         if check_file_exists(filepath):
@@ -113,8 +114,8 @@ def verify_existing_data():
             logger.info(f"📁 {filename}: Found ({size_mb:.1f} MB)")
 
     if len(existing_files) == len(required_files):
-        logger.info("🎉 All required multimodal dataset files found!")
-        
+        logger.info("🎉 All required dataset files found (including train_50M.zip)!");
+
         # Verify data integrity
         try:
             verify_core_files(dataset_dir)
@@ -125,7 +126,8 @@ def verify_existing_data():
             
     else:
         logger.warning(f"❌ Missing {len(missing_files)} required files: {missing_files}")
-            
+        logger.info("📋 Note: train_50M.zip is now required for complete BitMar training")
+
     return False
 
 
