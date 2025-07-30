@@ -61,19 +61,43 @@ sys.path.append(str(Path(__file__).parent / "src"))
 
 # Import attention evolution tracker
 try:
+    # First try direct import
     from attention_evolution_tracker import AttentionEvolutionTracker
     ATTENTION_TRACKING_AVAILABLE = True
-except ImportError:
+    print("✅ Attention evolution tracker imported successfully")
+except ImportError as e:
     try:
-        # Try importing from current directory
+        # Try importing from current directory with explicit path manipulation
         import sys
+        import os
         from pathlib import Path
-        sys.path.append(str(Path(__file__).parent))
+
+        # Get the directory where this script is located
+        script_dir = Path(__file__).parent.absolute()
+
+        # Add current directory to Python path if not already there
+        if str(script_dir) not in sys.path:
+            sys.path.insert(0, str(script_dir))
+
         from attention_evolution_tracker import AttentionEvolutionTracker
         ATTENTION_TRACKING_AVAILABLE = True
-    except ImportError:
-        ATTENTION_TRACKING_AVAILABLE = False
-        print("Warning: attention_evolution_tracker not available")
+        print("✅ Attention evolution tracker imported from current directory")
+    except ImportError as e2:
+        try:
+            # Final fallback: check if file exists and provide detailed error
+            tracker_file = Path(__file__).parent / "attention_evolution_tracker.py"
+            if tracker_file.exists():
+                print(f"⚠️  File exists at {tracker_file} but import failed:")
+                print(f"   Original error: {e}")
+                print(f"   Fallback error: {e2}")
+            else:
+                print(f"❌ File not found at {tracker_file}")
+
+            ATTENTION_TRACKING_AVAILABLE = False
+            print("Warning: attention_evolution_tracker not available - continuing without it")
+        except Exception as e3:
+            ATTENTION_TRACKING_AVAILABLE = False
+            print("Warning: attention_evolution_tracker not available")
 
 
 # Setup logging
