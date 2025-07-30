@@ -13,11 +13,14 @@ from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
 import os
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AttentionHeadAnalyzer:
     """Analyze and visualize attention heads during BitMar training"""
     
-    def __init__(self, model, tokenizer, save_dir: str = "./attention_analysis", 
+    def __init__(self, model, tokenizer, save_dir: str = "./attention_analysis",
                  wandb_logger=None, track_top_k: int = 10):
         self.model = model
         self.tokenizer = tokenizer
@@ -31,7 +34,7 @@ class AttentionHeadAnalyzer:
         self.num_decoder_layers = len(model.text_decoder.layers)
         self.num_heads = model.text_encoder.layers[0].attn.num_heads
         self.fusion_layers = len(model.fusion.cross_attention_layers)
-        
+
         # Storage for attention patterns over time
         self.attention_history = {
             'encoder': defaultdict(list),

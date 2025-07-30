@@ -374,7 +374,7 @@ class EnhancedCrossModalFusion(nn.Module):
         vision_features: torch.Tensor,  # [batch_size, vision_dim] or [batch_size, num_patches, vision_dim]
         text_attention_mask: Optional[torch.Tensor] = None,
         return_loss: bool = False
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
 
         # Project to common dimension
         text_projected = self.text_input_projection(text_features)
@@ -399,17 +399,19 @@ class EnhancedCrossModalFusion(nn.Module):
         text_embeds = qformer_outputs['text_embeds']
         vision_embeds = qformer_outputs['vision_embeds']
 
-        # Project back to original dimensions if needed
-        aligned_text = self.text_output_projection(text_embeds)
-        aligned_vision = self.vision_output_projection(vision_embeds)
+        # Project back to original dimensions - fix dimension mismatch
+        # text_embeds and vision_embeds are already projected, use them directly
         multimodal_features = self.multimodal_projection(multimodal_embeds.mean(dim=1))
 
-        outputs = {
-            'aligned_text_features': aligned_text,
-            'aligned_vision_features': aligned_vision,
-            'multimodal_features': multimodal_features,
-            'query_tokens': multimodal_embeds,
-            'attention_weights': qformer_outputs.get('attentions', [])
+        # Return format must match what BitMar model expects: (fused_features, attention_weights)
+        # The model expects fused_features as [batch_size, seq_len, hidden_dim]
+        # We need to expand multimodal features to match text sequence length
+        batch_size, seq_len = text_features.shape[:2]
+        fused_features = multimodal_features.unsqueeze(1).expand(-1, seq_len, -1)
+
+        attention_weights = {
+            'qformer_attentions': qformer_outputs.get('attentions', []),
+            'layer_0': multimodal_embeds.mean(dim=1).unsqueeze(1)  # Dummy attention for compatibility
         }
 
         # Compute contrastive loss if requested
@@ -417,6 +419,6 @@ class EnhancedCrossModalFusion(nn.Module):
             contrastive_loss = self.qformer.compute_contrastive_loss(
                 text_embeds, vision_embeds
             )
-            outputs['contrastive_loss'] = contrastive_loss
+            attention_weights['contrastive_loss'] = contrastive_loss
 
-        return outputs
+        return fused_features, attention_weights

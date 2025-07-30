@@ -462,8 +462,12 @@ class EpisodicMemory(nn.Module):
         self.value_net = BitNetLinear(episode_dim, episode_dim)
 
     def write_memory(self, episode: torch.Tensor) -> torch.Tensor:
-        """Write episode to memory"""
+        """Write episode to memory with proper device handling"""
         batch_size = episode.size(0)
+
+        # Ensure episode is on the same device as memory
+        if episode.device != self.memory.device:
+            episode = episode.to(self.memory.device)
 
         if self.direct_writing:
             # Direct writing: find least recently used slots
@@ -481,14 +485,16 @@ class EpisodicMemory(nn.Module):
                     # Get LRU indices for this chunk
                     _, chunk_lru_indices = self.memory_age.topk(chunk_size, largest=False)
 
-                    # Update memory slots
-                    self.memory[chunk_lru_indices] = episode[i:end_idx].detach()
+                    # Update memory slots with proper device handling
+                    episode_chunk = episode[i:end_idx].detach().to(self.memory.device)
+                    self.memory[chunk_lru_indices] = episode_chunk
                     self.memory_age[chunk_lru_indices] = self.memory_age.max() + 1 + i
                     self.memory_usage[chunk_lru_indices] += 1
             else:
                 # Normal case: batch_size <= memory_size
-                # Update memory slots
-                self.memory[lru_indices] = episode[:k].detach()
+                # Update memory slots with proper device handling
+                episode_detached = episode[:k].detach().to(self.memory.device)
+                self.memory[lru_indices] = episode_detached
                 self.memory_age[lru_indices] = self.memory_age.max() + 1
                 self.memory_usage[lru_indices] += 1
 
