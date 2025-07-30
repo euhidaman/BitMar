@@ -33,7 +33,16 @@ class AttentionHeadAnalyzer:
         self.num_encoder_layers = len(model.text_encoder.layers)
         self.num_decoder_layers = len(model.text_decoder.layers)
         self.num_heads = model.text_encoder.layers[0].attn.num_heads
-        self.fusion_layers = len(model.fusion.cross_attention_layers)
+
+        # Fix: Access QFormer layers correctly from EnhancedCrossModalFusion
+        if hasattr(model.fusion, 'qformer') and hasattr(model.fusion.qformer, 'layers'):
+            self.fusion_layers = len(model.fusion.qformer.layers)
+        elif hasattr(model.fusion, 'cross_attention_layers'):
+            # Fallback for older CrossModalFusion class
+            self.fusion_layers = len(model.fusion.cross_attention_layers)
+        else:
+            # Default fallback
+            self.fusion_layers = 6  # Default number of QFormer layers
 
         # Storage for attention patterns over time
         self.attention_history = {

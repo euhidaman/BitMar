@@ -133,7 +133,7 @@ class CompleteBabyLMDataset(Dataset):
             logger.error(f"Error loading CC features: {e}")
             raise RuntimeError(f"Failed to load CC vision features: {e}")
 
-        # Load Localized Narratives  
+        # Load Localized Narratives
         ln_captions_file = self.dataset_dir / "local_narr_captions.json"
         ln_feat_file = self.dataset_dir / "local_narr_dino_v2_states.npy"
 

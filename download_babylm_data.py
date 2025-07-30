@@ -90,13 +90,13 @@ def verify_existing_data():
     # Check for extracted train_50M files
     train_50M_files = [
         "train_50M/bnc_spoken.train",
-        "train_50M/childes.train",
+        "train_50M/childes.train", 
         "train_50M/gutenberg.train",
         "train_50M/open_subtitles.train",
         "train_50M/simple_wiki.train",
         "train_50M/switchboard.train"
     ]
-
+    
     # Optional files
     optional_files = [
         "README.pdf",  # Dataset documentation
@@ -119,7 +119,7 @@ def verify_existing_data():
     # Check for extracted train_50M files
     train_50M_extracted = True
     train_50M_dir = dataset_dir / "train_50M"
-
+    
     if train_50M_dir.exists():
         logger.info("📁 Checking extracted train_50M files:")
         extracted_count = 0
@@ -131,7 +131,7 @@ def verify_existing_data():
                 extracted_count += 1
             else:
                 logger.warning(f"  ❌ {filename}: Missing")
-
+        
         if extracted_count == len(train_50M_files):
             logger.info(f"✅ All {len(train_50M_files)} train_50M text files found!")
         else:
@@ -140,7 +140,7 @@ def verify_existing_data():
     else:
         logger.warning("❌ train_50M directory not found - extraction needed")
         train_50M_extracted = False
-
+    
     # Check optional files
     for filename in optional_files:
         filepath = dataset_dir / filename
@@ -150,10 +150,10 @@ def verify_existing_data():
 
     # Check if we have everything we need
     all_required_found = len(existing_files) == len(required_files)
-
+    
     if all_required_found and train_50M_extracted:
         logger.info("🎉 All required dataset files found (including extracted train_50M files)!");
-
+        
         # Verify data integrity
         try:
             verify_core_files(dataset_dir)
@@ -165,12 +165,12 @@ def verify_existing_data():
     else:
         if not all_required_found:
             logger.warning(f"❌ Missing {len(missing_files)} required files: {missing_files}")
-
+        
         if not train_50M_extracted and "train_50M.zip" in existing_files:
             logger.info("📦 train_50M.zip found but not extracted - will extract during setup")
-
+            
         logger.info("📋 Note: train_50M.zip extraction is required for complete BitMar training")
-
+            
     return False
 
 
@@ -317,17 +317,17 @@ def extract_train_50M_if_needed(dataset_dir: Path):
     try:
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(extract_path.parent)
-
+        
         # Verify extraction
         expected_files = [
             "bnc_spoken.train",
-            "childes.train",
+            "childes.train", 
             "gutenberg.train",
             "open_subtitles.train",
             "simple_wiki.train",
             "switchboard.train"
         ]
-
+        
         extracted_files = []
         for filename in expected_files:
             file_path = extract_path / filename
@@ -337,12 +337,12 @@ def extract_train_50M_if_needed(dataset_dir: Path):
                 extracted_files.append(filename)
             else:
                 logger.warning(f"  ❌ {filename}: Missing after extraction")
-
+        
         if len(extracted_files) == len(expected_files):
             logger.info(f"✅ Successfully extracted train_50M.zip! Found {len(extracted_files)} text files")
         else:
             logger.warning(f"⚠️  Only {len(extracted_files)}/{len(expected_files)} files extracted successfully")
-
+            
         return extract_path
 
     except Exception as e:
@@ -391,31 +391,31 @@ def main():
     
     # First check if data already exists
     dataset_exists = verify_existing_data()
-
+    
     if not dataset_exists:
         # Try to download from official sources
         logger.info("\n📥 Attempting dataset download...")
         success = download_babylm_multimodal_dataset()
-
+        
         if not success:
             logger.info("\n🧪 Creating test dataset for development...")
             create_test_dataset()
             logger.info("\n⚠️  Using test data - replace with real BabyLM dataset for final training")
             return True
-
+    
     # At this point, we should have the dataset files
     # Now check if train_50M.zip needs to be extracted
     dataset_dir = Path("../babylm_dataset")
-
+    
     if (dataset_dir / "train_50M.zip").exists():
         logger.info("\n📦 Checking train_50M.zip extraction...")
         extract_result = extract_train_50M_if_needed(dataset_dir)
-
+        
         if extract_result:
             logger.info("✅ train_50M.zip extraction completed!")
         else:
             logger.warning("⚠️  train_50M.zip extraction failed or not needed")
-
+    
     # Final verification
     logger.info("\n🔍 Final dataset verification...")
     if verify_existing_data():

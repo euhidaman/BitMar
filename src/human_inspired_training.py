@@ -460,13 +460,13 @@ def create_human_inspired_dataloaders(config):
         dataset_dir / 'cc_3M_dino_v2_states_1of2.npy',  # Use first file for now
         tokenizer
     )
-    
+
     ln_multimodal = MultimodalGroundingDataset(
         dataset_dir / 'local_narr_captions.json',
         dataset_dir / 'local_narr_dino_v2_states.npy',
         tokenizer
     )
-    
+
     multimodal_dataloader = DataLoader(
         torch.utils.data.ConcatDataset([cc_multimodal, ln_multimodal]),
         batch_size=config.get('batch_size', 32),
@@ -500,7 +500,7 @@ def create_human_inspired_dataloaders(config):
         shuffle=True,
         num_workers=4
     )
-    
+
     logger.info(f"📊 Dataset Statistics:")
     logger.info(f"   Stage 1 (Visual): {len(visual_dataloader.dataset):,} samples")
     logger.info(f"   Stage 2 (Multimodal): {len(multimodal_dataloader.dataset):,} samples")
@@ -513,13 +513,13 @@ if __name__ == "__main__":
     # Example usage
     config = {
         'visual_stage_epochs': 5,
-        'grounding_stage_epochs': 10, 
+        'grounding_stage_epochs': 10,
         'language_stage_epochs': 15,
         'batch_size': 32
     }
-    
+
     # This would be integrated into your main training script
     print("🧠 Human-Inspired Learning Pipeline Created!")
     print("Stage 1: Visual Understanding (like babies learning to see)")
-    print("Stage 2: Visual-Language Grounding (connecting words to images)")  
+    print("Stage 2: Visual-Language Grounding (connecting words to images)")
     print("Stage 3: Abstract Language Learning (reading and reasoning)")
