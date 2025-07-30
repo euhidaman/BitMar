@@ -1227,4 +1227,13 @@ def create_bitmar_model(config: Dict) -> BitMarModel:
     return model
 
 # Import the enhanced QFormer cross-modal alignment
-from .qformer_cross_modal import EnhancedCrossModalFusion
+try:
+    from qformer_cross_modal import EnhancedCrossModalFusion
+except ImportError:
+    try:
+        from src.qformer_cross_modal import EnhancedCrossModalFusion
+    except ImportError:
+        # Fallback - define a dummy class if import fails
+        class EnhancedCrossModalFusion:
+            def __init__(self, *args, **kwargs):
+                raise ImportError("EnhancedCrossModalFusion could not be imported. Please check qformer_cross_modal.py")
