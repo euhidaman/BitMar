@@ -117,42 +117,73 @@ class AttentionHeadAnalyzer:
                                input_ids: torch.Tensor, step: int, attention_type: str):
         """Analyze self-attention patterns in encoder/decoder"""
         
+        # Handle both list and single tensor inputs
+        if not isinstance(attention_patterns, list):
+            attention_patterns = [attention_patterns]
+
         for layer_idx, attention_weights in enumerate(attention_patterns):
             if attention_weights is None:
                 continue
-                
-            # attention_weights shape: [batch_size, seq_len, seq_len]
-            batch_size, seq_len, _ = attention_weights.shape
-            
-            # Compute attention statistics per head (we average across heads in the model)
-            # For head-level analysis, we need to modify the model to return per-head attention
-            
-            # For now, analyze the averaged attention patterns
-            avg_attention = attention_weights.mean(0)  # Average across batch
-            
-            # Compute attention entropy (measure of focus)
-            entropy = self._compute_attention_entropy(avg_attention)
-            
-            # Compute attention concentration (how much attention goes to top tokens)
-            concentration = self._compute_attention_concentration(avg_attention, top_k=5)
-            
-            # Store metrics (ensure they are Python floats)
-            if isinstance(entropy, torch.Tensor):
-                entropy = entropy.item()
-            if isinstance(concentration, torch.Tensor):
-                concentration = concentration.item()
-                
-            self.attention_history[attention_type][f'layer_{layer_idx}_entropy'].append(entropy)
-            self.attention_history[attention_type][f'layer_{layer_idx}_concentration'].append(concentration)
-            
-            # Update importance scores (using entropy as importance measure)
-            # Note: This is a simplified version. For true head-level analysis, 
-            # we need per-head attention weights
-            layer_importance = 1.0 / (entropy + 1e-8)  # Higher importance for lower entropy
-            if attention_type in self.head_importance_scores:
-                # Update all heads equally (since we don't have per-head data)
-                self.head_importance_scores[attention_type][layer_idx, :] += layer_importance
-                
+
+            try:
+                # Handle nested lists or ensure we have a tensor
+                if isinstance(attention_weights, list):
+                    if len(attention_weights) > 0 and isinstance(attention_weights[0], torch.Tensor):
+                        attention_weights = attention_weights[0]
+                    else:
+                        continue
+
+                if not isinstance(attention_weights, torch.Tensor):
+                    continue
+
+                # Check tensor has valid shape
+                if attention_weights.dim() < 2:
+                    continue
+
+                # attention_weights shape: [batch_size, seq_len, seq_len] or similar
+                if attention_weights.dim() == 3:
+                    batch_size, seq_len, _ = attention_weights.shape
+                elif attention_weights.dim() == 2:
+                    # Handle 2D case
+                    seq_len, _ = attention_weights.shape
+                    attention_weights = attention_weights.unsqueeze(0)  # Add batch dim
+                else:
+                    continue
+
+                # Compute attention statistics per head (we average across heads in the model)
+                # For head-level analysis, we need to modify the model to return per-head attention
+
+                # For now, analyze the averaged attention patterns
+                avg_attention = attention_weights.mean(0)  # Average across batch
+
+                # Compute attention entropy (measure of focus)
+                entropy = self._compute_attention_entropy(avg_attention)
+
+                # Compute attention concentration (how much attention goes to top tokens)
+                concentration = self._compute_attention_concentration(avg_attention, top_k=5)
+
+                # Store metrics (ensure they are Python floats)
+                if isinstance(entropy, torch.Tensor):
+                    entropy = entropy.item()
+                if isinstance(concentration, torch.Tensor):
+                    concentration = concentration.item()
+
+                self.attention_history[attention_type][f'layer_{layer_idx}_entropy'].append(entropy)
+                self.attention_history[attention_type][f'layer_{layer_idx}_concentration'].append(concentration)
+
+                # Update importance scores (using entropy as importance measure)
+                # Note: This is a simplified version. For true head-level analysis,
+                # we need per-head attention weights
+                layer_importance = 1.0 / (entropy + 1e-8)  # Higher importance for lower entropy
+                if attention_type in self.head_importance_scores:
+                    # Update all heads equally (since we don't have per-head data)
+                    if layer_idx < self.head_importance_scores[attention_type].shape[0]:
+                        self.head_importance_scores[attention_type][layer_idx, :] += layer_importance
+
+            except Exception as e:
+                logger.debug(f"Error analyzing {attention_type} attention for layer {layer_idx}: {e}")
+                continue
+
     def _analyze_cross_modal_attention(self, cross_attention: Dict[str, torch.Tensor], step: int):
         """Analyze cross-modal attention patterns"""
         
@@ -359,8 +390,8 @@ class AttentionHeadAnalyzer:
         if 'encoder' in self.head_importance_scores:
             # Get top 5 heads overall
             flat_importance = self.head_importance_scores['encoder'].flatten()
-            top_indices = np.argsort(flat_importance)[-5:]
-            
+            top_indices = np.argsort(flat_importance)[-5:][::-1]
+
             for i, idx in enumerate(top_indices):
                 layer = idx // self.num_heads
                 head = idx % self.num_heads

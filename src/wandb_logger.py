@@ -55,66 +55,136 @@ class BitMarWandbLogger:
         metrics['Training/Learning_Rate'] = lr
         
         # Memory metrics with proper categorization
-        if 'memory_usage' in outputs:
+        if 'memory_usage' in outputs and outputs['memory_usage'] is not None:
             memory_usage = outputs['memory_usage']
-            metrics['Memory/Usage_Mean'] = memory_usage.mean().item()
-            metrics['Memory/Usage_Max'] = memory_usage.max().item()
-            metrics['Memory/Usage_Min'] = memory_usage.min().item()
-            metrics['Memory/Usage_Std'] = memory_usage.std().item()
-            
-            # Memory utilization percentage
-            active_slots = (memory_usage > 0).float().mean().item()
-            metrics['Memory/Active_Slots_Percentage'] = active_slots * 100
-            
-        # Attention pattern analysis
-        if 'cross_attention' in outputs:
-            for layer_name, attention_weights in outputs['cross_attention'].items():
-                avg_attention = attention_weights.mean().item()
-                max_attention = attention_weights.max().item()
-                entropy = self._compute_attention_entropy(attention_weights)
-                
-                metrics[f'Attention/CrossModal_{layer_name}_Mean'] = avg_attention
-                metrics[f'Attention/CrossModal_{layer_name}_Max'] = max_attention
-                metrics[f'Attention/CrossModal_{layer_name}_Entropy'] = entropy
-                
+            if isinstance(memory_usage, torch.Tensor):
+                metrics['Memory/Usage_Mean'] = memory_usage.mean().item()
+                metrics['Memory/Usage_Max'] = memory_usage.max().item()
+                metrics['Memory/Usage_Min'] = memory_usage.min().item()
+                metrics['Memory/Usage_Std'] = memory_usage.std().item()
+
+                # Memory utilization percentage
+                active_slots = (memory_usage > 0).float().mean().item()
+                metrics['Memory/Active_Slots_Percentage'] = active_slots * 100
+
+        # Attention pattern analysis with proper list handling
+        if 'cross_attention' in outputs and outputs['cross_attention'] is not None:
+            cross_attention = outputs['cross_attention']
+            if isinstance(cross_attention, dict):
+                for layer_name, attention_weights in cross_attention.items():
+                    if attention_weights is not None:
+                        try:
+                            # Handle both tensor and list inputs
+                            if isinstance(attention_weights, list):
+                                if len(attention_weights) > 0 and isinstance(attention_weights[0], torch.Tensor):
+                                    # Take the first tensor from the list for analysis
+                                    attention_weights = attention_weights[0]
+                                else:
+                                    continue
+
+                            if isinstance(attention_weights, torch.Tensor):
+                                avg_attention = attention_weights.mean().item()
+                                max_attention = attention_weights.max().item()
+                                entropy = self._compute_attention_entropy(attention_weights)
+
+                                metrics[f'Attention/CrossModal_{layer_name}_Mean'] = avg_attention
+                                metrics[f'Attention/CrossModal_{layer_name}_Max'] = max_attention
+                                metrics[f'Attention/CrossModal_{layer_name}_Entropy'] = entropy
+                        except Exception as e:
+                            logger.debug(f"Error processing cross attention for layer {layer_name}: {e}")
+                            continue
+
         if 'memory_attention' in outputs and outputs['memory_attention'] is not None:
             memory_attn = outputs['memory_attention']
-            metrics['Attention/Memory_Mean'] = memory_attn.mean().item()
-            metrics['Attention/Memory_Max'] = memory_attn.max().item()
-            metrics['Attention/Memory_Entropy'] = self._compute_attention_entropy(memory_attn)
-            
-            # Top-k memory slots being accessed
-            top_k_indices = torch.topk(memory_attn.sum(0), k=5)[1]
-            for i, idx in enumerate(top_k_indices):
-                metrics[f'Memory/Top_{i+1}_Slot_Access'] = memory_attn[:, idx].mean().item()
-            
-        # Feature analysis
+            try:
+                # Handle list input
+                if isinstance(memory_attn, list):
+                    if len(memory_attn) > 0 and isinstance(memory_attn[0], torch.Tensor):
+                        memory_attn = memory_attn[0]
+                    else:
+                        memory_attn = None
+
+                if isinstance(memory_attn, torch.Tensor):
+                    metrics['Attention/Memory_Mean'] = memory_attn.mean().item()
+                    metrics['Attention/Memory_Max'] = memory_attn.max().item()
+                    metrics['Attention/Memory_Entropy'] = self._compute_attention_entropy(memory_attn)
+
+                    # Top-k memory slots being accessed
+                    if memory_attn.dim() >= 2:
+                        top_k_indices = torch.topk(memory_attn.sum(0), k=min(5, memory_attn.size(-1)))[1]
+                        for i, idx in enumerate(top_k_indices):
+                            metrics[f'Memory/Top_{i+1}_Slot_Access'] = memory_attn[:, idx].mean().item()
+            except Exception as e:
+                logger.debug(f"Error processing memory attention: {e}")
+
+        # Feature analysis with proper type checking
         if 'text_features' in outputs and outputs['text_features'] is not None:
             text_feat = outputs['text_features']
-            metrics['Features/Text_Mean'] = text_feat.mean().item()
-            metrics['Features/Text_Std'] = text_feat.std().item()
-            metrics['Features/Text_Norm'] = torch.norm(text_feat, dim=-1).mean().item()
-            
+            try:
+                if isinstance(text_feat, list):
+                    if len(text_feat) > 0 and isinstance(text_feat[0], torch.Tensor):
+                        text_feat = text_feat[0]
+                    else:
+                        text_feat = None
+
+                if isinstance(text_feat, torch.Tensor):
+                    metrics['Features/Text_Mean'] = text_feat.mean().item()
+                    metrics['Features/Text_Std'] = text_feat.std().item()
+                    metrics['Features/Text_Norm'] = torch.norm(text_feat, dim=-1).mean().item()
+            except Exception as e:
+                logger.debug(f"Error processing text features: {e}")
+
         if 'vision_latent' in outputs and outputs['vision_latent'] is not None:
             vision_feat = outputs['vision_latent']
-            metrics['Features/Vision_Mean'] = vision_feat.mean().item()
-            metrics['Features/Vision_Std'] = vision_feat.std().item()
-            metrics['Features/Vision_Norm'] = torch.norm(vision_feat, dim=-1).mean().item()
-            
+            try:
+                if isinstance(vision_feat, list):
+                    if len(vision_feat) > 0 and isinstance(vision_feat[0], torch.Tensor):
+                        vision_feat = vision_feat[0]
+                    else:
+                        vision_feat = None
+
+                if isinstance(vision_feat, torch.Tensor):
+                    metrics['Features/Vision_Mean'] = vision_feat.mean().item()
+                    metrics['Features/Vision_Std'] = vision_feat.std().item()
+                    metrics['Features/Vision_Norm'] = torch.norm(vision_feat, dim=-1).mean().item()
+            except Exception as e:
+                logger.debug(f"Error processing vision features: {e}")
+
         if 'episode' in outputs and outputs['episode'] is not None:
             episode = outputs['episode']
-            metrics['Features/Episode_Mean'] = episode.mean().item()
-            metrics['Features/Episode_Std'] = episode.std().item()
-            metrics['Features/Episode_Norm'] = torch.norm(episode, dim=-1).mean().item()
-            
-        # Cross-modal similarity
+            try:
+                if isinstance(episode, list):
+                    if len(episode) > 0 and isinstance(episode[0], torch.Tensor):
+                        episode = episode[0]
+                    else:
+                        episode = None
+
+                if isinstance(episode, torch.Tensor):
+                    metrics['Features/Episode_Mean'] = episode.mean().item()
+                    metrics['Features/Episode_Std'] = episode.std().item()
+                    metrics['Features/Episode_Norm'] = torch.norm(episode, dim=-1).mean().item()
+            except Exception as e:
+                logger.debug(f"Error processing episode features: {e}")
+
+        # Cross-modal similarity with proper type checking
         if 'text_features' in outputs and 'vision_latent' in outputs:
-            if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
-                similarity = self._compute_cross_modal_similarity(
-                    outputs['text_features'], outputs['vision_latent']
-                )
-                metrics['Features/CrossModal_Similarity'] = similarity
-        
+            try:
+                text_feat = outputs['text_features']
+                vision_feat = outputs['vision_latent']
+
+                # Handle list inputs
+                if isinstance(text_feat, list) and len(text_feat) > 0:
+                    text_feat = text_feat[0] if isinstance(text_feat[0], torch.Tensor) else None
+                if isinstance(vision_feat, list) and len(vision_feat) > 0:
+                    vision_feat = vision_feat[0] if isinstance(vision_feat[0], torch.Tensor) else None
+
+                if (isinstance(text_feat, torch.Tensor) and isinstance(vision_feat, torch.Tensor) and
+                    text_feat is not None and vision_feat is not None):
+                    similarity = self._compute_cross_modal_similarity(text_feat, vision_feat)
+                    metrics['Features/CrossModal_Similarity'] = similarity
+            except Exception as e:
+                logger.debug(f"Error computing cross-modal similarity: {e}")
+
         # Gradient metrics
         total_norm = 0
         param_count = 0
