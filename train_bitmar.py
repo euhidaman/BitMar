@@ -64,8 +64,16 @@ try:
     from attention_evolution_tracker import AttentionEvolutionTracker
     ATTENTION_TRACKING_AVAILABLE = True
 except ImportError:
-    ATTENTION_TRACKING_AVAILABLE = False
-    print("Warning: attention_evolution_tracker not available")
+    try:
+        # Try importing from current directory
+        import sys
+        from pathlib import Path
+        sys.path.append(str(Path(__file__).parent))
+        from attention_evolution_tracker import AttentionEvolutionTracker
+        ATTENTION_TRACKING_AVAILABLE = True
+    except ImportError:
+        ATTENTION_TRACKING_AVAILABLE = False
+        print("Warning: attention_evolution_tracker not available")
 
 
 # Setup logging
