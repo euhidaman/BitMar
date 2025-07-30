@@ -190,47 +190,78 @@ class AttentionHeadAnalyzer:
         for layer_name, attention_weights in cross_attention.items():
             if attention_weights is None:
                 continue
-                
-            # attention_weights shape: [batch_size, seq_len, vision_dim] (text attending to vision)
-            batch_size, seq_len, vision_dim = attention_weights.shape
-            
-            # Save token-to-pixel attention data for visualization
-            self._save_token_pixel_attention(attention_weights, step, layer_name)
-            
-            # Compute statistics
-            avg_attention = attention_weights.mean(0)  # [seq_len, vision_dim]
-            
-            # Attention distribution across text positions with safe variance computation
+
             try:
-                if avg_attention.shape[1] > 1:  # Need at least 2 elements for variance
-                    attention_var = torch.var(avg_attention, dim=1, unbiased=False).mean()  # Use population variance
+                # Handle both tensor and list inputs
+                if isinstance(attention_weights, list):
+                    if len(attention_weights) > 0 and isinstance(attention_weights[0], torch.Tensor):
+                        # Take the first tensor from the list for analysis
+                        attention_weights = attention_weights[0]
+                    else:
+                        continue
+
+                if not isinstance(attention_weights, torch.Tensor):
+                    continue
+
+                # Check tensor has valid shape (at least 2D)
+                if attention_weights.dim() < 2:
+                    continue
+
+                # Handle different tensor shapes
+                if attention_weights.dim() == 2:
+                    # [seq_len, vision_dim] - add batch dimension
+                    attention_weights = attention_weights.unsqueeze(0)
+                elif attention_weights.dim() == 3:
+                    # [batch_size, seq_len, vision_dim] - expected shape
+                    pass
                 else:
-                    attention_var = torch.tensor(0.0)  # Fallback for single element
-            except RuntimeError:
-                attention_var = torch.tensor(0.0)  # Fallback on any variance computation error
+                    # Skip unsupported shapes
+                    continue
 
-            attention_max = torch.max(avg_attention)
-            attention_mean = torch.mean(avg_attention)
+                # Now we can safely get shape
+                batch_size, seq_len, vision_dim = attention_weights.shape
 
-            # Ensure values are Python floats
-            if isinstance(attention_var, torch.Tensor):
-                attention_var = attention_var.item()
-            if isinstance(attention_max, torch.Tensor):
-                attention_max = attention_max.item()
-            if isinstance(attention_mean, torch.Tensor):
-                attention_mean = attention_mean.item()
-            
-            # Store metrics
-            layer_idx = int(layer_name.split('_')[-1]) if '_' in layer_name else 0
-            self.attention_history['cross_modal'][f'layer_{layer_idx}_variance'].append(attention_var)
-            self.attention_history['cross_modal'][f'layer_{layer_idx}_max'].append(attention_max)
-            self.attention_history['cross_modal'][f'layer_{layer_idx}_mean'].append(attention_mean)
-            
-            # Update importance scores
-            importance = attention_var  # Higher variance = more selective attention
-            if layer_idx < self.head_importance_scores['cross_modal'].shape[0]:
-                self.head_importance_scores['cross_modal'][layer_idx, :] += importance
-    
+                # Save token-to-pixel attention data for visualization
+                self._save_token_pixel_attention(attention_weights, step, layer_name)
+
+                # Compute statistics
+                avg_attention = attention_weights.mean(0)  # [seq_len, vision_dim]
+
+                # Attention distribution across text positions with safe variance computation
+                try:
+                    if avg_attention.shape[1] > 1:  # Need at least 2 elements for variance
+                        attention_var = torch.var(avg_attention, dim=1, unbiased=False).mean()  # Use population variance
+                    else:
+                        attention_var = torch.tensor(0.0)  # Fallback for single element
+                except RuntimeError:
+                    attention_var = torch.tensor(0.0)  # Fallback on any variance computation error
+
+                attention_max = torch.max(avg_attention)
+                attention_mean = torch.mean(avg_attention)
+
+                # Ensure values are Python floats
+                if isinstance(attention_var, torch.Tensor):
+                    attention_var = attention_var.item()
+                if isinstance(attention_max, torch.Tensor):
+                    attention_max = attention_max.item()
+                if isinstance(attention_mean, torch.Tensor):
+                    attention_mean = attention_mean.item()
+
+                # Store metrics
+                layer_idx = int(layer_name.split('_')[-1]) if '_' in layer_name else 0
+                self.attention_history['cross_modal'][f'layer_{layer_idx}_variance'].append(attention_var)
+                self.attention_history['cross_modal'][f'layer_{layer_idx}_max'].append(attention_max)
+                self.attention_history['cross_modal'][f'layer_{layer_idx}_mean'].append(attention_mean)
+
+                # Update importance scores
+                importance = attention_var  # Higher variance = more selective attention
+                if layer_idx < self.head_importance_scores['cross_modal'].shape[0]:
+                    self.head_importance_scores['cross_modal'][layer_idx, :] += importance
+
+            except Exception as e:
+                logger.debug(f"Error analyzing cross-modal attention for layer {layer_name}: {e}")
+                continue
+
     def _save_token_pixel_attention(self, attention_weights: torch.Tensor, step: int, layer_name: str):
         """Save token-to-pixel attention data for detailed visualization"""
         
