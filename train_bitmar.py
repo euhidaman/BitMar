@@ -1760,9 +1760,33 @@ class BitMarTrainer:
                                fused_features: torch.Tensor) -> torch.Tensor:
         """Compute alignment loss between modalities and their fusion"""
         try:
+            # Handle dimension mismatches by projecting to the smallest common dimension
+            text_dim = text_features.shape[-1]
+            vision_dim = vision_features.shape[-1]
+            fused_dim = fused_features.shape[-1]
+
+            # Find the minimum dimension to project all features to
+            min_dim = min(text_dim, vision_dim, fused_dim)
+
+            # Project all features to the same dimension
+            if text_dim > min_dim:
+                text_proj = text_features[..., :min_dim]
+            else:
+                text_proj = text_features
+
+            if vision_dim > min_dim:
+                vision_proj = vision_features[..., :min_dim]
+            else:
+                vision_proj = vision_features
+
+            if fused_dim > min_dim:
+                fused_proj = fused_features[..., :min_dim]
+            else:
+                fused_proj = fused_features
+
             # Ensure features are similar after fusion
-            text_to_fused = F.mse_loss(text_features, fused_features)
-            vision_to_fused = F.mse_loss(vision_features, fused_features)
+            text_to_fused = F.mse_loss(text_proj, fused_proj)
+            vision_to_fused = F.mse_loss(vision_proj, fused_proj)
 
             # Balance both modalities
             alignment_loss = 0.5 * text_to_fused + 0.5 * vision_to_fused
