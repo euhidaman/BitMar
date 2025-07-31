@@ -149,29 +149,19 @@ def verify_existing_data():
             logger.info(f"📁 {filename}: Found ({size_mb:.1f} MB)")
 
     # Check if we have everything we need
-    all_required_found = len(existing_files) == len(required_files)
-    
-    if all_required_found and train_50M_extracted:
-        logger.info("🎉 All required dataset files found (including extracted train_50M files)!");
-        
-        # Verify data integrity
-        try:
-            verify_core_files(dataset_dir)
-            return True
-                
-        except Exception as e:
-            logger.error(f"❌ Data integrity check failed: {e}")
-            
+    if not missing_files and train_50M_extracted:
+        logger.info("🎉 Complete BabyLM multimodal dataset found!")
+        logger.info("📊 Dataset summary:")
+        logger.info(f"  • Required files: {len(existing_files)}/{len(required_files)}")
+        logger.info(f"  • Text files: {len(train_50M_files)} train_50M files")
+        logger.info(f"  • Vision files: DiNOv2 embeddings + captions")
+        return True, dataset_dir
     else:
-        if not all_required_found:
-            logger.warning(f"❌ Missing {len(missing_files)} required files: {missing_files}")
-        
-        if not train_50M_extracted and "train_50M.zip" in existing_files:
-            logger.info("📦 train_50M.zip found but not extracted - will extract during setup")
-            
-        logger.info("📋 Note: train_50M.zip extraction is required for complete BitMar training")
-            
-    return False
+        if missing_files:
+            logger.warning(f"⚠️  Missing {len(missing_files)} required files: {missing_files}")
+        if not train_50M_extracted:
+            logger.warning("⚠️  train_50M.zip needs to be extracted")
+        return False, dataset_dir
 
 
 def download_babylm_multimodal_dataset():
@@ -427,3 +417,47 @@ def main():
     else:
         logger.warning("⚠️  Dataset setup incomplete - some files may be missing")
         return False
+
+
+def download_babylm_data():
+    """Main download function"""
+    logger.info("🚀 BabyLM Multimodal Dataset Downloader")
+    logger.info("=" * 50)
+
+    # First check if data already exists
+    data_exists, dataset_dir = verify_existing_data()
+
+    if data_exists:
+        logger.info("✅ Dataset is complete. No download needed!")
+        return True
+
+    # If train_50M.zip exists but not extracted, extract it
+    train_zip_path = dataset_dir / "train_50M.zip"
+    train_dir = dataset_dir / "train_50M"
+
+    if train_zip_path.exists() and not train_dir.exists():
+        logger.info("📦 Extracting train_50M.zip...")
+        if extract_zip(str(train_zip_path), str(dataset_dir)):
+            logger.info("✅ train_50M.zip extracted successfully!")
+            # Check again after extraction
+            data_exists, _ = verify_existing_data()
+            if data_exists:
+                return True
+        else:
+            logger.error("❌ Failed to extract train_50M.zip")
+            return False
+
+    # If we get here, some files are missing
+    logger.error("❌ Some required files are missing!")
+    logger.info("📋 To complete the dataset, you need to:")
+    logger.info("1. Download the missing files from the BabyLM OSF repository")
+    logger.info("2. Place them in: " + str(dataset_dir.absolute()))
+    logger.info("3. Run this script again to verify")
+
+    return False
+
+
+if __name__ == "__main__":
+    success = download_babylm_data()
+    if not success:
+        sys.exit(1)
