@@ -15,11 +15,12 @@ model:
   vision_latent_size: 256  # Reduced from 512 to match episode_dim
   vision_hidden_size: 128  # Reduced from 256
   
-  # Cross-modal fusion (Tiny BitNet quantized)
+  # QFormer-inspired Cross-modal fusion (Learnable Query-based)
   fusion_hidden_size: 256  # Reduced from 512
   fusion_num_heads: 4  # Reduced from 8
   fusion_num_layers: 2  # Keep at 2 for cross-modal capability
-  
+  fusion_num_queries: 32  # NEW: Number of learnable query tokens for QFormer fusion
+
   # Episodic Memory (Tiny Model - Edge Optimized)
   memory_size: 16  # Ultra-compact: 16 memory slots for edge deployment
   episode_dim: 256  # Reduced episode dimension for efficiency

@@ -495,41 +495,93 @@ class EpisodicMemory(nn.Module):
             return retrieved, attention_weights
 
 
-class CrossModalFusion(nn.Module):
-    """Cross-modal fusion module for text and vision features"""
+class LearnableQueryFusion(nn.Module):
+    """
+    QFormer-inspired Cross-modal fusion using learnable queries
+    Bridges text and vision modalities through learned query tokens
+    """
 
     def __init__(
         self,
         text_dim: int,
         vision_dim: int,
         hidden_dim: int,
+        num_queries: int = 32,
         num_heads: int = 8,
-        num_layers: int = 2
+        num_layers: int = 2,
+        dropout: float = 0.1
     ):
         super().__init__()
         self.text_dim = text_dim
         self.vision_dim = vision_dim
         self.hidden_dim = hidden_dim
+        self.num_queries = num_queries
+        self.num_heads = num_heads
+        self.num_layers = num_layers
 
-        # Projection layers
+        # Learnable query tokens - these bridge text and vision
+        self.query_tokens = nn.Parameter(torch.randn(1, num_queries, hidden_dim))
+        nn.init.trunc_normal_(self.query_tokens, std=0.02)
+
+        # Projection layers to common dimension
         self.text_proj = BitNetLinear(text_dim, hidden_dim)
         self.vision_proj = BitNetLinear(vision_dim, hidden_dim)
 
-        # Cross-attention layers
-        self.cross_attention_layers = nn.ModuleList([
-            BitNetAttention(
-                dim=hidden_dim,
-                num_heads=num_heads
-            ) for _ in range(num_layers)
-        ])
+        # Query-based attention layers
+        self.query_layers = nn.ModuleList()
+        for i in range(num_layers):
+            layer = nn.ModuleDict({
+                # Query-to-Text attention (queries attend to text)
+                'q2t_attention': BitNetAttention(
+                    dim=hidden_dim,
+                    num_heads=num_heads,
+                    dropout=dropout
+                ),
+                'q2t_norm': nn.LayerNorm(hidden_dim),
 
-        # Layer normalization
-        self.layer_norms = nn.ModuleList([
-            nn.LayerNorm(hidden_dim) for _ in range(num_layers)
-        ])
+                # Query-to-Vision attention (queries attend to vision)
+                'q2v_attention': BitNetAttention(
+                    dim=hidden_dim,
+                    num_heads=num_heads,
+                    dropout=dropout
+                ),
+                'q2v_norm': nn.LayerNorm(hidden_dim),
+
+                # Query self-attention (queries attend to each other)
+                'self_attention': BitNetAttention(
+                    dim=hidden_dim,
+                    num_heads=num_heads,
+                    dropout=dropout
+                ),
+                'self_norm': nn.LayerNorm(hidden_dim),
+
+                # MLP for query refinement
+                'mlp': BitNetMLP(hidden_dim, hidden_dim * 4, dropout),
+                'mlp_norm': nn.LayerNorm(hidden_dim)
+            })
+            self.query_layers.append(layer)
+
+        # Text-to-Query attention (text tokens attend to learned queries)
+        self.text2query_layers = nn.ModuleList()
+        for i in range(num_layers):
+            layer = nn.ModuleDict({
+                'attention': BitNetAttention(
+                    dim=hidden_dim,
+                    num_heads=num_heads,
+                    dropout=dropout
+                ),
+                'norm': nn.LayerNorm(hidden_dim),
+                'mlp': BitNetMLP(hidden_dim, hidden_dim * 4, dropout),
+                'mlp_norm': nn.LayerNorm(hidden_dim)
+            })
+            self.text2query_layers.append(layer)
 
         # Output projection
         self.output_proj = BitNetLinear(hidden_dim, hidden_dim)
+
+        # Learnable position embeddings for queries
+        self.query_pos_embed = nn.Parameter(torch.randn(1, num_queries, hidden_dim))
+        nn.init.trunc_normal_(self.query_pos_embed, std=0.02)
 
     def forward(
         self,
@@ -548,31 +600,74 @@ class CrossModalFusion(nn.Module):
         batch_size, seq_len = text_features.shape[:2]
 
         # Project to common dimension
-        # [batch_size, seq_len, hidden_dim]
-        text_proj = self.text_proj(text_features)
-        vision_proj = self.vision_proj(vision_features).unsqueeze(
-            1)  # [batch_size, 1, hidden_dim]
+        text_proj = self.text_proj(text_features)  # [B, seq_len, hidden_dim]
+        vision_proj = self.vision_proj(vision_features).unsqueeze(1)  # [B, 1, hidden_dim]
 
-        # Cross-attention fusion
-        fused = text_proj
+        # Initialize learnable queries
+        queries = self.query_tokens.expand(batch_size, -1, -1)  # [B, num_queries, hidden_dim]
+        queries = queries + self.query_pos_embed  # Add positional encoding
+
         attention_weights = {}
 
-        for i, (attn_layer, norm_layer) in enumerate(zip(self.cross_attention_layers, self.layer_norms)):
-            # Text-to-vision cross-attention
-            attn_output, attn_weights = attn_layer(
-                query=fused,
+        # Phase 1: Query learning - queries extract information from both modalities
+        for i, layer in enumerate(self.query_layers):
+            # Query-to-Text: queries attend to text tokens
+            q2t_out, q2t_weights = layer['q2t_attention'](
+                query=queries,
+                key=text_proj,
+                value=text_proj
+            )
+            queries = layer['q2t_norm'](queries + q2t_out)
+            attention_weights[f'q2t_layer_{i}'] = q2t_weights
+
+            # Query-to-Vision: queries attend to vision features
+            q2v_out, q2v_weights = layer['q2v_attention'](
+                query=queries,
                 key=vision_proj,
                 value=vision_proj
             )
+            queries = layer['q2v_norm'](queries + q2v_out)
+            attention_weights[f'q2v_layer_{i}'] = q2v_weights
 
-            # Residual connection and normalization
-            fused = norm_layer(fused + attn_output)
-            attention_weights[f'layer_{i}'] = attn_weights
+            # Query self-attention: queries refine themselves
+            self_out, self_weights = layer['self_attention'](
+                query=queries,
+                key=queries,
+                value=queries
+            )
+            queries = layer['self_norm'](queries + self_out)
+            attention_weights[f'query_self_layer_{i}'] = self_weights
 
-        # Output projection
-        output = self.output_proj(fused)
+            # MLP refinement
+            mlp_out = layer['mlp'](queries)
+            queries = layer['mlp_norm'](queries + mlp_out)
+
+        # Phase 2: Text enhancement - text tokens attend to learned queries
+        enhanced_text = text_proj
+        for i, layer in enumerate(self.text2query_layers):
+            # Text-to-Query: text tokens attend to learned queries
+            t2q_out, t2q_weights = layer['attention'](
+                query=enhanced_text,
+                key=queries,
+                value=queries
+            )
+            enhanced_text = layer['norm'](enhanced_text + t2q_out)
+            attention_weights[f't2q_layer_{i}'] = t2q_weights
+
+            # MLP refinement
+            mlp_out = layer['mlp'](enhanced_text)
+            enhanced_text = layer['mlp_norm'](enhanced_text + mlp_out)
+
+        # Final output projection
+        output = self.output_proj(enhanced_text)
 
         return output, attention_weights
+
+
+# Keep the old CrossModalFusion for backward compatibility, but replace it
+class CrossModalFusion(LearnableQueryFusion):
+    """Alias for backward compatibility"""
+    pass
 
 
 class VisionEncoder(nn.Module):
@@ -666,6 +761,7 @@ class BitMarModel(nn.Module):
             text_dim=config['text_encoder_dim'],
             vision_dim=config['vision_latent_size'],
             hidden_dim=config['fusion_hidden_size'],
+            num_queries=config.get('fusion_num_queries', 32),  # NEW: Use config parameter
             num_heads=config['fusion_num_heads'],
             num_layers=config['fusion_num_layers']
         )
