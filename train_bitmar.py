@@ -122,6 +122,8 @@ class BitMarTrainer:
             config: Either a string path to config file or a loaded config dictionary
             device: Optional device specification
         """
+        print("🔧 BitMarTrainer.__init__() started...")
+
         # Handle both config path (string) and loaded config (dict)
         if isinstance(config, str):
             with open(config, 'r') as f:
@@ -130,6 +132,8 @@ class BitMarTrainer:
             self.config = config
         else:
             raise TypeError("config must be either a string path or a dictionary")
+
+        print("✅ Configuration loaded successfully")
 
         # Set device - prioritize user specification, then config, then auto-detect
         if device:
@@ -140,14 +144,72 @@ class BitMarTrainer:
             # Force CUDA device index specification when available
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-        # Ensure CUDA is initialized if available
+        print(f"🎯 Device selected: {self.device}")
+
+        # Ensure CUDA is initialized if available - WITH TIMEOUT PROTECTION
         if self.device.type == 'cuda':
-            torch.cuda.init()
-            logger.info(f"Using CUDA device: {torch.cuda.get_device_name(self.device)}")
-            # Don't set default tensor type to avoid DataLoader issues
-            logger.info("CUDA initialized, model will be moved to GPU explicitly")
+            try:
+                print("🔄 Initializing CUDA...")
+
+                # Add timeout protection for CUDA operations
+                import signal
+                import threading
+                import time
+
+                def cuda_init_with_timeout():
+                    """Initialize CUDA with timeout protection"""
+                    try:
+                        # Test CUDA availability first
+                        if not torch.cuda.is_available():
+                            raise RuntimeError("CUDA not available")
+
+                        # Initialize CUDA (this can hang)
+                        torch.cuda.init()
+
+                        # Get device name (this can also hang)
+                        device_name = torch.cuda.get_device_name(self.device)
+                        return device_name
+                    except Exception as e:
+                        raise e
+
+                # Use threading for timeout control on Windows
+                result = [None]
+                exception = [None]
+
+                def cuda_worker():
+                    try:
+                        result[0] = cuda_init_with_timeout()
+                    except Exception as e:
+                        exception[0] = e
+
+                thread = threading.Thread(target=cuda_worker)
+                thread.daemon = True
+                thread.start()
+                thread.join(timeout=10.0)  # 10 second timeout
+
+                if thread.is_alive():
+                    logger.warning("CUDA initialization timed out (10s), continuing with CPU")
+                    self.device = torch.device("cpu")
+                elif exception[0]:
+                    logger.warning(f"CUDA initialization failed: {exception[0]}")
+                    logger.warning("Falling back to CPU")
+                    self.device = torch.device("cpu")
+                elif result[0]:
+                    logger.info(f"Using CUDA device: {result[0]}")
+                    logger.info("CUDA initialized, model will be moved to GPU explicitly")
+                    print("✅ CUDA initialized successfully")
+                else:
+                    logger.warning("CUDA initialization returned no result, falling back to CPU")
+                    self.device = torch.device("cpu")
+
+            except Exception as e:
+                logger.warning(f"CUDA initialization failed: {e}")
+                logger.warning("Falling back to CPU")
+                self.device = torch.device("cpu")
         else:
             logger.warning("CUDA not available, using CPU. Training will be slow.")
+
+        print(f"✅ Final device: {self.device}")
 
         # Initialize tracking variables
         self.global_step = 0
@@ -196,20 +258,33 @@ class BitMarTrainer:
             'stage_3_metrics': {'text_perplexity': [], 'language_accuracy': [], 'text_loss': []}
         }
 
+        print("🔄 Setting up carbon tracking...")
         # Initialize CodeCarbon tracker
         self.setup_carbon_tracking()
+        print("✅ Carbon tracking setup completed")
 
+        print("🔄 Setting up adaptive controller...")
         # Initialize adaptive training controller
         self.setup_adaptive_controller()
+        print("✅ Adaptive controller setup completed")
+
+        print("✅ BitMarTrainer.__init__() completed successfully")
 
     def setup_carbon_tracking(self):
         """Initialize CodeCarbon emissions tracker for remote machine usage"""
         try:
+            # Skip carbon tracking if not available to prevent hanging
+            if not CODECARBON_AVAILABLE:
+                logger.info("CodeCarbon not available, skipping carbon tracking")
+                self.carbon_tracker = None
+                self.carbon_tracking_enabled = False
+                return
+
             # Create carbon logs directory
             carbon_logs_dir = Path("./carbon_logs")
             carbon_logs_dir.mkdir(exist_ok=True)
 
-            # Configure tracker for remote/cloud environment
+            # Configure tracker for remote/cloud environment with timeout protection
             tracker_config = {
                 "project_name": f"BitMar-BabyLM-Training-{self.config.get('training', {}).get('max_epochs', 'unknown')}epochs",
                 "experiment_id": f"bitmar-{self.device.type}-training",
@@ -224,18 +299,34 @@ class BitMarTrainer:
 
             # Auto-detect cloud provider for remote machines
             if torch.cuda.is_available():
-                tracker_config["gpu_ids"] = [0]  # Track primary GPU
-                logger.info(f"Carbon tracking configured for GPU: {torch.cuda.get_device_name(0)}")
+                try:
+                    tracker_config["gpu_ids"] = [0]  # Track primary GPU
+                    logger.info(f"Carbon tracking configured for GPU: {torch.cuda.get_device_name(0)}")
+                except Exception as e:
+                    logger.warning(f"Could not configure GPU for carbon tracking: {e}")
 
-            # Initialize the tracker but don't start it yet
-            self.carbon_tracker = EmissionsTracker(**tracker_config)
-            self.carbon_tracking_enabled = True
+            # Initialize the tracker but don't start it yet - with timeout protection
+            import signal
 
-            logger.info("🌱 CodeCarbon emissions tracker initialized for remote training")
-            logger.info(f"Carbon logs will be saved to: {carbon_logs_dir}/emissions.csv")
+            def timeout_handler(signum, frame):
+                raise TimeoutError("CodeCarbon initialization timed out")
 
-        except Exception as e:
-            logger.warning(f"Failed to initialize CodeCarbon tracker: {e}")
+            # Set a 10-second timeout for initialization
+            if hasattr(signal, 'SIGALRM'):  # Unix-like systems
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(10)
+
+            try:
+                self.carbon_tracker = EmissionsTracker(**tracker_config)
+                self.carbon_tracking_enabled = True
+                logger.info("🌱 CodeCarbon emissions tracker initialized for remote training")
+                logger.info(f"Carbon logs will be saved to: {carbon_logs_dir}/emissions.csv")
+            finally:
+                if hasattr(signal, 'SIGALRM'):
+                    signal.alarm(0)  # Cancel the alarm
+
+        except (TimeoutError, Exception) as e:
+            logger.warning(f"Failed to initialize CodeCarbon tracker (timeout or error): {e}")
             logger.warning("Training will continue without carbon tracking")
             self.carbon_tracker = None
             self.carbon_tracking_enabled = False
@@ -1748,7 +1839,7 @@ class BitMarTrainer:
             # Create final stage comparison visualizations
             self._create_stage_comparison_plots()
 
-            logger.info("\n" + "="*60)
+            logger.info("\n"="*60)
             logger.info("✅ HUMAN-INSPIRED TRAINING COMPLETED!")
             logger.info("="*60)
             logger.info(f"📊 Stage 1 (Visual): Vision Loss = {stage_1_results['avg_vision_loss']:.4f}")
