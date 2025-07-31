@@ -1306,6 +1306,70 @@ class BitMarTrainer:
 
         self.best_similarity = 0.0  # Track best similarity for checkpointing
 
+    def train(self):
+        """Main training method that orchestrates the 3-stage human-inspired training process"""
+        try:
+            # Setup directories, logging, model, and data
+            self.setup_directories()
+            self.setup_logging_systems()
+            self.setup_model_and_data()
+            self.setup_optimizer()
+
+            # Start carbon tracking
+            self.start_carbon_tracking()
+
+            logger.info("🚀 Starting 3-stage human-inspired training process")
+
+            # Stage 1: Visual Understanding (like babies learning to see)
+            logger.info("🍼 Beginning Stage 1: Visual Understanding")
+            stage_1_metrics = self.train_stage_1_visual_understanding()
+            logger.info(f"✅ Stage 1 completed. Final metrics: {stage_1_metrics}")
+
+            # Stage 2: Visual-Language Grounding (connecting words to concepts)
+            logger.info("🔗 Beginning Stage 2: Visual-Language Grounding")
+            stage_2_metrics = self.train_stage_2_visual_language_grounding()
+            logger.info(f"✅ Stage 2 completed. Final metrics: {stage_2_metrics}")
+
+            # Stage 3: Abstract Language Learning (pure language patterns)
+            logger.info("📚 Beginning Stage 3: Abstract Language Learning")
+            stage_3_metrics = self.train_stage_3_abstract_language_learning()
+            logger.info(f"✅ Stage 3 completed. Final metrics: {stage_3_metrics}")
+
+            # Final evaluation and cleanup
+            logger.info("🎯 Running final model evaluation")
+            final_val_metrics = self.validate_epoch(self.current_epoch)
+
+            # Save final checkpoint
+            self.save_checkpoint(self.current_epoch, is_best=True, suffix='final')
+
+            # Log final training summary
+            training_summary = {
+                'total_epochs': self.current_epoch,
+                'total_steps': self.global_step,
+                'stage_1_final_loss': stage_1_metrics.get('avg_loss', 0.0),
+                'stage_2_final_loss': stage_2_metrics.get('avg_loss', 0.0),
+                'stage_3_final_loss': stage_3_metrics.get('avg_loss', 0.0),
+                'final_val_loss': final_val_metrics.get('avg_loss', 0.0),
+                'best_val_loss': self.best_val_loss
+            }
+
+            if self.wandb_logger:
+                wandb.log(training_summary)
+
+            logger.info("🎉 3-stage human-inspired training completed successfully!")
+            logger.info(f"Training Summary: {training_summary}")
+
+        except Exception as e:
+            logger.error(f"Training failed with error: {e}")
+            raise
+        finally:
+            # Stop carbon tracking
+            self.stop_carbon_tracking()
+
+            # Close wandb if open
+            if self.wandb_logger and wandb.run is not None:
+                wandb.finish()
+
     def freeze_all_except_vision(self):
         """Freeze all model components except vision encoder for Stage 1"""
         # Freeze text encoder
@@ -2320,4 +2384,3 @@ if __name__ == "__main__":
         print("\n🔍 Full error traceback:")
         traceback.print_exc()
         sys.exit(1)
-
