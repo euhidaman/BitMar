@@ -358,23 +358,23 @@ class HuggingFaceValidationDataset(Dataset):
 
 class VisionFeaturesConcatenated:
     """Memory-efficient concatenation of two vision feature arrays"""
-    
+
     def __init__(self, features_1, features_2):
         self.features_1 = features_1
         self.features_2 = features_2
         self.len_1 = len(features_1)
         self.len_2 = len(features_2)
         self.total_len = self.len_1 + self.len_2
-        
+
     def __len__(self):
         return self.total_len
-        
+
     def __getitem__(self, idx):
         if idx < self.len_1:
             return self.features_1[idx]
         else:
             return self.features_2[idx - self.len_1]
-            
+
     @property
     def shape(self):
         return (self.total_len, self.features_1.shape[1])
@@ -382,17 +382,17 @@ class VisionFeaturesConcatenated:
 
 class CombinedVisionFeatures:
     """Combine Conceptual Captions and Localized Narratives features"""
-    
+
     def __init__(self, cc_features, ln_features):
         self.cc_features = cc_features
         self.ln_features = ln_features
         self.cc_len = len(cc_features)
         self.ln_len = len(ln_features)
         self.total_len = self.cc_len + self.ln_len
-        
+
     def __len__(self):
         return self.total_len
-        
+
     def __getitem__(self, idx):
         if idx < self.cc_len:
             return self.cc_features[idx]

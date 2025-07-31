@@ -262,10 +262,12 @@ class BitMarTrainer:
         # Apply quick training mode settings
         if quick_mode.get('enabled', False):
             logger.info("🚀 Applying quick training mode data settings...")
-            enhanced_data_config['use_mixed_training'] = False  # Disable complex mixed training
+            # DON'T disable mixed training - we still want text+multimodal!
+            # enhanced_data_config['use_mixed_training'] = False  # REMOVED - this was causing multimodal-only
             enhanced_data_config['batch_size'] = max(enhanced_data_config.get('batch_size', 16), 32)  # Force larger batch
             enhanced_data_config['max_seq_length'] = min(enhanced_data_config.get('max_seq_length', 512), 256)  # Reduce sequence length
             logger.info(f"Quick mode: batch_size={enhanced_data_config['batch_size']}, max_seq_length={enhanced_data_config['max_seq_length']}")
+            logger.info("📊 Quick mode: Preserving mixed training (text + multimodal) for better learning")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get('training', {}).get('multi_task_weighting', {})

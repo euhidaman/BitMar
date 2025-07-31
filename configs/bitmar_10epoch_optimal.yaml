@@ -135,8 +135,8 @@ data:
   persistent_workers: true
 
   # FAST MODE: Reduce data complexity
-  use_mixed_training: false    # Disable mixed training for speed
-  text_ratio: 0.4              # Target ratio (will start higher)
+  use_mixed_training: true     # ENABLE for complete dataset training
+  text_ratio: 0.4              # Target ratio (40% text-only, 60% multimodal)
 
   # Smart data sampling - FAST MODE
   smart_sampling:
