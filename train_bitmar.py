@@ -3,17 +3,24 @@ Training script for BitMar model with QFormer Cross-Modal Alignment
 Handles multimodal training with episodic memory and human-inspired learning
 """
 
+print("🚀 Starting train_bitmar.py script...")
+
 # CodeCarbon for carbon footprint tracking
 try:
     from codecarbon import EmissionsTracker
     CODECARBON_AVAILABLE = True
+    print("✅ CodeCarbon imported successfully")
 except ImportError:
     CODECARBON_AVAILABLE = False
     print("Warning: CodeCarbon not available. Install with: pip install codecarbon")
 
+print("📦 Importing core modules...")
 from src.dataset import create_data_module, TextOnlyDataset, VisualOnlyDataset, extract_train_50M_if_needed
+print("✅ Dataset modules imported")
 from src.model import create_bitmar_model, count_parameters
+print("✅ Model modules imported")
 from src.wandb_logger import BitMarWandbLogger
+print("✅ Wandb logger imported")
 from pathlib import Path
 from typing import Dict, Optional
 import numpy as np
@@ -29,6 +36,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 import wandb
+print("✅ All core imports completed")
 
 # Try to import bitsandbytes for 8-bit optimizer
 try:
@@ -61,17 +69,14 @@ sys.path.append(str(Path(__file__).parent / "src"))
 ATTENTION_TRACKING_AVAILABLE = False
 print("ℹ️  Attention tracker disabled to prevent training hang")
 
-
-# Setup logging
+# Simple logging setup without file handler to prevent hanging
+import logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('training.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+print("✅ Logging setup completed")
 
 
 class BitMarTrainer:
