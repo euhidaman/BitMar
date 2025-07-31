@@ -1839,7 +1839,7 @@ class BitMarTrainer:
             # Create final stage comparison visualizations
             self._create_stage_comparison_plots()
 
-            logger.info("\n"="*60)
+            logger.info("\n" + "="*60)
             logger.info("✅ HUMAN-INSPIRED TRAINING COMPLETED!")
             logger.info("="*60)
             logger.info(f"📊 Stage 1 (Visual): Vision Loss = {stage_1_results['avg_vision_loss']:.4f}")
