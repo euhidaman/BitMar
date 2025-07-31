@@ -1025,6 +1025,70 @@ class BitMarTrainer:
 
         return val_metrics
 
+    def _force_model_device_consistency(self):
+        """Force all model parameters to be on the correct device"""
+        target_device = self.device
+
+        # Move model to device if not already there
+        self.model.to(target_device)
+
+        # Ensure all parameters are on the correct device
+        for name, param in self.model.named_parameters():
+            if param.device != target_device:
+                logger.warning(f"Moving parameter {name} from {param.device} to {target_device}")
+                param.data = param.data.to(target_device)
+                if param.grad is not None:
+                    param.grad.data = param.grad.data.to(target_device)
+
+        # Ensure all buffers are on the correct device
+        for name, buffer in self.model.named_buffers():
+            if buffer.device != target_device:
+                logger.warning(f"Moving buffer {name} from {buffer.device} to {target_device}")
+                buffer.data = buffer.data.to(target_device)
+
+    def _silent_device_check(self):
+        """Silently check device consistency without excessive logging"""
+        try:
+            # Check model device
+            model_device = next(self.model.parameters()).device
+            if model_device != self.device:
+                self._device_warnings_count += 1
+                if self._device_warnings_count <= 3:  # Only warn first 3 times
+                    logger.warning(f"Model device mismatch: {self.device}, got {model_device}")
+                    self._force_model_device_consistency()
+        except Exception as e:
+            logger.debug(f"Device check failed silently: {e}")
+
+    def _create_device_pinned_optimizer(self):
+        """Recreate optimizer with device-pinned parameters"""
+        try:
+            # Force model to correct device first
+            self._force_model_device_consistency()
+
+            # Recreate optimizer with current parameters
+            optimizer_type = self.config['training'].get('optimizer', 'adamw').lower()
+
+            if optimizer_type == 'adamw':
+                self.optimizer = torch.optim.AdamW(
+                    self.model.parameters(),
+                    lr=self.config['training']['learning_rate'],
+                    weight_decay=self.config['training']['weight_decay'],
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
+            elif optimizer_type == 'adam':
+                self.optimizer = torch.optim.Adam(
+                    self.model.parameters(),
+                    lr=self.config['training']['learning_rate'],
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
+
+            logger.info(f"Recreated optimizer on device {self.device}")
+
+        except Exception as e:
+            logger.error(f"Failed to recreate device-pinned optimizer: {e}")
+
     def _safe_batch_to_device(self, batch):
         """Safely move batch tensors to the specified device
 

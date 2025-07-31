@@ -1,0 +1,245 @@
+# BitMar Balanced Configuration
+# Small model size but preserves vision information quality
+# Better balance between efficiency and performance
+
+model:
+  # Text components - keep reasonably small
+  vocab_size: 50257
+  text_encoder_dim: 128  # Increased from 64 for better capacity
+  text_encoder_layers: 3  # Increased from 2
+  text_encoder_heads: 4   # Increased from 2
+
+  text_decoder_dim: 128   # Increased from 64
+  text_decoder_layers: 3  # Increased from 2
+  text_decoder_heads: 4   # Increased from 2
+
+  # Vision processing - PRESERVE MORE INFORMATION
+  vision_encoder_dim: 768  # DiNOv2 input (fixed)
+  vision_latent_size: 256  # Much larger! (768 -> 256 instead of 32)
+  vision_hidden_size: 384  # Increased intermediate size
+  vision_compression_method: "linear_projection"  # Better than top_k_selection
+  vision_spatial_pooling: true
+  vision_pool_size: 2
+
+  # Cross-modal fusion - enhanced for better alignment
+  fusion_hidden_size: 128  # Increased capacity
+  fusion_num_heads: 8      # More attention heads
+  fusion_num_layers: 3     # More layers for better fusion
+
+  # QFormer parameters - balanced
+  num_query_tokens: 32     # More query tokens for richer alignment
+  num_qformer_layers: 4    # More layers for sophisticated alignment
+
+  # Memory - slightly larger
+  memory_size: 16          # Doubled from 8
+  episode_dim: 64          # Increased to match better capacity
+  memory_alpha: 0.3
+  direct_writing: true
+  memory_compression: true
+
+  # Model configuration
+  max_seq_len: 256
+  dropout: 0.1  # Reduced dropout for better training
+
+  # Adaptive training
+  enable_adaptive_training: true
+  adaptive_similarity_monitoring: true
+
+  # Better initialization
+  initialization:
+    text_embedding_init: "normal"
+    text_embedding_std: 0.02
+    vision_projection_init: "xavier_uniform"
+    vision_projection_gain: 0.5
+    fusion_init: "kaiming_normal"
+    fusion_init_mode: "fan_in"
+    fusion_init_gain: 0.3
+    memory_init: "zeros"
+    memory_query_init: "xavier_uniform"
+    memory_key_init: "xavier_uniform"
+    memory_value_init: "xavier_uniform"
+    memory_init_gain: 0.2
+    bitnet_weight_init: "uniform"
+    bitnet_weight_bound: 0.1
+    bitnet_scale_init: 0.02
+    layernorm_weight_init: 1.0
+    layernorm_bias_init: 0.0
+
+  loss_config:
+    label_smoothing: 0.1
+    use_focal_loss: true
+    focal_alpha: 0.25
+    focal_gamma: 2.0
+    cross_modal_alignment_weight: 0.15
+    alignment_temperature: 0.5
+    use_contrastive_loss: true
+    contrastive_temperature: 0.1
+    contrastive_margin: 0.5
+
+# Vision feature reduction - LESS AGGRESSIVE
+vision_feature_reduction:
+  enabled: true
+  method: "linear_projection"  # Better preservation than top_k
+  target_dim: 256              # Much larger target
+  spatial_pooling: true
+  pool_method: "average"
+
+  alternative_methods:
+    linear_projection:
+      target_dim: 256
+      learnable: true            # Learnable projection
+    pca_reduction:
+      target_dim: 256
+      explained_variance: 0.98   # Preserve 98% of variance
+    learned_compression:
+      target_dim: 256
+      hidden_dim: 512            # Larger intermediate dimension
+
+# Data configuration
+data:
+  dataset_dir: "../babylm_dataset"
+  text_encoder_name: "gpt2"
+  max_seq_length: 256
+  batch_size: 32               # Reduced batch size for larger model
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  validation_datasets: ["glue/sst2"]
+
+# Training configuration
+training:
+  max_epochs: 10               # Total epochs (3+4+3)
+
+  # Human-inspired 3-stage training epochs
+  visual_stage_epochs: 3       # Stage 1: Vision Understanding
+  grounding_stage_epochs: 4    # Stage 2: Vision-Language Grounding
+  language_stage_epochs: 3     # Stage 3: Abstract Language Learning
+
+  # Stage-specific learning rates
+  visual_stage_lr: 1e-4        # Stage 1 learning rate
+  grounding_stage_lr: 8e-5     # Stage 2 learning rate (slightly lower)
+  language_stage_lr: 5e-5      # Stage 3 learning rate (lowest)
+
+  accumulate_grad_batches: 8
+  gradient_clip_val: 1.0
+  val_check_interval: 5000
+  scheduler: "cosine_with_restarts"
+  min_lr: 1e-6
+  warmup_steps: 2000
+  learning_rate: 1e-4          # Base learning rate
+  weight_decay: 0.01
+  track_attention: false
+  optimizer: "adamw"
+
+  optimizer_config:
+    betas: [0.9, 0.999]
+    eps: 1e-8
+    use_triton: false
+
+  # Better loss balancing
+  loss_balancing:
+    text_loss_weight: 0.6
+    cross_modal_loss_weight: 0.3
+    vision_loss_weight: 0.05
+    memory_loss_weight: 0.05
+    adaptive_loss_scaling: true
+    loss_temperature: 2.0
+    max_loss_clip: 20.0
+    loss_smoothing_alpha: 0.1
+
+  scheduler_config:
+    T_0: 1000
+    T_mult: 2
+    eta_min_ratio: 0.1
+
+# Wandb configuration
+wandb:
+  project: "bitmar-performance-qformer"
+  entity: "babylm-ntust"
+  api_key: null
+  log_every_n_steps: 100
+  log_attention: false
+  log_memory: true
+  log_gradients: false
+  log_quantization: false
+  log_features: true
+  save_code: true
+  create_plots: true
+  plot_attention_heatmaps: true
+  plot_memory_usage: true
+
+# Output directories
+output:
+  checkpoint_dir: "checkpoints_balanced"
+  log_dir: "logs_balanced"
+  attention_dir: "attention_balanced"
+  memory_dir: "memory_balanced"
+  results_dir: "results_balanced"
+
+# Memory optimization - less aggressive
+memory_optimization:
+  use_gradient_checkpointing: true
+  use_fp16: true
+  use_int8_vision: false          # Disable for better quality
+  empty_cache_frequency: 10
+  max_memory_slots_in_ram: 8
+  compress_episodic_memory: false # Disable for better quality
+  vision_feature_caching: true    # Enable caching
+  vision_batch_processing: true
+  tie_word_embeddings: true
+  use_shared_attention: true
+
+# Performance targets - relaxed for better quality
+performance_targets:
+  max_model_size_mb: 10           # Increased from 2MB
+  max_inference_memory_mb: 16     # Increased from 4MB
+  target_inference_time_ms: 200   # Increased from 100ms
+  min_accuracy_threshold: 0.75
+
+# Adaptive training - balanced settings
+adaptive_training:
+  enabled: true
+  monitor_every_step: true
+  similarity_window_size: 100
+  similarity_smoothing_alpha: 0.1
+  drop_threshold: 0.2
+  drop_detection_window: 100
+  min_steps_between_interventions: 1000
+  early_training_threshold: 10000
+  mid_training_threshold: 50000
+  min_steps_before_interventions: 500
+
+  early_training:
+    primary_strategy: "rebalance_loss_gentle"
+    freeze_duration_steps: 1000
+    auto_recovery: true
+    backup_strategies: ["reduce_learning_rate"]
+
+  mid_training:
+    primary_strategy: "rebalance_loss_gentle"
+    freeze_duration_steps: 1000
+    auto_recovery: true
+    backup_strategies: ["freeze_vision_encoder"]
+
+  late_training:
+    primary_strategy: "gentle_loss_rebalancing"
+    loss_boost_factor: 1.1
+    boost_duration_steps: 800
+    auto_recovery: true
+
+  intervention_strategies:
+    rebalance_loss_gentle:
+      description: "Gentle cross-modal loss boost"
+      cross_modal_weight_multiplier: 1.2
+      boost_duration: 800
+      gradual_reduction: true
+    gentle_loss_rebalancing:
+      description: "Very gentle cross-modal loss boost"
+      cross_modal_weight_multiplier: 1.1
+      boost_duration: 600
+      gradual_reduction: true
+    reduce_learning_rate:
+      description: "Temporary learning rate reduction"
+      lr_scale_factor: 0.8
+      duration_steps: 1000
+      gradual_recovery: true
