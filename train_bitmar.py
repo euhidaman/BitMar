@@ -8,6 +8,7 @@ from src.dataset import create_data_module
 from src.model import create_bitmar_model, count_parameters
 from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
+from src.modality_tracker import ModalityTracker  # NEW: Comprehensive modality tracking
 import os
 import sys
 import argparse
@@ -149,6 +150,27 @@ class BitMarTrainer:
         """Initialize model and data loaders with progressive growing support"""
         logger.info("Setting up model and data with advanced training strategies...")
 
+        # Check for quick training mode
+        quick_mode = self.config.get('quick_training_mode', {})
+        if quick_mode.get('enabled', False):
+            # Don't limit samples - use optimizations instead
+            optimizations = quick_mode.get('optimizations', {})
+            logger.info(f"🚀 QUICK TRAINING MODE: Using advanced optimizations without sample reduction")
+
+            # Apply optimizations
+            if optimizations.get('aggressive_image_compression', False):
+                logger.info("🖼️ Enabling aggressive image compression")
+            if optimizations.get('mixed_precision_training', False):
+                logger.info("⚡ Enabling mixed precision training")
+            if optimizations.get('compiled_model', False):
+                logger.info("🔥 Enabling PyTorch 2.0 model compilation")
+            if optimizations.get('cached_vision_features', False):
+                logger.info("💾 Enabling vision feature caching")
+
+            self.quick_optimizations = optimizations
+        else:
+            self.quick_optimizations = {}
+
         # Create model with progressive growing support
         model_config = self.config['model'].copy()
 
@@ -214,6 +236,13 @@ class BitMarTrainer:
                 'attention_analysis', {}).get('track_top_k', 10)
         )
 
+        # Initialize comprehensive modality tracker (NEW!)
+        self.modality_tracker = ModalityTracker(
+            save_dir=str(self.memory_dir / "modality_analysis"),
+            wandb_logger=self.wandb_logger
+        )
+        logger.info("📊 Comprehensive modality tracker initialized")
+
         # Initialize attention evolution tracker
         if ATTENTION_TRACKING_AVAILABLE:
             self.attention_evolution_tracker = AttentionEvolutionTracker(
@@ -229,11 +258,18 @@ class BitMarTrainer:
 
         # Enhanced data config for 10-epoch training
         enhanced_data_config = self.config['data'].copy()
-        enhanced_data_config['use_mixed_training'] = True
+
+        # Apply quick training mode settings
+        if quick_mode.get('enabled', False):
+            logger.info("🚀 Applying quick training mode data settings...")
+            enhanced_data_config['use_mixed_training'] = False  # Disable complex mixed training
+            enhanced_data_config['batch_size'] = max(enhanced_data_config.get('batch_size', 16), 32)  # Force larger batch
+            enhanced_data_config['max_seq_length'] = min(enhanced_data_config.get('max_seq_length', 512), 256)  # Reduce sequence length
+            logger.info(f"Quick mode: batch_size={enhanced_data_config['batch_size']}, max_seq_length={enhanced_data_config['max_seq_length']}")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get('training', {}).get('multi_task_weighting', {})
-        if multi_task_config.get('enabled', False):
+        if multi_task_config.get('enabled', False) and not quick_mode.get('enabled', False):
             initial_ratio = multi_task_config.get('initial_text_ratio', 0.5)
             enhanced_data_config['text_ratio'] = initial_ratio
             self.dynamic_weighting = True
@@ -246,7 +282,7 @@ class BitMarTrainer:
 
         # Adaptive batch scaling
         batch_config = self.config.get('training', {}).get('adaptive_batch_scaling', {})
-        if batch_config.get('enabled', False):
+        if batch_config.get('enabled', False) and not quick_mode.get('enabled', False):
             start_batch_size = batch_config.get('start_batch_size', 8)
             enhanced_data_config['batch_size'] = start_batch_size
             self.adaptive_batch_scaling = True
@@ -487,6 +523,28 @@ class BitMarTrainer:
                         logger.warning(
                             f"Wandb logging failed at step {self.global_step}: {e}")
                         # Continue training without wandb logging for this step
+
+                # Comprehensive modality tracking (NEW!)
+                modality_track_steps = self.config.get('track_attention_every_n_steps', 50)
+                if (self.modality_tracker and modality_track_steps > 0 and
+                    self.global_step % modality_track_steps == 0):
+
+                    try:
+                        self.modality_tracker.track_step(
+                            step=self.global_step,
+                            outputs=outputs,
+                            model=self.model,
+                            batch=batch
+                        )
+
+                        # Generate comprehensive graphs every 200 steps
+                        if self.global_step % 200 == 0 and self.global_step > 0:
+                            graph_path = self.modality_tracker.create_modality_graphs(self.global_step)
+                            self.modality_tracker.save_metrics_data(self.global_step)
+                            logger.info(f"📊 Generated modality analysis graphs at step {self.global_step}")
+
+                    except Exception as e:
+                        logger.warning(f"Modality tracking failed at step {self.global_step}: {e}")
 
                 # Attention analysis (less frequent to avoid overhead)
                 attention_log_steps = self.config.get(

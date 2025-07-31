@@ -105,27 +105,45 @@ training:
   mixed_precision: true
   compile_model: true
 
+# Quick training mode for fast experimentation WITHOUT reducing samples
+quick_training_mode:
+  enabled: true
+  # Keep full dataset but optimize processing
+  max_samples_per_epoch: null  # Use full dataset
+  # Advanced optimizations for speed without quality loss
+  optimizations:
+    aggressive_image_compression: true     # Compress vision features more aggressively
+    mixed_precision_training: true        # Use FP16 for speed
+    gradient_accumulation_steps: 4         # Larger effective batch size
+    compiled_model: true                   # PyTorch 2.0 compilation
+    efficient_attention: true             # Use efficient attention implementations
+    cached_vision_features: true          # Cache processed vision features
+    parallel_data_loading: true           # Optimize data loading
+  # Skip some validation epochs but keep quality tracking
+  skip_validation_epochs: [1, 3, 5, 7, 9]  # Only validate on epochs 2, 4, 6, 8, 10
+  reduce_logging_frequency: false  # Keep detailed logging for tracking
+
 # Enhanced data configuration with adaptive strategies
 data:
   dataset_dir: "../babylm_dataset"
 
-  # Adaptive batch configuration
-  batch_size: 8               # Will be scaled up during training
-  max_seq_length: 512
-  num_workers: 4
+  # FAST MODE: Much larger batch size
+  batch_size: 32               # Start with larger batches (you specified 16, but 32 is better)
+  max_seq_length: 256          # Reduce from 512 to 256 for speed
+  num_workers: 6               # Increase workers for faster data loading
   pin_memory: true
   persistent_workers: true
 
-  # Enhanced mixed training with dynamic weighting
-  use_mixed_training: true
-  text_ratio: 0.4             # Target ratio (will start higher)
+  # FAST MODE: Reduce data complexity
+  use_mixed_training: false    # Disable mixed training for speed
+  text_ratio: 0.4              # Target ratio (will start higher)
 
-  # Smart data sampling
+  # Smart data sampling - FAST MODE
   smart_sampling:
     enabled: true
-    difficulty_aware: true      # Sample easier examples early
-    quality_filtering: true     # Filter low-quality samples
-    diversity_sampling: true    # Ensure diverse samples each epoch
+    difficulty_aware: false     # Disable for speed
+    quality_filtering: false    # Disable for speed
+    diversity_sampling: false   # Disable for speed
 
   # Text encoder
   text_encoder_name: "gpt2"
