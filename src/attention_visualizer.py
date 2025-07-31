@@ -30,8 +30,13 @@ class AttentionHeadAnalyzer:
         self.num_encoder_layers = len(model.text_encoder.layers)
         self.num_decoder_layers = len(model.text_decoder.layers)
         self.num_heads = model.text_encoder.layers[0].attn.num_heads
-        self.fusion_layers = len(model.fusion.cross_attention_layers)
-        
+
+        # Updated for QFormer-based fusion (LearnableQueryFusion)
+        # The fusion model now has query_layers and text2query_layers instead of cross_attention_layers
+        self.fusion_query_layers = len(model.fusion.query_layers)
+        self.fusion_text2query_layers = len(model.fusion.text2query_layers)
+        self.total_fusion_layers = self.fusion_query_layers + self.fusion_text2query_layers
+
         # Storage for attention patterns over time
         self.attention_history = {
             'encoder': defaultdict(list),
@@ -44,7 +49,7 @@ class AttentionHeadAnalyzer:
         self.head_importance_scores = {
             'encoder': np.zeros((self.num_encoder_layers, self.num_heads)),
             'decoder': np.zeros((self.num_decoder_layers, self.num_heads)),
-            'cross_modal': np.zeros((self.fusion_layers, self.num_heads))
+            'cross_modal': np.zeros((self.total_fusion_layers, self.num_heads))
         }
         
     def analyze_batch_attention(self, model_outputs: Dict[str, torch.Tensor], 
@@ -307,7 +312,7 @@ class AttentionHeadAnalyzer:
         
         # Cross-modal attention variance over time
         ax = axes[0, 1]
-        for layer_idx in range(min(3, self.fusion_layers)):
+        for layer_idx in range(min(3, self.total_fusion_layers)):
             if f'layer_{layer_idx}_variance' in self.attention_history['cross_modal']:
                 var_values = self.attention_history['cross_modal'][f'layer_{layer_idx}_variance']
                 steps = range(len(var_values))
