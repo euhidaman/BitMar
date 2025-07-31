@@ -128,19 +128,27 @@ class BitMarTrainer:
             device: Optional device specification
         """
         print("🔧 BitMarTrainer.__init__() started...")
+        sys.stdout.flush()
 
         # Handle both config path (string) and loaded config (dict)
         if isinstance(config, str):
+            print(f"📄 Loading config from file: {config}")
+            sys.stdout.flush()
             with open(config, 'r') as f:
                 self.config = yaml.safe_load(f)
         elif isinstance(config, dict):
+            print("📄 Using provided config dictionary")
+            sys.stdout.flush()
             self.config = config
         else:
             raise TypeError("config must be either a string path or a dictionary")
 
         print("✅ Configuration loaded successfully")
+        sys.stdout.flush()
 
         # Set device - prioritize user specification, then config, then auto-detect
+        print("🎯 Setting up device configuration...")
+        sys.stdout.flush()
         if device:
             self.device = torch.device(device)
         elif self.config.get('training', {}).get('device'):
@@ -150,11 +158,13 @@ class BitMarTrainer:
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         print(f"🎯 Device selected: {self.device}")
+        sys.stdout.flush()
 
         # Ensure CUDA is initialized if available - WITH TIMEOUT PROTECTION
         if self.device.type == 'cuda':
             try:
                 print("🔄 Initializing CUDA...")
+                sys.stdout.flush()
 
                 # Add timeout protection for CUDA operations
                 import signal
@@ -203,6 +213,7 @@ class BitMarTrainer:
                     logger.info(f"Using CUDA device: {result[0]}")
                     logger.info("CUDA initialized, model will be moved to GPU explicitly")
                     print("✅ CUDA initialized successfully")
+                    sys.stdout.flush()
                 else:
                     logger.warning("CUDA initialization returned no result, falling back to CPU")
                     self.device = torch.device("cpu")
@@ -215,8 +226,11 @@ class BitMarTrainer:
             logger.warning("CUDA not available, using CPU. Training will be slow.")
 
         print(f"✅ Final device: {self.device}")
+        sys.stdout.flush()
 
         # Initialize tracking variables
+        print("🔢 Initializing tracking variables...")
+        sys.stdout.flush()
         self.global_step = 0
         self.current_epoch = 0
         self.best_val_loss = float('inf')
@@ -224,6 +238,8 @@ class BitMarTrainer:
         self._device_warnings_count = 0
 
         # Human-inspired training stages
+        print("📚 Setting up human-inspired training stages...")
+        sys.stdout.flush()
         self.current_stage = 1
         self.stage_configs = {
             1: {  # Visual Understanding Stage
@@ -257,6 +273,8 @@ class BitMarTrainer:
         }
 
         # Stage tracking for wandb
+        print("📊 Setting up stage metrics tracking...")
+        sys.stdout.flush()
         self.stage_metrics = {
             'stage_1_metrics': {'vision_loss': [], 'vision_accuracy': [], 'visual_clustering_score': []},
             'stage_2_metrics': {'cross_modal_similarity': [], 'alignment_accuracy': [], 'caption_bleu': []},
@@ -264,16 +282,21 @@ class BitMarTrainer:
         }
 
         print("🔄 Setting up carbon tracking...")
+        sys.stdout.flush()
         # Initialize CodeCarbon tracker
         self.setup_carbon_tracking()
         print("✅ Carbon tracking setup completed")
+        sys.stdout.flush()
 
         print("🔄 Setting up adaptive controller...")
+        sys.stdout.flush()
         # Initialize adaptive training controller
         self.setup_adaptive_controller()
         print("✅ Adaptive controller setup completed")
+        sys.stdout.flush()
 
         print("✅ BitMarTrainer.__init__() completed successfully")
+        sys.stdout.flush()
 
     def setup_carbon_tracking(self):
         """Initialize CodeCarbon emissions tracker for remote machine usage"""
@@ -1814,7 +1837,7 @@ class BitMarTrainer:
             feature_mean_std = feature_std.mean()  # Average std across all dimensions
 
             # We want reasonable standard deviation (not too small, not too large)
-            target_std = 1.0  # Target standard deviation
+            target std = 1.0  # Target standard deviation
             range_loss = F.mse_loss(feature_mean_std, torch.tensor(target_std, device=features.device))
 
             return range_loss
@@ -1824,3 +1847,41 @@ class BitMarTrainer:
 
     def train(self):
         """Main training method that orchestrates the 3-stage human-inspired training process"""
+        logger.info("Starting BitMar training...")
+        logger.info(f"Configuration: {self.config}")
+        logger.info(f"Device: {self.device}")
+        logger.info(f"Max epochs: {self.config['training']['max_epochs']}")
+        logger.info(f"Wandb project: {self.config['wandb']['project']}")
+
+        # Human-inspired 3-stage training process
+        for stage in range(1, 4):
+            logger.info(f"🚀 Starting Stage {stage}: {self.stage_configs[stage]['name']}")
+
+            # Call the appropriate training method for each stage
+            if stage == 1:
+                stage_results = self.train_stage_1_visual_understanding()
+            elif stage == 2:
+                stage_results = self.train_stage_2_visual_language_grounding()
+            elif stage == 3:
+                stage_results = self.train_stage_3_abstract_language_learning()
+
+            # Log stage results to wandb
+            if self.wandb_logger:
+                wandb.log({
+                    f"Stage_{stage}/Avg_Loss": stage_results.get('avg_loss', 0),
+                    f"Stage_{stage}/Avg_Consistency": stage_results.get('avg_consistency', 0),
+                    f"Stage_{stage}/Avg_Diversity": stage_results.get('avg_diversity', 0),
+                    f"Stage_{stage}/Avg_Similarity": stage_results.get('avg_cross_modal_similarity', 0),
+                    f"Stage_{stage}/Avg_Alignment_Accuracy": stage_results.get('avg_alignment_accuracy', 0),
+                    f"Stage_{stage}/Avg_Text_Loss": stage_results.get('avg_text_loss', 0),
+                    f"Stage_{stage}/Avg_Perplexity": stage_results.get('avg_perplexity', 0),
+                    'step': self.global_step
+                }, step=self.global_step)
+
+            logger.info(f"✅ Stage {stage} completed: {self.stage_configs[stage]['name']}")
+
+            # Save checkpoint at the end of each stage
+            self.save_checkpoint(epoch=self.current_epoch, is_best=False, suffix=f'stage_{stage}')
+
+        logger.info("🎉 Training completed successfully!")
+        logger.info("Model is now ready for evaluation or inference.")
