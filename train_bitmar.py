@@ -497,9 +497,18 @@ class BitMarTrainer:
         """Setup optimizer and learning rate scheduler"""
         optimizer_type = self.config['training'].get('optimizer', 'adamw').lower()
 
-        # Ensure learning rate and weight decay are floats (handle YAML string parsing)
-        learning_rate = float(self.config['training']['learning_rate'])
-        weight_decay = float(self.config['training']['weight_decay'])
+        # Get learning rate from current stage or fallback to main config
+        if hasattr(self, 'current_stage') and self.current_stage in self.stage_configs:
+            learning_rate = float(self.stage_configs[self.current_stage]['learning_rate'])
+            logger.info(f"Using stage {self.current_stage} learning rate: {learning_rate}")
+        else:
+            # Fallback to main config learning rate with proper error handling
+            lr_value = self.config.get('training', {}).get('learning_rate', 0.0001)
+            learning_rate = float(lr_value)
+            logger.info(f"Using main config learning rate: {learning_rate}")
+
+        # Ensure weight decay is float (handle YAML string parsing)
+        weight_decay = float(self.config['training'].get('weight_decay', 0.01))
 
         # Use AdamW8bit if bitsandbytes is available and requested
         if BITSANDBYTES_AVAILABLE and optimizer_type == 'adamw8bit':

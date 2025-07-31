@@ -45,7 +45,7 @@ class AttentionEvolutionTracker:
         self.attention_history = {}  # {epoch: {sample_id: attention_data}}
         self.token_evolution = {}    # {token: {epoch: attention_values}}
         
-    def save_epoch_attention(self, 
+        fig.suptitle(f'Attention Tracking for Token: "{token_text}"', fontsize=16)
                            epoch: int,
                            sample_id: str,
                            caption: str,
@@ -145,7 +145,7 @@ class AttentionEvolutionTracker:
         
         # Create evolution plot
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle(f'Attention Tracking for Token: "{token_text}"', fontsize=16)
+        fig.suptitle(f'Attention Evolution for Token: "{token_text}"', fontsize=16)
 
         # Plot 1: Mean attention over epochs
         axes[0, 0].plot(epochs, mean_attentions, 'b-o', linewidth=2, markersize=6)
