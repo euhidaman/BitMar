@@ -9,7 +9,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from PIL import Image
-import cv2
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    print("Warning: cv2 (OpenCV) not available. Some visualization features will be disabled.")
+
 from pathlib import Path
 import json
 import pickle
