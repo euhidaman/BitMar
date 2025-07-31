@@ -1783,3 +1783,122 @@ class BitMarTrainer:
 
         logger.info("🎉 Training completed successfully!")
         logger.info("Model is now ready for evaluation or inference.")
+
+
+def main():
+    """Main training function with command line interface"""
+    print("🎬 Starting main() function...")
+
+    parser = argparse.ArgumentParser(description="BitMar Training with Human-Inspired Learning")
+    parser.add_argument("--config", type=str, required=True, help="Path to config YAML file")
+    parser.add_argument("--wandb_project", type=str, default="bitmar-training", help="W&B project name")
+    parser.add_argument("--max_epochs", type=int, default=None, help="Override max epochs from config")
+    parser.add_argument("--optimizer", type=str, default=None, help="Override optimizer from config")
+    parser.add_argument("--device", type=str, default=None, help="Force specific device (cuda:0, cpu, etc.)")
+    parser.add_argument("--resume_from", type=str, default=None, help="Resume training from checkpoint")
+    parser.add_argument("--max_samples", type=int, default=None, help="Limit training samples for debugging")
+
+    # Legacy arguments - kept for compatibility but ignored
+    parser.add_argument("--track_attention_every_n_steps", type=int, default=50000, help="[IGNORED] Attention tracking disabled")
+    parser.add_argument("--save_attention_every_n_epochs", type=int, default=1, help="[IGNORED] Attention tracking disabled")
+
+    args = parser.parse_args()
+    print(f"✅ Arguments parsed: {args}")
+
+    # Warn about ignored arguments
+    if hasattr(args, 'track_attention_every_n_steps') and args.track_attention_every_n_steps != 50000:
+        print("⚠️  --track_attention_every_n_steps is ignored (attention tracking disabled)")
+    if hasattr(args, 'save_attention_every_n_epochs') and args.save_attention_every_n_epochs != 1:
+        print("⚠️  --save_attention_every_n_epochs is ignored (attention tracking disabled)")
+
+    try:
+        # Load and override config
+        print(f"📄 Loading config from: {args.config}")
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+
+        # Override config with command line args
+        if args.max_epochs is not None:
+            config['training']['max_epochs'] = args.max_epochs
+            print(f"🔧 Overriding max_epochs: {args.max_epochs}")
+
+        if args.optimizer is not None:
+            config['training']['optimizer'] = args.optimizer.lower()
+            print(f"🔧 Overriding optimizer: {args.optimizer}")
+
+        if args.wandb_project:
+            config['wandb']['project'] = args.wandb_project
+            print(f"📊 W&B project: {args.wandb_project}")
+
+        print("✅ Configuration loaded and overridden successfully")
+
+        # Initialize trainer
+        print("🏗️ Initializing BitMar trainer...")
+        trainer = BitMarTrainer(config, device=args.device)
+        print("✅ Trainer initialized successfully")
+
+        # Setup directories and logging
+        print("📁 Setting up directories...")
+        trainer.setup_directories()
+        print("✅ Directories setup completed")
+
+        print("📊 Setting up logging systems...")
+        trainer.setup_logging_systems()
+        print("✅ Logging systems setup completed")
+
+        # Setup model and data
+        print("🤖 Setting up model and data...")
+        trainer.setup_model_and_data(max_samples=args.max_samples)
+        print("✅ Model and data setup completed")
+
+        # Resume from checkpoint if specified
+        if args.resume_from:
+            print(f"🔄 Resuming from checkpoint: {args.resume_from}")
+            start_epoch = trainer.load_checkpoint(args.resume_from)
+            print(f"✅ Resumed from epoch {start_epoch}")
+
+        # Start carbon tracking
+        print("🌱 Starting carbon tracking...")
+        trainer.start_carbon_tracking()
+        print("✅ Carbon tracking started")
+
+        # Start training
+        print("🚀 Starting BitMar training...")
+        logger.info("=" * 50)
+        logger.info("🚀 BITMAR TRAINING STARTED")
+        logger.info("=" * 50)
+
+        trainer.train()
+
+        logger.info("=" * 50)
+        logger.info("🎉 BITMAR TRAINING COMPLETED")
+        logger.info("=" * 50)
+
+        # Stop carbon tracking
+        print("🌱 Stopping carbon tracking...")
+        emissions = trainer.stop_carbon_tracking()
+        if emissions > 0:
+            print(f"🌍 Total CO2 emissions: {emissions:.6f} kg")
+
+        print("✅ Training completed successfully!")
+
+    except KeyboardInterrupt:
+        print("\n⚠️ Training interrupted by user")
+        logger.info("Training interrupted by user")
+        if 'trainer' in locals():
+            trainer.stop_carbon_tracking()
+
+    except Exception as e:
+        print(f"❌ Training failed with error: {e}")
+        logger.error(f"Training failed: {e}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        if 'trainer' in locals():
+            trainer.stop_carbon_tracking()
+        raise
+
+
+if __name__ == "__main__":
+    print("🎯 Script called directly, running main()...")
+    main()
+
