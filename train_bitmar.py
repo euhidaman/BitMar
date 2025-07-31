@@ -1837,7 +1837,7 @@ class BitMarTrainer:
             feature_mean_std = feature_std.mean()  # Average std across all dimensions
 
             # We want reasonable standard deviation (not too small, not too large)
-            target std = 1.0  # Target standard deviation
+            target_std = 1.0  # Target standard deviation
             range_loss = F.mse_loss(feature_mean_std, torch.tensor(target_std, device=features.device))
 
             return range_loss
