@@ -264,15 +264,18 @@ class BitMarTrainer:
         self.setup_advanced_optimizer()
 
     def setup_advanced_optimizer(self):
-        """Setup optimizer with layer-wise learning rates and advanced strategies"""
-        optimizer_type = self.config.get('optimizer', 'adamw').lower()
+        """Setup optimizer with various options including 8-bit"""
+        optimizer_type = self.config.get('optimizer', 'adamw')
 
-        # Use AdamW8bit if bitsandbytes is available and requested
+        # Ensure numeric parameters are properly converted to float
+        learning_rate = float(self.config['training']['learning_rate'])
+        weight_decay = float(self.config['training']['weight_decay'])
+
         if BITSANDBYTES_AVAILABLE and optimizer_type == 'adamw8bit':
             self.optimizer = bnb.optim.AdamW8bit(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
-                weight_decay=self.config['training']['weight_decay'],
+                lr=learning_rate,
+                weight_decay=weight_decay,
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
@@ -280,8 +283,8 @@ class BitMarTrainer:
         elif optimizer_type == 'adamw':
             self.optimizer = AdamW(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
-                weight_decay=self.config['training']['weight_decay'],
+                lr=learning_rate,
+                weight_decay=weight_decay,
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
@@ -289,7 +292,7 @@ class BitMarTrainer:
         elif optimizer_type == 'adam':
             self.optimizer = torch.optim.Adam(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
+                lr=learning_rate,
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
@@ -297,48 +300,38 @@ class BitMarTrainer:
         elif optimizer_type == 'sgd':
             self.optimizer = torch.optim.SGD(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
+                lr=learning_rate,
                 momentum=0.9,
-                weight_decay=self.config['training']['weight_decay']
+                weight_decay=weight_decay
             )
             logger.info(f"Using SGD optimizer")
         elif optimizer_type == 'rmsprop':
             self.optimizer = torch.optim.RMSprop(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
-                alpha=0.99,
-                eps=1e-8,
-                weight_decay=self.config['training']['weight_decay']
+                lr=learning_rate,
+                weight_decay=weight_decay,
+                eps=1e-8
             )
             logger.info(f"Using RMSprop optimizer")
         else:
-            raise ValueError(f"Unsupported optimizer: {optimizer_type}")
-
-        # Learning rate scheduler with proper step-based scheduling
-        if self.config['training']['scheduler'] == 'cosine':
-            # Calculate total training steps for proper cosine annealing
-            train_loader = self.data_module.train_dataloader()
-            steps_per_epoch = len(train_loader)
-            total_steps = steps_per_epoch * \
-                self.config['training']['max_epochs']
-
-            self.scheduler = CosineAnnealingLR(
-                self.optimizer,
-                T_max=total_steps,  # Use total steps, not epochs
-                eta_min=self.config['training']['min_lr']
+            # Fallback to AdamW
+            self.optimizer = AdamW(
+                self.model.parameters(),
+                lr=learning_rate,
+                weight_decay=weight_decay,
+                betas=(0.9, 0.999),
+                eps=1e-8
             )
-            self.scheduler_step_mode = 'step'  # Step every training step, not epoch
-            logger.info(
-                f"Cosine scheduler: {total_steps} total steps, eta_min={self.config['training']['min_lr']}")
-        else:
-            self.scheduler = None
-            self.scheduler_step_mode = 'epoch'
+            logger.info(f"Unknown optimizer '{optimizer_type}', falling back to AdamW")
 
-        logger.info(
-            f"Optimizer: {optimizer_type.upper()} with LR={self.config['training']['learning_rate']}")
-        if self.scheduler:
-            logger.info(
-                f"Scheduler: {self.config['training']['scheduler']} ({'step-based' if self.scheduler_step_mode == 'step' else 'epoch-based'})")
+        # Setup learning rate scheduler
+        max_epochs = int(self.config['training']['max_epochs'])
+        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=max_epochs)
+
+        logger.info(f"Optimizer setup complete: {optimizer_type}")
+        logger.info(f"Learning rate: {learning_rate}")
+        logger.info(f"Weight decay: {weight_decay}")
+        logger.info(f"Max epochs: {max_epochs}")
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """Train for one epoch"""
