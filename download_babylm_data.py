@@ -447,14 +447,31 @@ def download_babylm_data():
             logger.error("❌ Failed to extract train_50M.zip")
             return False
 
-    # If we get here, some files are missing
-    logger.error("❌ Some required files are missing!")
-    logger.info("📋 To complete the dataset, you need to:")
-    logger.info("1. Download the missing files from the BabyLM OSF repository")
-    logger.info("2. Place them in: " + str(dataset_dir.absolute()))
-    logger.info("3. Run this script again to verify")
+    # If we get here, some files are missing - try to download them
+    logger.info("📥 Some files are missing. Attempting to download...")
 
-    return False
+    try:
+        success = download_babylm_multimodal_dataset()
+        if success:
+            logger.info("✅ Download completed successfully!")
+            # Extract train_50M.zip if it was downloaded using the proper function
+            extract_result = extract_train_50M_if_needed(dataset_dir)
+            if extract_result:
+                logger.info("✅ train_50M.zip extracted successfully!")
+
+            # Final verification
+            data_exists, _ = verify_existing_data()
+            return data_exists
+        else:
+            logger.error("❌ Download failed!")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Download failed with error: {e}")
+        logger.info("📋 To complete the dataset manually, you need to:")
+        logger.info("1. Download the files from the BabyLM OSF repository")
+        logger.info("2. Place them in: " + str(dataset_dir.absolute()))
+        logger.info("3. Run this script again to verify")
+        return False
 
 
 if __name__ == "__main__":
