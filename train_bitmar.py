@@ -209,7 +209,7 @@ class BitMarTrainer:
                 'name': 'Visual Understanding',
                 'description': 'Learn visual representations like babies learning to see',
                 'epochs': self.config.get('training', {}).get('visual_stage_epochs', 3),
-                'learning_rate': self.config.get('training', {}).get('visual_stage_lr', 0.001),
+                'learning_rate': float(self.config.get('training', {}).get('visual_stage_lr', 0.001)),
                 'focus': 'vision_encoder_only',
                 'loss_weights': {'vision_reconstruction': 1.0, 'vision_clustering': 0.5}
             },
@@ -217,7 +217,7 @@ class BitMarTrainer:
                 'name': 'Visual-Language Grounding',
                 'description': 'Connect words to visual concepts like children learning "apple"',
                 'epochs': self.config.get('training', {}).get('grounding_stage_epochs', 5),
-                'learning_rate': self.config.get('training', {}).get('grounding_stage_lr', 0.0005),
+                'learning_rate': float(self.config.get('training', {}).get('grounding_stage_lr', 0.0005)),
                 'focus': 'multimodal_alignment',
                 'loss_weights': {
                     'cross_modal_contrastive': 1.0,
@@ -229,7 +229,7 @@ class BitMarTrainer:
                 'name': 'Abstract Language Learning',
                 'description': 'Learn pure language patterns like reading books',
                 'epochs': self.config.get('training', {}).get('language_stage_epochs', 7),
-                'learning_rate': self.config.get('training', {}).get('language_stage_lr', 0.0003),
+                'learning_rate': float(self.config.get('training', {}).get('language_stage_lr', 0.0003)),
                 'focus': 'language_modeling',
                 'loss_weights': {'language_modeling': 1.0, 'text_understanding': 0.5}
             }
@@ -1402,7 +1402,7 @@ class BitMarTrainer:
 
         # Update learning rate for this stage
         for param_group in self.optimizer.param_groups:
-            param_group['lr'] = stage_config['learning_rate']
+            param_group['lr'] = float(stage_config['learning_rate'])
 
         stage_metrics = {'vision_loss': [], 'vision_consistency': [], 'visual_diversity_score': []}
 
@@ -1534,7 +1534,7 @@ class BitMarTrainer:
 
         # Update learning rate for this stage
         for param_group in self.optimizer.param_groups:
-            param_group['lr'] = stage_config['learning_rate']
+            param_group['lr'] = float(stage_config['learning_rate'])
 
         stage_metrics = {'cross_modal_similarity': [], 'alignment_accuracy': [], 'caption_bleu': []}
 
@@ -1640,7 +1640,7 @@ class BitMarTrainer:
 
         # Update learning rate for this stage
         for param_group in self.optimizer.param_groups:
-            param_group['lr'] = stage_config['learning_rate']
+            param_group['lr'] = float(stage_config['learning_rate'])
 
         stage_metrics = {'text_perplexity': [], 'language_accuracy': [], 'text_loss': []}
 
