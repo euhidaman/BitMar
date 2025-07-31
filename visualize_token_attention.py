@@ -226,7 +226,7 @@ class TokenPixelAttentionVisualizer:
             axes = axes.reshape(-1, 1)
             
         token_text = self.tokenizer.decode([self.tokenizer.encode(caption)[token_idx]])
-        fig.suptitle(f'Attention Evolution for Token: "{token_text}"\\nCaption: "{caption}"', 
+        fig.suptitle(f'Attention Tracking for Token: "{token_text}"\\nCaption: "{caption}"',
                      fontsize=14)
         
         for i, attention_data in enumerate(attention_history):

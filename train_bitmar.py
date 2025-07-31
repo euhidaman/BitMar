@@ -1,6 +1,6 @@
 """
 Training script for BitMar model with QFormer Cross-Modal Alignment
-Handles multimodal training with episodic memory, attention analysis, and human-inspired learning
+Handles multimodal training with episodic memory and human-inspired learning
 """
 
 # CodeCarbon for carbon footprint tracking
@@ -11,11 +11,13 @@ except ImportError:
     CODECARBON_AVAILABLE = False
     print("Warning: CodeCarbon not available. Install with: pip install codecarbon")
 
-from src.attention_analysis import analyze_model_attention
 from src.dataset import create_data_module, TextOnlyDataset, VisualOnlyDataset, extract_train_50M_if_needed
 from src.model import create_bitmar_model, count_parameters
 from src.wandb_logger import BitMarWandbLogger
-from src.attention_visualizer import AttentionHeadAnalyzer
+from pathlib import Path
+from typing import Dict, Optional
+import numpy as np
+from tqdm import tqdm
 import os
 import sys
 import argparse
@@ -27,10 +29,6 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 import wandb
-from pathlib import Path
-from typing import Dict, Optional
-import numpy as np
-from tqdm import tqdm
 
 # Try to import bitsandbytes for 8-bit optimizer
 try:
@@ -59,50 +57,9 @@ except ImportError:
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
-# Import attention evolution tracker
-try:
-    # First try direct import
-    print("🔄 Attempting to import attention evolution tracker...")
-    from attention_evolution_tracker import AttentionEvolutionTracker
-    ATTENTION_TRACKING_AVAILABLE = True
-    print("✅ Attention evolution tracker imported successfully")
-except ImportError as e:
-    print(f"❌ Direct import failed: {e}")
-    try:
-        # Try importing from current directory with explicit path manipulation
-        print("🔄 Trying fallback import method...")
-        import sys
-        import os
-        from pathlib import Path
-
-        # Get the directory where this script is located
-        script_dir = Path(__file__).parent.absolute()
-
-        # Add current directory to Python path if not already there
-        if str(script_dir) not in sys.path:
-            sys.path.insert(0, str(script_dir))
-
-        from attention_evolution_tracker import AttentionEvolutionTracker
-        ATTENTION_TRACKING_AVAILABLE = True
-        print("✅ Attention evolution tracker imported from current directory")
-    except ImportError as e2:
-        print(f"❌ Fallback import failed: {e2}")
-        try:
-            # Final fallback: check if file exists and provide detailed error
-            tracker_file = Path(__file__).parent / "attention_evolution_tracker.py"
-            if tracker_file.exists():
-                print(f"⚠️  File exists at {tracker_file} but import failed:")
-                print(f"   Original error: {e}")
-                print(f"   Fallback error: {e2}")
-            else:
-                print(f"❌ File not found at {tracker_file}")
-
-            ATTENTION_TRACKING_AVAILABLE = False
-            print("Warning: attention_evolution_tracker not available - continuing without it")
-        except Exception as e3:
-            print(f"❌ Final fallback failed: {e3}")
-            ATTENTION_TRACKING_AVAILABLE = False
-            print("Warning: attention_evolution_tracker not available")
+# Disable attention tracker to prevent hanging issues
+ATTENTION_TRACKING_AVAILABLE = False
+print("ℹ️  Attention tracker disabled to prevent training hang")
 
 
 # Setup logging
@@ -515,25 +472,13 @@ class BitMarTrainer:
         if self.wandb_logger:
             self.wandb_logger.log_model_size_metrics(self.model)
 
-        # Initialize attention analyzer
-        self.attention_analyzer = AttentionHeadAnalyzer(
-            model=self.model,
-            tokenizer=self.model.tokenizer,
-            save_dir=str(self.attention_dir),
-            wandb_logger=self.wandb_logger,
-            track_top_k=self.config.get(
-                'attention_analysis', {}).get('track_top_k', 10)
-        )
+        # Initialize attention analyzer - DISABLED to prevent performance issues
+        self.attention_analyzer = None
+        logger.info("Attention analyzer disabled to prevent performance issues during training")
 
-        # Initialize attention evolution tracker
-        if ATTENTION_TRACKING_AVAILABLE:
-            self.attention_evolution_tracker = AttentionEvolutionTracker(
-                save_dir=str(self.attention_dir / "attention_evolution")
-            )
-            logger.info("Attention evolution tracker initialized")
-        else:
-            self.attention_evolution_tracker = None
-            logger.warning("Attention evolution tracker not available")
+        # Attention evolution tracker disabled to prevent training hang
+        self.attention_evolution_tracker = None
+        logger.info("Attention evolution tracker disabled to prevent training hang")
 
         # Create data module
         self.data_module = create_data_module(self.config['data'])
@@ -918,60 +863,8 @@ class BitMarTrainer:
                             f"Wandb logging failed at step {self.global_step}: {e}")
                         # Continue training without wandb logging for this step
 
-                # Attention analysis (less frequent to avoid overhead)
-                attention_log_steps = self.config.get(
-                    'attention_analysis', {}).get('log_every_n_steps', 100)
-                if (self.attention_analyzer and attention_log_steps > 0 and
-                        self.global_step % attention_log_steps == 0):
-
-                    try:
-                        self.attention_analyzer.analyze_batch_attention(
-                            outputs, batch['input_ids'], self.global_step
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Attention analysis failed at step {self.global_step}: {e}")
-
-                # Attention evolution tracking (NEW!)
-                track_attention_steps = self.config.get(
-                    'track_attention_every_n_steps', 50)
-                if (self.attention_evolution_tracker and track_attention_steps > 0 and
-                        self.global_step % track_attention_steps == 0):
-
-                    try:
-                        # Extract cross-modal attention if available
-                        cross_modal_attention = None
-                        if 'cross_modal_attention' in outputs:
-                            cross_modal_attention = outputs['cross_modal_attention']
-                        elif hasattr(outputs, 'attentions') and outputs.attentions:
-                            # Last layer attention
-                            cross_modal_attention = outputs.attentions[-1]
-
-                        if cross_modal_attention is not None:
-                            # Get caption for first sample in batch
-                            sample_caption = "Generated caption"  # TODO: Extract actual caption
-                            if 'captions' in batch:
-                                sample_caption = batch['captions'][0] if batch['captions'] else "No caption"
-
-                            # Save attention evolution data
-                            self.attention_evolution_tracker.save_epoch_attention(
-                                epoch=epoch,
-                                sample_id=f"step_{self.global_step}_sample_0",
-                                caption=sample_caption,
-                                # First sample
-                                attention_weights=cross_modal_attention[0:1],
-                                image_features=batch['vision_features'][0:1],
-                                compressed_features=outputs.get(
-                                    'vision_latent', None)
-                            )
-
-                            if self.global_step % 200 == 0 and self.global_step > 0:  # Less frequent logging, avoid zero
-                                logger.info(
-                                    f"🎯 Tracked attention evolution at step {self.global_step}")
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Attention evolution tracking failed at step {self.global_step}: {e}")
+                # All attention analysis disabled to prevent performance issues
+                # (Removed attention_analyzer.analyze_batch_attention call)
 
                 self.global_step += 1
 

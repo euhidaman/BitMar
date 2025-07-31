@@ -1,5 +1,5 @@
 """
-Enhanced Token-to-Image Attention Evolution Tracker for BitMar
+Enhanced Token-to-Image Attention Tracker for BitMar
 Tracks how text tokens attend to image regions across training epochs
 Shows learning progression and attention pattern changes over time
 """
@@ -26,11 +26,11 @@ from datetime import datetime
 
 class AttentionEvolutionTracker:
     """Track and visualize attention evolution across training epochs"""
-    
+
     def __init__(self, save_dir: str = "./attention_evolution"):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True, parents=True)
-        
+
         # Create subdirectories for organized storage
         (self.save_dir / "epoch_snapshots").mkdir(exist_ok=True)
         (self.save_dir / "evolution_plots").mkdir(exist_ok=True)
@@ -145,8 +145,8 @@ class AttentionEvolutionTracker:
         
         # Create evolution plot
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle(f'Attention Evolution for Token: "{token_text}"', fontsize=16)
-        
+        fig.suptitle(f'Attention Tracking for Token: "{token_text}"', fontsize=16)
+
         # Plot 1: Mean attention over epochs
         axes[0, 0].plot(epochs, mean_attentions, 'b-o', linewidth=2, markersize=6)
         axes[0, 0].set_title('Mean Attention Strength')

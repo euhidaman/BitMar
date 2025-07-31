@@ -1,6 +1,6 @@
 """
-Training Integration for BitMar with Attention Evolution Tracking and DiNOv2 Compression
-Shows how to integrate attention tracking and image compression during training
+Training Integration for BitMar with DiNOv2 Compression
+Shows how to integrate image compression during training
 """
 
 import torch
