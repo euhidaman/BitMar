@@ -497,12 +497,16 @@ class BitMarTrainer:
         """Setup optimizer and learning rate scheduler"""
         optimizer_type = self.config['training'].get('optimizer', 'adamw').lower()
 
+        # Ensure learning rate and weight decay are floats (handle YAML string parsing)
+        learning_rate = float(self.config['training']['learning_rate'])
+        weight_decay = float(self.config['training']['weight_decay'])
+
         # Use AdamW8bit if bitsandbytes is available and requested
         if BITSANDBYTES_AVAILABLE and optimizer_type == 'adamw8bit':
             self.optimizer = bnb.optim.AdamW8bit(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
-                weight_decay=self.config['training']['weight_decay'],
+                lr=learning_rate,
+                weight_decay=weight_decay,
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
@@ -510,8 +514,8 @@ class BitMarTrainer:
         elif optimizer_type == 'adamw':
             self.optimizer = AdamW(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
-                weight_decay=self.config['training']['weight_decay'],
+                lr=learning_rate,
+                weight_decay=weight_decay,
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
@@ -519,7 +523,7 @@ class BitMarTrainer:
         elif optimizer_type == 'adam':
             self.optimizer = torch.optim.Adam(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
+                lr=learning_rate,
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
@@ -527,18 +531,18 @@ class BitMarTrainer:
         elif optimizer_type == 'sgd':
             self.optimizer = torch.optim.SGD(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
+                lr=learning_rate,
                 momentum=0.9,
-                weight_decay=self.config['training']['weight_decay']
+                weight_decay=weight_decay
             )
             logger.info(f"Using SGD optimizer")
         elif optimizer_type == 'rmsprop':
             self.optimizer = torch.optim.RMSprop(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
+                lr=learning_rate,
                 alpha=0.99,
                 eps=1e-8,
-                weight_decay=self.config['training']['weight_decay']
+                weight_decay=weight_decay
             )
             logger.info(f"Using RMSprop optimizer")
         elif optimizer_type == 'lion' and LION_AVAILABLE:
@@ -546,9 +550,9 @@ class BitMarTrainer:
             optimizer_params = self.config['training'].get('optimizer_config', {})
             self.optimizer = Lion(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
+                lr=learning_rate,
                 betas=optimizer_params.get('betas', [0.9, 0.99]),
-                weight_decay=self.config['training']['weight_decay']
+                weight_decay=weight_decay
             )
             logger.info(f"✅ Using Lion optimizer with betas={optimizer_params.get('betas', [0.9, 0.99])}")
         elif optimizer_type == 'lion' and not LION_AVAILABLE:
@@ -557,8 +561,8 @@ class BitMarTrainer:
             logger.warning("🔄 Falling back to AdamW optimizer...")
             self.optimizer = AdamW(
                 self.model.parameters(),
-                lr=self.config['training']['learning_rate'],
-                weight_decay=self.config['training']['weight_decay'],
+                lr=learning_rate,
+                weight_decay=weight_decay,
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
@@ -581,7 +585,7 @@ class BitMarTrainer:
             T_0 = scheduler_config.get('T_0', 1000)
             T_mult = scheduler_config.get('T_mult', 2)
             eta_min_ratio = scheduler_config.get('eta_min_ratio', 0.1)
-            eta_min = self.config['training']['learning_rate'] * eta_min_ratio
+            eta_min = learning_rate * eta_min_ratio
 
             from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
             self.scheduler = CosineAnnealingWarmRestarts(
@@ -616,14 +620,15 @@ class BitMarTrainer:
             total_steps = steps_per_epoch * \
                 self.config['training']['max_epochs']
 
+            min_lr = float(self.config['training']['min_lr'])
             self.scheduler = CosineAnnealingLR(
                 self.optimizer,
                 T_max=total_steps,  # Use total steps, not epochs
-                eta_min=self.config['training']['min_lr']
+                eta_min=min_lr
             )
             self.scheduler_step_mode = 'step'  # Step every training step, not epoch
             logger.info(
-                f"Cosine scheduler: {total_steps} total steps, eta_min={self.config['training']['min_lr']}")
+                f"Cosine scheduler: {total_steps} total steps, eta_min={min_lr}")
         else:
             self.scheduler = None
             self.scheduler_step_mode = 'epoch'
@@ -646,7 +651,7 @@ class BitMarTrainer:
             optimizer_display_name = actual_optimizer_name.upper()
 
         logger.info(
-            f"Optimizer: {optimizer_display_name} with LR={self.config['training']['learning_rate']}")
+            f"Optimizer: {optimizer_display_name} with LR={learning_rate}")
         if self.scheduler:
             logger.info(
                 f"Scheduler: {self.config['training']['scheduler']} ({'step-based' if self.scheduler_step_mode == 'step' else 'epoch-based'})")
