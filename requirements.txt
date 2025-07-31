@@ -22,6 +22,7 @@ requests
 psutil
 typing-extensions
 huggingface-hub
+lion-pytorch
 
 # Additional testing dependencies
 pytest

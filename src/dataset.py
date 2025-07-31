@@ -1,6 +1,7 @@
 """
 Dataset processing for BitMar
 Handles complete BabyLM multimodal dataset (Conceptual Captions + Localized Narratives)
++ train_50M text-only data for enhanced language modeling
 """
 
 import json
@@ -18,8 +19,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-class CompleteBabyLMDataset(Dataset):
-    """Complete BabyLM Multimodal Dataset (CC3M + Localized Narratives)"""
+class MixedMultimodalTextDataset(Dataset):
+    """Mixed dataset combining multimodal data and text-only training from train_50M"""
 
     def __init__(
         self,
@@ -27,37 +28,45 @@ class CompleteBabyLMDataset(Dataset):
         tokenizer_name: str = "gpt2",
         max_seq_length: int = 512,
         split: str = "train",
-        max_samples: Optional[int] = None
+        max_samples: Optional[int] = None,
+        text_ratio: float = 0.3,  # 30% text-only, 70% multimodal
+        load_text_data: bool = True
     ):
         self.dataset_dir = Path(dataset_dir)
         self.max_seq_length = max_seq_length
         self.split = split
+        self.text_ratio = text_ratio
+        self.load_text_data = load_text_data
 
         # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Load all data sources
-        self._load_all_data()
-        
-        # Create indices for this split (train uses full dataset, no validation split)
-        if split == "train":
-            self.indices = list(range(len(self.all_captions)))
+        # Load multimodal data
+        self._load_multimodal_data()
+
+        # Load text-only data from train_50M
+        if self.load_text_data and split == "train":
+            self._load_text_data()
         else:
-            # For validation, we'll use HuggingFace datasets
-            self.indices = []
+            self.text_samples = []
+
+        # Create combined indices
+        self._create_mixed_indices()
 
         # Limit samples if specified
-        if max_samples is not None and len(self.indices) > max_samples:
+        if max_samples is not None and len(self.mixed_indices) > max_samples:
             random.seed(42)
-            self.indices = random.sample(self.indices, max_samples)
+            self.mixed_indices = random.sample(self.mixed_indices, max_samples)
 
-        logger.info(f"Loaded {len(self.indices)} samples for {split} split")
+        logger.info(f"Loaded {len(self.mixed_indices)} total samples for {split} split")
+        logger.info(f"  - Multimodal: {len(self.multimodal_indices)} samples")
+        logger.info(f"  - Text-only: {len(self.text_samples)} samples")
 
-    def _load_all_data(self):
-        """Load all multimodal data sources"""
-        logger.info("Loading complete BabyLM multimodal dataset...")
+    def _load_multimodal_data(self):
+        """Load multimodal data (existing implementation)"""
+        logger.info("Loading multimodal data...")
 
         # Load Conceptual Captions 3M
         cc_captions_file = self.dataset_dir / "cc_3M_captions.json"
@@ -71,9 +80,7 @@ class CompleteBabyLMDataset(Dataset):
         cc_feat2 = np.load(cc_feat2_file, mmap_mode='r')
         cc_features = VisionFeaturesConcatenated(cc_feat1, cc_feat2)
 
-        logger.info(f"Loaded Conceptual Captions: {len(cc_captions)} samples")
-
-        # Load Localized Narratives  
+        # Load Localized Narratives
         ln_captions_file = self.dataset_dir / "local_narr_captions.json"
         ln_feat_file = self.dataset_dir / "local_narr_dino_v2_states.npy"
 
@@ -82,28 +89,93 @@ class CompleteBabyLMDataset(Dataset):
 
         ln_features = np.load(ln_feat_file, mmap_mode='r')
 
-        logger.info(f"Loaded Localized Narratives: {len(ln_captions)} samples")
+        # Combine multimodal data
+        self.multimodal_captions = cc_captions + ln_captions
+        self.multimodal_features = CombinedVisionFeatures(cc_features, ln_features)
+        self.multimodal_indices = list(range(len(self.multimodal_captions)))
 
-        # Combine all data
-        self.all_captions = cc_captions + ln_captions
-        self.all_features = CombinedVisionFeatures(cc_features, ln_features)
+        logger.info(f"Loaded {len(self.multimodal_captions)} multimodal samples")
 
-        logger.info(f"Total multimodal samples: {len(self.all_captions)}")
+    def _load_text_data(self):
+        """Load text-only data from train_50M"""
+        logger.info("Loading train_50M text data...")
 
-        # Verify alignment
-        if len(self.all_captions) != len(self.all_features):
-            raise ValueError(f"Data alignment error: {len(self.all_captions)} captions vs {len(self.all_features)} features")
+        self.text_samples = []
+        train_50m_dir = self.dataset_dir / "train_50M"
+
+        if not train_50m_dir.exists():
+            logger.warning("train_50M directory not found - extracting if needed...")
+            from download_babylm_data import extract_train_50M_if_needed
+            extract_result = extract_train_50M_if_needed(self.dataset_dir)
+            if not extract_result:
+                logger.warning("Could not extract train_50M - skipping text-only training")
+                return
+
+        # Expected train_50M files
+        text_files = [
+            "bnc_spoken.train",
+            "childes.train",
+            "gutenberg.train",
+            "open_subtitles.train",
+            "simple_wiki.train",
+            "switchboard.train"
+        ]
+
+        total_lines = 0
+        for filename in text_files:
+            filepath = train_50m_dir / filename
+            if filepath.exists():
+                logger.info(f"Loading {filename}...")
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = [line.strip() for line in f if line.strip()]
+                    self.text_samples.extend(lines)
+                    total_lines += len(lines)
+                    logger.info(f"  Added {len(lines)} lines from {filename}")
+            else:
+                logger.warning(f"Text file not found: {filepath}")
+
+        logger.info(f"Loaded {total_lines} text-only samples from train_50M")
+
+    def _create_mixed_indices(self):
+        """Create mixed indices for multimodal and text-only samples"""
+        num_multimodal = len(self.multimodal_indices)
+        num_text = len(self.text_samples)
+
+        if num_text == 0:
+            # No text data, use only multimodal
+            self.mixed_indices = [('multimodal', idx) for idx in self.multimodal_indices]
+            return
+
+        # Calculate how many of each type we want
+        total_desired = num_multimodal + num_text
+        num_text_desired = int(total_desired * self.text_ratio)
+        num_multimodal_desired = total_desired - num_text_desired
+
+        # Create indices with proper mixing
+        text_indices = [('text', idx) for idx in range(min(num_text, num_text_desired))]
+        multimodal_indices = [('multimodal', idx) for idx in range(min(num_multimodal, num_multimodal_desired))]
+
+        # Combine and shuffle
+        self.mixed_indices = text_indices + multimodal_indices
+        random.seed(42)
+        random.shuffle(self.mixed_indices)
 
     def __len__(self) -> int:
-        return len(self.indices)
+        return len(self.mixed_indices)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get a single data sample"""
-        actual_idx = self.indices[idx]
+        """Get a sample (either multimodal or text-only)"""
+        sample_type, sample_idx = self.mixed_indices[idx]
 
-        # Get caption and vision features
-        caption = self.all_captions[actual_idx]
-        vision_feature = self.all_features[actual_idx]
+        if sample_type == 'multimodal':
+            return self._get_multimodal_sample(sample_idx)
+        else:
+            return self._get_text_sample(sample_idx)
+
+    def _get_multimodal_sample(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Get a multimodal sample"""
+        caption = self.multimodal_captions[idx]
+        vision_feature = self.multimodal_features[idx]
 
         # Tokenize caption
         encoded = self.tokenizer(
@@ -116,10 +188,8 @@ class CompleteBabyLMDataset(Dataset):
 
         input_ids = encoded['input_ids'].squeeze(0)
         attention_mask = encoded['attention_mask'].squeeze(0)
-
-        # Create labels for text generation (shifted input_ids)
         labels = input_ids.clone()
-        labels[attention_mask == 0] = -100  # Ignore padding tokens in loss
+        labels[attention_mask == 0] = -100
 
         return {
             'input_ids': input_ids,
@@ -127,8 +197,70 @@ class CompleteBabyLMDataset(Dataset):
             'labels': labels,
             'vision_features': torch.tensor(vision_feature.copy(), dtype=torch.float32),
             'caption': caption,
-            'index': actual_idx
+            'sample_type': 'multimodal',
+            'index': idx
         }
+
+    def _get_text_sample(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Get a text-only sample"""
+        text = self.text_samples[idx]
+
+        # Tokenize text
+        encoded = self.tokenizer(
+            text,
+            max_length=self.max_seq_length,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        )
+
+        input_ids = encoded['input_ids'].squeeze(0)
+        attention_mask = encoded['attention_mask'].squeeze(0)
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
+
+        # Create dummy vision features (zeros) for consistency
+        dummy_vision = torch.zeros(768, dtype=torch.float32)  # DiNOv2 feature size
+
+        return {
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'labels': labels,
+            'vision_features': dummy_vision,
+            'caption': text,
+            'sample_type': 'text_only',
+            'index': idx
+        }
+
+
+# Keep original class for backward compatibility
+class CompleteBabyLMDataset(Dataset):
+    """Complete BabyLM Multimodal Dataset (CC3M + Localized Narratives) - Legacy"""
+
+    def __init__(
+        self,
+        dataset_dir: str,
+        tokenizer_name: str = "gpt2",
+        max_seq_length: int = 512,
+        split: str = "train",
+        max_samples: Optional[int] = None
+    ):
+        # Use new mixed dataset with text_ratio=0 (multimodal only)
+        self.mixed_dataset = MixedMultimodalTextDataset(
+            dataset_dir=dataset_dir,
+            tokenizer_name=tokenizer_name,
+            max_seq_length=max_seq_length,
+            split=split,
+            max_samples=max_samples,
+            text_ratio=0.0,  # No text-only samples
+            load_text_data=False
+        )
+
+    def __len__(self):
+        return len(self.mixed_dataset)
+
+    def __getitem__(self, idx):
+        return self.mixed_dataset[idx]
 
 
 class HuggingFaceValidationDataset(Dataset):
@@ -284,6 +416,10 @@ class BabyLMDataModule:
         self.max_seq_length = config['max_seq_length']
         self.hf_token = config.get('hf_token') or os.getenv('HF_TOKEN', '')
 
+        # Mixed training parameters
+        self.use_mixed_training = config.get('use_mixed_training', False)
+        self.text_ratio = config.get('text_ratio', 0.3)
+
         # DataLoader parameters
         self.batch_size = config['batch_size']
         self.num_workers = config['num_workers']
@@ -302,16 +438,29 @@ class BabyLMDataModule:
 
     def setup(self, max_samples: Optional[int] = None):
         """Setup train and validation datasets"""
-        logger.info("Setting up complete BabyLM dataset...")
+        logger.info("Setting up BabyLM dataset...")
 
-        # Create training dataset (uses complete BabyLM data)
-        self.train_dataset = CompleteBabyLMDataset(
-            dataset_dir=self.dataset_dir,
-            tokenizer_name=self.tokenizer_name,
-            max_seq_length=self.max_seq_length,
-            split="train",
-            max_samples=max_samples
-        )
+        # Create training dataset - use mixed dataset if configured
+        if self.use_mixed_training:
+            logger.info(f"Using mixed multimodal + text training with {self.text_ratio:.1%} text-only ratio")
+            self.train_dataset = MixedMultimodalTextDataset(
+                dataset_dir=self.dataset_dir,
+                tokenizer_name=self.tokenizer_name,
+                max_seq_length=self.max_seq_length,
+                split="train",
+                max_samples=max_samples,
+                text_ratio=self.text_ratio,
+                load_text_data=True
+            )
+        else:
+            logger.info("Using multimodal-only training")
+            self.train_dataset = CompleteBabyLMDataset(
+                dataset_dir=self.dataset_dir,
+                tokenizer_name=self.tokenizer_name,
+                max_seq_length=self.max_seq_length,
+                split="train",
+                max_samples=max_samples
+            )
 
         # Create validation datasets from HuggingFace
         for dataset_name in self.validation_datasets:

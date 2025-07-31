@@ -146,11 +146,36 @@ class BitMarTrainer:
             logger.info("Wandb not configured, logging locally only")
 
     def setup_model_and_data(self, max_samples: Optional[int] = None):
-        """Initialize model and data loaders"""
-        logger.info("Setting up model and data...")
+        """Initialize model and data loaders with progressive growing support"""
+        logger.info("Setting up model and data with advanced training strategies...")
 
-        # Create model
-        self.model = create_bitmar_model(self.config['model'])
+        # Create model with progressive growing support
+        model_config = self.config['model'].copy()
+
+        # Check if progressive growing is enabled
+        progressive_config = model_config.get('progressive_growing', {})
+        if progressive_config.get('enabled', False):
+            logger.info("🚀 Progressive model growing enabled")
+
+            # Start with smaller model
+            start_layers = progressive_config.get('start_layers', {})
+            model_config['text_encoder_layers'] = start_layers.get('text_encoder_layers', 2)
+            model_config['text_decoder_layers'] = start_layers.get('text_decoder_layers', 2)
+            model_config['fusion_num_layers'] = start_layers.get('fusion_num_layers', 1)
+
+            logger.info(f"Starting with: {model_config['text_encoder_layers']} encoder layers, "
+                       f"{model_config['text_decoder_layers']} decoder layers, "
+                       f"{model_config['fusion_num_layers']} fusion layers")
+
+            # Store growth schedule for later use
+            self.growth_schedule = progressive_config.get('growth_schedule', {})
+            self.target_layers = progressive_config.get('final_layers', {})
+            self.progressive_growing_enabled = True
+        else:
+            self.progressive_growing_enabled = False
+            logger.info("Progressive growing disabled - using fixed architecture")
+
+        self.model = create_bitmar_model(model_config)
 
         # Force model to GPU with verification
         self.model.to(self.device)
@@ -199,15 +224,47 @@ class BitMarTrainer:
             self.attention_evolution_tracker = None
             logger.warning("Attention evolution tracker not available")
 
-        # Create data module
-        self.data_module = create_data_module(self.config['data'])
+        # Create enhanced data module with adaptive strategies
+        logger.info("Setting up enhanced data module with adaptive strategies...")
+
+        # Enhanced data config for 10-epoch training
+        enhanced_data_config = self.config['data'].copy()
+        enhanced_data_config['use_mixed_training'] = True
+
+        # Dynamic multi-task weighting
+        multi_task_config = self.config.get('training', {}).get('multi_task_weighting', {})
+        if multi_task_config.get('enabled', False):
+            initial_ratio = multi_task_config.get('initial_text_ratio', 0.5)
+            enhanced_data_config['text_ratio'] = initial_ratio
+            self.dynamic_weighting = True
+            self.target_text_ratio = multi_task_config.get('target_text_ratio', 0.4)
+            self.adjustment_frequency = multi_task_config.get('adjustment_frequency', 100)
+            logger.info(f"Dynamic multi-task weighting: {initial_ratio:.1%} → {self.target_text_ratio:.1%}")
+        else:
+            enhanced_data_config['text_ratio'] = self.config.get('training', {}).get('text_ratio', 0.4)
+            self.dynamic_weighting = False
+
+        # Adaptive batch scaling
+        batch_config = self.config.get('training', {}).get('adaptive_batch_scaling', {})
+        if batch_config.get('enabled', False):
+            start_batch_size = batch_config.get('start_batch_size', 8)
+            enhanced_data_config['batch_size'] = start_batch_size
+            self.adaptive_batch_scaling = True
+            self.batch_scaling_schedule = batch_config.get('scaling_schedule', {})
+            logger.info(f"Adaptive batch scaling enabled - starting with batch size {start_batch_size}")
+        else:
+            self.adaptive_batch_scaling = False
+
+        logger.info(f"Enhanced training - Text ratio: {enhanced_data_config['text_ratio']:.1%}")
+
+        self.data_module = create_data_module(enhanced_data_config)
         self.data_module.setup(max_samples=max_samples)
 
-        # Setup optimizer and scheduler
-        self.setup_optimizer()
+        # Setup optimizer with layer-wise learning rates
+        self.setup_advanced_optimizer()
 
-    def setup_optimizer(self):
-        """Setup optimizer and learning rate scheduler"""
+    def setup_advanced_optimizer(self):
+        """Setup optimizer with layer-wise learning rates and advanced strategies"""
         optimizer_type = self.config.get('optimizer', 'adamw').lower()
 
         # Use AdamW8bit if bitsandbytes is available and requested
@@ -492,6 +549,10 @@ class BitMarTrainer:
                     except Exception as e:
                         logger.warning(
                             f"Attention evolution tracking failed at step {self.global_step}: {e}")
+
+                # Dynamic text ratio adjustment
+                if self.dynamic_weighting and self.global_step % self.adjustment_frequency == 0:
+                    self._update_text_ratio(self.global_step)
 
                 self.global_step += 1
 
@@ -1243,6 +1304,12 @@ class BitMarTrainer:
 
             self.save_checkpoint(epoch, is_best=is_best)
 
+            # Apply progressive growing if enabled
+            self._apply_progressive_growing(epoch)
+
+            # Update batch size based on adaptive scaling
+            self._update_batch_size(epoch)
+
         # Final analysis and cleanup
         logger.info("Training completed! Running final analysis...")
 
@@ -1263,7 +1330,221 @@ class BitMarTrainer:
 
         logger.info("Training completed!")
 
+    def _apply_progressive_growing(self, epoch: int):
+        """Apply progressive model growing based on epoch schedule"""
+        if not self.progressive_growing_enabled:
+            return
 
+        growth_actions = []
+        for epoch_key, action in self.growth_schedule.items():
+            if epoch_key.startswith('epoch_') and int(epoch_key.split('_')[1]) == epoch + 1:
+                growth_actions.append(action)
+
+        if not growth_actions:
+            return
+
+        logger.info(f"🚀 Progressive growing at epoch {epoch + 1}: {growth_actions}")
+
+        for action in growth_actions:
+            if action == "add_encoder_layer":
+                self._add_encoder_layer()
+            elif action == "add_decoder_layer":
+                self._add_decoder_layer()
+            elif action == "add_fusion_layer":
+                self._add_fusion_layer()
+            elif action == "add_final_layers":
+                self._add_remaining_layers()
+
+        # Recreate optimizer to include new parameters
+        self._recreate_optimizer_for_new_layers()
+
+    def _add_encoder_layer(self):
+        """Add a new encoder layer to the model"""
+        try:
+            current_layers = len(self.model.text_encoder.layers)
+            target_layers = self.target_layers.get('text_encoder_layers', 4)
+
+            if current_layers < target_layers:
+                # Create new layer with same config as existing layers
+                new_layer = type(self.model.text_encoder.layers[0])(
+                    self.model.text_encoder.layers[0].d_model,
+                    self.model.text_encoder.layers[0].nhead,
+                    self.model.text_encoder.layers[0].dim_feedforward,
+                    dropout=self.model.text_encoder.layers[0].dropout
+                )
+
+                # Move to device and initialize
+                new_layer.to(self.device)
+                self._initialize_new_layer(new_layer)
+
+                # Add to model
+                self.model.text_encoder.layers.append(new_layer)
+                self.model.text_encoder.num_layers += 1
+
+                logger.info(f"✅ Added encoder layer: {current_layers} → {len(self.model.text_encoder.layers)}")
+
+        except Exception as e:
+            logger.error(f"Failed to add encoder layer: {e}")
+
+    def _add_decoder_layer(self):
+        """Add a new decoder layer to the model"""
+        try:
+            current_layers = len(self.model.text_decoder.layers)
+            target_layers = self.target_layers.get('text_decoder_layers', 4)
+
+            if current_layers < target_layers:
+                # Create new layer with same config as existing layers
+                new_layer = type(self.model.text_decoder.layers[0])(
+                    self.model.text_decoder.layers[0].d_model,
+                    self.model.text_decoder.layers[0].nhead,
+                    self.model.text_decoder.layers[0].dim_feedforward,
+                    dropout=self.model.text_decoder.layers[0].dropout
+                )
+
+                # Move to device and initialize
+                new_layer.to(self.device)
+                self._initialize_new_layer(new_layer)
+
+                # Add to model
+                self.model.text_decoder.layers.append(new_layer)
+                self.model.text_decoder.num_layers += 1
+
+                logger.info(f"✅ Added decoder layer: {current_layers} → {len(self.model.text_decoder.layers)}")
+
+        except Exception as e:
+            logger.error(f"Failed to add decoder layer: {e}")
+
+    def _add_fusion_layer(self):
+        """Add a new cross-modal fusion layer"""
+        try:
+            if hasattr(self.model, 'cross_modal_fusion') and hasattr(self.model.cross_modal_fusion, 'layers'):
+                current_layers = len(self.model.cross_modal_fusion.layers)
+                target_layers = self.target_layers.get('fusion_num_layers', 2)
+
+                if current_layers < target_layers:
+                    # Create new fusion layer
+                    new_layer = type(self.model.cross_modal_fusion.layers[0])(
+                        self.model.cross_modal_fusion.layers[0].d_model,
+                        self.model.cross_modal_fusion.layers[0].nhead,
+                        self.model.cross_modal_fusion.layers[0].dim_feedforward,
+                        dropout=self.model.cross_modal_fusion.layers[0].dropout
+                    )
+
+                    # Move to device and initialize
+                    new_layer.to(self.device)
+                    self._initialize_new_layer(new_layer)
+
+                    # Add to model
+                    self.model.cross_modal_fusion.layers.append(new_layer)
+                    self.model.cross_modal_fusion.num_layers += 1
+
+                    logger.info(f"✅ Added fusion layer: {current_layers} → {len(self.model.cross_modal_fusion.layers)}")
+
+        except Exception as e:
+            logger.error(f"Failed to add fusion layer: {e}")
+
+    def _add_remaining_layers(self):
+        """Add any remaining layers to reach target architecture"""
+        self._add_encoder_layer()
+        self._add_decoder_layer()
+        self._add_fusion_layer()
+
+    def _initialize_new_layer(self, layer):
+        """Initialize parameters of a new layer"""
+        for param in layer.parameters():
+            if param.dim() > 1:
+                torch.nn.init.xavier_uniform_(param)
+            else:
+                torch.nn.init.zeros_(param)
+
+    def _recreate_optimizer_for_new_layers(self):
+        """Recreate optimizer to include parameters from new layers"""
+        try:
+            # Store current state
+            old_lr = self.optimizer.param_groups[0]['lr']
+            old_state = {}
+
+            # Save state for existing parameters
+            for param_group in self.optimizer.param_groups:
+                for param in param_group['params']:
+                    if param in self.optimizer.state:
+                        old_state[param] = self.optimizer.state[param].copy()
+
+            # Create new optimizer with all parameters
+            optimizer_type = self.config.get('optimizer', 'adamw').lower()
+
+            if optimizer_type == 'adamw':
+                self.optimizer = AdamW(
+                    self.model.parameters(),
+                    lr=old_lr,
+                    weight_decay=self.config['training']['weight_decay'],
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
+            else:
+                # Fallback to AdamW for new layers
+                self.optimizer = AdamW(
+                    self.model.parameters(),
+                    lr=old_lr,
+                    weight_decay=self.config['training']['weight_decay'],
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
+
+            # Restore state for existing parameters
+            for param_group in self.optimizer.param_groups:
+                for param in param_group['params']:
+                    if param in old_state:
+                        self.optimizer.state[param] = old_state[param]
+
+            logger.info(f"✅ Optimizer recreated with new layers")
+
+        except Exception as e:
+            logger.error(f"Failed to recreate optimizer for new layers: {e}")
+            # Fallback to basic optimizer recreation
+            self.setup_advanced_optimizer()
+
+    def _update_batch_size(self, epoch: int):
+        """Update batch size based on adaptive scaling schedule"""
+        if not self.adaptive_batch_scaling:
+            return
+
+        new_batch_size = None
+
+        # Check epoch-based schedule
+        for epoch_range, batch_size in self.batch_scaling_schedule.items():
+            if epoch_range.startswith('epoch_'):
+                start_end = epoch_range.split('_')[1].split('_')
+                if len(start_end) == 2:
+                    start_epoch, end_epoch = int(start_end[0]), int(start_end[1])
+                    if start_epoch <= epoch + 1 <= end_epoch:
+                        new_batch_size = batch_size
+                        break
+
+        if new_batch_size and new_batch_size != self.data_module.batch_size:
+            logger.info(f"📈 Adaptive batch scaling: {self.data_module.batch_size} → {new_batch_size}")
+
+            # Update data module batch size
+            self.data_module.batch_size = new_batch_size
+            self.data_module.config['batch_size'] = new_batch_size
+
+            # Note: DataLoader will use new batch size on next epoch
+
+    def _update_text_ratio(self, step: int):
+        """Update text-only ratio based on dynamic weighting"""
+        if not self.dynamic_weighting:
+            return
+
+        if step % self.adjustment_frequency == 0:
+            # Simple linear interpolation from initial to target ratio
+            progress = min(1.0, step / (self.config['training']['max_epochs'] * 1000))  # Approximate steps
+            current_ratio = self.data_module.train_dataset.text_ratio
+            new_ratio = current_ratio + (self.target_text_ratio - current_ratio) * 0.1  # Gradual adjustment
+
+            if abs(new_ratio - current_ratio) > 0.01:  # Only update if significant change
+                logger.info(f"🎯 Dynamic text ratio: {current_ratio:.2%} → {new_ratio:.2%}")
+                self.data_module.train_dataset.text_ratio = new_ratio
+                self.data_module.train_dataset._create_mixed_indices()  # Recreate indices
 def load_config(config_path: str) -> Dict:
     """Load configuration from YAML file"""
     with open(config_path, 'r') as f:

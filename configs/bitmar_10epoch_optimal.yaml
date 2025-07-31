@@ -1,0 +1,194 @@
+# BitMar 10-Epoch Optimal Configuration
+# Maximized learning efficiency for limited training time
+# Enhanced training with train_50M text data + progressive model growing
+
+model:
+  # Progressive model growing configuration
+  progressive_growing:
+    enabled: true
+    start_layers:
+      text_encoder_layers: 2    # Start with 2 layers
+      text_decoder_layers: 2    # Start with 2 layers
+      fusion_num_layers: 1      # Start with 1 fusion layer
+    final_layers:
+      text_encoder_layers: 4    # Grow to 4 layers
+      text_decoder_layers: 4    # Grow to 4 layers
+      fusion_num_layers: 2      # Grow to 2 fusion layers
+    growth_schedule:
+      epoch_3: "add_encoder_layer"     # Add encoder layer at epoch 3
+      epoch_5: "add_decoder_layer"     # Add decoder layer at epoch 5
+      epoch_7: "add_fusion_layer"      # Add fusion layer at epoch 7
+      epoch_8: "add_final_layers"      # Add remaining layers at epoch 8
+
+  # Optimized text encoder (will grow progressively)
+  vocab_size: 50257
+  text_encoder_dim: 256
+  text_encoder_layers: 4      # Final target (starts at 2)
+  text_encoder_heads: 4
+
+  # Optimized text decoder (will grow progressively)
+  text_decoder_dim: 256
+  text_decoder_layers: 4      # Final target (starts at 2)
+  text_decoder_heads: 4
+
+  # Vision processing (efficient compression)
+  vision_encoder_dim: 768
+  vision_latent_size: 128
+  vision_hidden_size: 64
+  vision_compression_method: "learnable_projection"
+  vision_spatial_pooling: true
+  vision_pool_size: 2
+
+  # Cross-modal fusion (will grow progressively)
+  fusion_hidden_size: 128
+  fusion_num_heads: 4
+  fusion_num_layers: 2        # Final target (starts at 1)
+
+  # Episodic memory (balanced)
+  memory_size: 32
+  episode_dim: 128
+  memory_alpha: 0.4
+  direct_writing: true
+  memory_compression: true
+
+  # Model configuration
+  max_seq_len: 512
+  dropout: 0.15
+
+# Advanced training configuration for 10 epochs
+training:
+  max_epochs: 10
+
+  # Layer-wise learning rate decay
+  layerwise_lr_decay:
+    enabled: true
+    base_lr: 2e-3              # Base learning rate
+    encoder_multiplier: 1.2     # Encoder gets 20% higher LR
+    decoder_multiplier: 1.0     # Decoder gets base LR
+    fusion_multiplier: 0.8      # Fusion gets 20% lower LR (more stable)
+    vision_multiplier: 1.5      # Vision processing gets highest LR
+
+  # Adaptive batch size scaling
+  adaptive_batch_scaling:
+    enabled: true
+    start_batch_size: 8         # Start smaller for fast iterations
+    target_batch_size: 16       # End with larger batches for stability
+    scaling_schedule:
+      epoch_1_3: 8              # Small batches early
+      epoch_4_6: 12             # Medium batches mid-training
+      epoch_7_10: 16            # Large batches for final convergence
+
+  # Dynamic learning rate with warmup
+  learning_rate: 2e-3
+  min_lr: 1e-5
+  weight_decay: 0.05
+
+  # Advanced scheduling with restarts
+  scheduler: "cosine_with_restarts"
+  warmup_epochs: 1
+  restart_epochs: [4, 7]       # Restart learning at epochs 4 and 7
+
+  # Gradient optimization
+  gradient_clip_val: 1.0
+  gradient_accumulation_steps: 2
+
+  # Multi-task dynamic weighting
+  multi_task_weighting:
+    enabled: true
+    initial_text_ratio: 0.5     # Start balanced
+    target_text_ratio: 0.4      # End with 40% text
+    dynamic_adjustment: true     # Adjust based on performance
+    adjustment_frequency: 100    # Adjust every 100 steps
+
+  # Memory and stability
+  device: "cuda:0"
+  mixed_precision: true
+  compile_model: true
+
+# Enhanced data configuration with adaptive strategies
+data:
+  dataset_dir: "../babylm_dataset"
+
+  # Adaptive batch configuration
+  batch_size: 8               # Will be scaled up during training
+  max_seq_length: 512
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+
+  # Enhanced mixed training with dynamic weighting
+  use_mixed_training: true
+  text_ratio: 0.4             # Target ratio (will start higher)
+
+  # Smart data sampling
+  smart_sampling:
+    enabled: true
+    difficulty_aware: true      # Sample easier examples early
+    quality_filtering: true     # Filter low-quality samples
+    diversity_sampling: true    # Ensure diverse samples each epoch
+
+  # Text encoder
+  text_encoder_name: "gpt2"
+
+  # Validation datasets (optimized for speed)
+  validation_datasets:
+    - "squad"
+    - "glue/sst2"
+
+# Advanced optimization settings
+optimizer: "adamw_layerwise"   # Custom optimizer with layer-wise LR
+adamw_config:
+  betas: [0.9, 0.95]
+  eps: 1e-6
+  fused: true
+
+# Knowledge distillation (optional but powerful)
+knowledge_distillation:
+  enabled: false              # Can enable if you have a teacher model
+  teacher_model: null
+  temperature: 4.0
+  alpha: 0.7
+
+# Enhanced logging for 10-epoch tracking
+wandb:
+  project: "bitmar-10epoch-progressive"
+  log_every_n_steps: 20
+  save_every_n_epochs: 2
+
+# Attention analysis (optimized for progressive growth)
+attention_analysis:
+  enabled: true
+  log_every_n_steps: 50
+  viz_every_n_epochs: 2
+  track_top_k: 15
+  track_layer_growth: true    # Track attention as layers are added
+
+# Output directories
+output:
+  checkpoint_dir: "checkpoints/10epoch_progressive"
+  log_dir: "logs/10epoch_progressive"
+  attention_dir: "attention_analysis/10epoch_progressive"
+  memory_dir: "memory_analysis/10epoch_progressive"
+  results_dir: "results/10epoch_progressive"
+
+# Validation and evaluation
+validation:
+  val_every_n_epochs: 2
+  early_stopping_patience: 8
+  save_best_model: true
+  track_layer_performance: true  # Track performance as layers are added
+
+# Memory optimization with progressive scaling
+memory_optimization:
+  gradient_checkpointing: true
+  empty_cache_every_n_steps: 100
+  max_memory_usage: 0.9
+  adaptive_memory_management: true  # Adjust based on model size
+
+# Feature reduction (balanced for learning)
+vision_feature_reduction:
+  enabled: true
+  method: "learnable_projection"
+  target_dim: 128
+  spatial_pooling: true
+  pool_method: "attention"
