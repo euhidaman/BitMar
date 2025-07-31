@@ -1732,291 +1732,504 @@ class BitMarTrainer:
             logger.warning(f"Text understanding loss computation failed: {e}")
             return torch.tensor(0.0, device=text_features.device)
 
-    def train(self, max_samples: Optional[int] = None):
-        """Main training loop with human-inspired 3-stage learning and comprehensive tracking"""
-        logger.info("🚀 Starting BitMar Human-Inspired 3-Stage Training...")
-
-        # Setup directories first
-        self.setup_directories()
-
-        # Setup logging systems before model setup
-        self.setup_logging_systems()
-
-        # Setup model and data
-        self.setup_model_and_data(max_samples=max_samples)
-
-        # Start carbon emissions tracking
-        self.start_carbon_tracking()
-
+    def _safe_batch_to_device(self, batch):
+        """Safely move batch to device with error handling"""
         try:
-            # Log initial stage configuration to wandb
-            if self.wandb_logger:
-                stage_config_metrics = {}
-                for stage_num, config in self.stage_configs.items():
-                    stage_config_metrics[f'config/stage_{stage_num}_epochs'] = config['epochs']
-                    stage_config_metrics[f'config/stage_{stage_num}_lr'] = config['learning_rate']
-                    stage_config_metrics[f'config/stage_{stage_num}_focus'] = hash(config['focus']) % 1000  # Simple encoding
-                wandb.log(stage_config_metrics)
-
-            # === STAGE 1: VISUAL UNDERSTANDING ===
-            logger.info("\n" + "="*60)
-            logger.info("🍼 STARTING STAGE 1: VISUAL UNDERSTANDING")
-            logger.info("Learning to see like babies - visual patterns only")
-            logger.info("="*60)
-
-            stage_1_results = self.train_stage_1_visual_understanding()
-
-            # Log stage 1 completion to wandb
-            if self.wandb_logger:
-                wandb.log({
-                    'Stage_Completion/Stage_1_Completed': 1,
-                    'Stage_Completion/Stage_1_Final_Vision_Loss': stage_1_results['avg_vision_loss'],
-                    'Stage_Progress/Current_Stage': 1,
-                    'step': self.global_step
-                }, step=self.global_step)
-
-            # === STAGE 2: VISUAL-LANGUAGE GROUNDING ===
-            logger.info("\n" + "="*60)
-            logger.info("🔗 STARTING STAGE 2: VISUAL-LANGUAGE GROUNDING")
-            logger.info("Connecting words to images like children learning 'apple'")
-            logger.info("="*60)
-
-            self.current_stage = 2
-            stage_2_results = self.train_stage_2_visual_language_grounding()
-
-            # Log stage 2 completion to wandb
-            if self.wandb_logger:
-                wandb.log({
-                    'Stage_Completion/Stage_2_Completed': 1,
-                    'Stage_Completion/Stage_2_Final_Similarity': stage_2_results['avg_cross_modal_similarity'],
-                    'Stage_Completion/Stage_2_Final_Alignment': stage_2_results['avg_alignment_accuracy'],
-                    'Stage_Progress/Current_Stage': 2,
-                    'step': self.global_step
-                }, step=self.global_step)
-
-            # === STAGE 3: ABSTRACT LANGUAGE LEARNING ===
-            logger.info("\n" + "="*60)
-            logger.info("📚 STARTING STAGE 3: ABSTRACT LANGUAGE LEARNING")
-            logger.info("Learning language patterns like reading books")
-            logger.info("="*60)
-
-            self.current_stage = 3
-            stage_3_results = self.train_stage_3_abstract_language_learning()
-
-            # Log stage 3 completion to wandb
-            if self.wandb_logger:
-                wandb.log({
-                    'Stage_Completion/Stage_3_Completed': 1,
-                    'Stage_Completion/Stage_3_Final_Loss': stage_3_results['avg_text_loss'],
-                    'Stage_Completion/Stage_3_Final_Perplexity': stage_3_results['avg_perplexity'],
-                    'Stage_Completion/Stage_3_Final_Accuracy': stage_3_results['avg_language_accuracy'],
-                    'Stage_Progress/Current_Stage': 3,
-                    'step': self.global_step
-                }, step=self.global_step)
-
-            # === FINAL COMPREHENSIVE EVALUATION ===
-            logger.info("\n" + "="*60)
-            logger.info("🎯 RUNNING FINAL EVALUATION")
-            logger.info("="*60)
-
-            final_val_metrics = self.validate_epoch(0)  # Final validation
-
-            # Log comprehensive final results
-            if self.wandb_logger:
-                final_summary = {
-                    'Final_Results/Stage_1_Vision_Loss': stage_1_results['avg_vision_loss'],
-                    'Final_Results/Stage_2_Cross_Modal_Similarity': stage_2_results['avg_cross_modal_similarity'],
-                    'Final_Results/Stage_2_Alignment_Accuracy': stage_2_results['avg_alignment_accuracy'],
-                    'Final_Results/Stage_3_Text_Loss': stage_3_results['avg_text_loss'],
-                    'Final_Results/Stage_3_Perplexity': stage_3_results['avg_perplexity'],
-                    'Final_Results/Stage_3_Language_Accuracy': stage_3_results['avg_language_accuracy'],
-                    'Final_Results/Final_Validation_Loss': final_val_metrics['val_loss'],
-                    'Final_Results/Total_Training_Steps': self.global_step,
-                    'Training_Completed': 1
-                }
-                wandb.log(final_summary, step=self.global_step)
-
-            # Create final stage comparison visualizations
-            self._create_stage_comparison_plots()
-
-            logger.info("\n" + "="*60)
-            logger.info("✅ HUMAN-INSPIRED TRAINING COMPLETED!")
-            logger.info("="*60)
-            logger.info(f"📊 Stage 1 (Visual): Vision Loss = {stage_1_results['avg_vision_loss']:.4f}")
-            logger.info(f"🔗 Stage 2 (Grounding): Similarity = {stage_2_results['avg_cross_modal_similarity']:.4f}")
-            logger.info(f"📚 Stage 3 (Language): Perplexity = {stage_3_results['avg_perplexity']:.2f}")
-            logger.info(f"🎯 Final Validation Loss: {final_val_metrics['val_loss']:.4f}")
-
-        except KeyboardInterrupt:
-            logger.info("Training interrupted by user")
+            for key in batch:
+                if torch.is_tensor(batch[key]):
+                    batch[key] = batch[key].to(self.device)
+            return batch
         except Exception as e:
-            logger.error(f"Training failed with error: {e}")
-            raise e
-        finally:
-            # Stop carbon tracking and log final results
-            total_emissions = self.stop_carbon_tracking()
+            logger.warning(f"Failed to move batch to device: {e}")
+            # Try individual tensor transfer
+            for key in batch:
+                if torch.is_tensor(batch[key]):
+                    try:
+                        batch[key] = batch[key].to(self.device)
+                    except Exception as e2:
+                        logger.warning(f"Failed to move {key} to device: {e2}")
+            return batch
 
-            # Final analysis and cleanup
-            logger.info("Training completed! Running final analysis...")
+    def _silent_device_check(self):
+        """Silently check model device consistency without excessive logging"""
+        try:
+            model_device = next(self.model.parameters()).device
+            if model_device != self.device:
+                if self._device_warnings_count < 5:  # Limit warnings
+                    logger.warning(f"Model device mismatch: expected {self.device}, got {model_device}")
+                    self._device_warnings_count += 1
+                # Move model back to correct device
+                self.model.to(self.device)
+        except Exception as e:
+            if self._device_warnings_count < 5:
+                logger.warning(f"Device check failed: {e}")
+                self._device_warnings_count += 1
 
-            # Save final checkpoint with stage information
-            final_checkpoint = {
-                'global_step': self.global_step,
-                'current_stage': self.current_stage,
-                'stage_metrics': self.stage_metrics,
-                'model_state_dict': self.model.state_dict(),
-                'optimizer_state_dict': self.optimizer.state_dict(),
-                'config': self.config
-            }
+    def _force_model_device_consistency(self):
+        """Force all model components to be on the correct device"""
+        try:
+            # Move entire model to device
+            self.model.to(self.device)
 
-            final_checkpoint_path = self.checkpoint_dir / 'final_human_inspired_checkpoint.pt'
-            torch.save(final_checkpoint, final_checkpoint_path)
-            logger.info(f"Final checkpoint saved: {final_checkpoint_path}")
+            # Force all parameters to correct device
+            for name, param in self.model.named_parameters():
+                if param.device != self.device:
+                    param.data = param.data.to(self.device)
+                    if param.grad is not None:
+                        param.grad = param.grad.to(self.device)
 
-            # Close wandb logger
-            if self.wandb_logger:
-                self.wandb_logger.finish()
+            logger.info(f"Forced model device consistency to {self.device}")
+        except Exception as e:
+            logger.error(f"Failed to force model device consistency: {e}")
 
-            logger.info("Human-inspired training completed!")
-            if total_emissions > 0:
-                logger.info(f"🌱 Final Carbon Footprint: {total_emissions:.6f} kg CO2 ({total_emissions * 1000:.3f} g CO2)")
+    def _create_device_pinned_optimizer(self):
+        """Recreate optimizer with device-pinned parameters"""
+        try:
+            # Get current optimizer state
+            current_lr = self.optimizer.param_groups[0]['lr']
+            optimizer_type = self.config['training'].get('optimizer', 'adamw').lower()
 
-            return total_emissions
+            # Recreate optimizer with current model parameters
+            if optimizer_type == 'adamw':
+                self.optimizer = AdamW(
+                    self.model.parameters(),
+                    lr=current_lr,
+                    weight_decay=self.config['training']['weight_decay'],
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
+            elif optimizer_type == 'adam':
+                self.optimizer = torch.optim.Adam(
+                    self.model.parameters(),
+                    lr=current_lr,
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
+            else:
+                # Fallback to AdamW
+                self.optimizer = AdamW(
+                    self.model.parameters(),
+                    lr=current_lr,
+                    weight_decay=self.config['training']['weight_decay'],
+                    betas=(0.9, 0.999),
+                    eps=1e-8
+                )
 
-    def _create_stage_comparison_plots(self):
-        """Create visualizations comparing metrics across all 3 stages"""
-        if not self.wandb_logger:
+            logger.info(f"Recreated optimizer with device-pinned parameters")
+        except Exception as e:
+            logger.error(f"Failed to recreate optimizer: {e}")
+
+    def setup_adaptive_controller(self):
+        """Initialize adaptive training controller if enabled"""
+        if not ADAPTIVE_TRAINING_AVAILABLE:
+            logger.info("Adaptive training controller not available")
+            self.adaptive_controller = None
             return
 
-        try:
-            import matplotlib.pyplot as plt
+        # Check if adaptive training is enabled in config
+        model_config = self.config.get('model', {})
+        adaptive_config = self.config.get('adaptive_training', {})
 
-            # Stage progression plot
-            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+        if not model_config.get('enable_adaptive_training', False):
+            logger.info("Adaptive training disabled in config")
+            self.adaptive_controller = None
+            return
 
-            # Stage 1: Vision Loss
-            if self.stage_metrics['stage_1_metrics']['vision_loss']:
-                ax1.plot(self.stage_metrics['stage_1_metrics']['vision_loss'], 'b-', linewidth=2)
-                ax1.set_title('Stage 1: Vision Learning')
-                ax1.set_xlabel('Epoch')
-                ax1.set_ylabel('Vision Loss')
-                ax1.grid(True, alpha=0.3)
+        # Create adaptive logs directory
+        adaptive_logs_dir = Path("./logs/adaptive_training")
+        adaptive_logs_dir.mkdir(parents=True, exist_ok=True)
 
-            # Stage 2: Cross-Modal Similarity
-            if self.stage_metrics['stage_2_metrics']['cross_modal_similarity']:
-                ax2.plot(self.stage_metrics['stage_2_metrics']['cross_modal_similarity'], 'g-', linewidth=2)
-                ax2.set_title('Stage 2: Visual-Language Grounding')
-                ax2.set_xlabel('Epoch')
-                ax2.set_ylabel('Cross-Modal Similarity')
-                ax2.grid(True, alpha=0.3)
+        self.adaptive_controller = AdaptiveTrainingController(
+            similarity_window_size=adaptive_config.get('similarity_window_size', 100),
+            drop_threshold=adaptive_config.get('drop_threshold', 0.15),
+            min_steps_between_interventions=adaptive_config.get('min_steps_between_interventions', 1000),
+            freeze_duration_steps=adaptive_config.get('freeze_duration_steps', 2000),
+            loss_rebalance_factor=adaptive_config.get('loss_rebalance_factor', 2.5),
+            similarity_smoothing_alpha=adaptive_config.get('similarity_smoothing_alpha', 0.1),
+            save_dir=str(adaptive_logs_dir)
+        )
 
-            # Stage 3: Perplexity
-            if self.stage_metrics['stage_3_metrics']['text_perplexity']:
-                ax3.plot(self.stage_metrics['stage_3_metrics']['text_perplexity'], 'r-', linewidth=2)
-                ax3.set_title('Stage 3: Language Learning')
-                ax3.set_xlabel('Epoch')
-                ax3.set_ylabel('Perplexity')
-                ax3.grid(True, alpha=0.3)
+        logger.info("🤖 Adaptive training controller initialized!")
+        logger.info(f"   Drop threshold: {adaptive_config.get('drop_threshold', 0.15)}")
+        logger.info(f"   Window size: {adaptive_config.get('similarity_window_size', 100)} steps")
+        logger.info(f"   Intervention cooldown: {adaptive_config.get('min_steps_between_interventions', 1000)} steps")
+        logger.info(f"   Logs saved to: {adaptive_logs_dir}")
 
-            # Combined accuracy metrics
-            stage_names = ['Visual', 'Grounding', 'Language']
-            accuracies = [
-                1.0 - (np.mean(self.stage_metrics['stage_1_metrics']['vision_loss']) if self.stage_metrics['stage_1_metrics']['vision_loss'] else 0),
-                np.mean(self.stage_metrics['stage_2_metrics']['alignment_accuracy']) if self.stage_metrics['stage_2_metrics']['alignment_accuracy'] else 0,
-                np.mean(self.stage_metrics['stage_3_metrics']['language_accuracy']) if self.stage_metrics['stage_3_metrics']['language_accuracy'] else 0
-            ]
+        self.best_similarity = 0.0  # Track best similarity for checkpointing
 
-            bars = ax4.bar(stage_names, accuracies, color=['blue', 'green', 'red'], alpha=0.7)
-            ax4.set_title('Final Performance by Stage')
-            ax4.set_ylabel('Performance Score')
-            ax4.set_ylim(0, 1.0)
-            ax4.grid(True, alpha=0.3)
+    def freeze_all_except_vision(self):
+        """Freeze all model components except vision encoder for Stage 1"""
+        # Freeze text encoder
+        for param in self.model.text_encoder.parameters():
+            param.requires_grad = False
 
-            # Add value labels on bars
-            for bar, acc in zip(bars, accuracies):
-                height = bar.get_height()
-                ax4.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                        f'{acc:.3f}', ha='center', va='bottom')
+        # Freeze text decoder
+        for param in self.model.text_decoder.parameters():
+            param.requires_grad = False
 
-            plt.tight_layout()
-            wandb.log({"Human_Inspired_Training/Stage_Comparison": wandb.Image(fig)}, step=self.global_step)
-            plt.close(fig)
+        # Freeze fusion module
+        for param in self.model.fusion.parameters():
+            param.requires_grad = False
 
-            logger.info("✅ Stage comparison plots created and logged to wandb")
+        # Freeze memory module
+        for param in self.model.memory.parameters():
+            param.requires_grad = False
 
-        except Exception as e:
-            logger.warning(f"Failed to create stage comparison plots: {e}")
+        # Freeze all projection layers except vision
+        for name, param in self.model.named_parameters():
+            if any(proj in name for proj in ['text_to_episode', 'memory_to_decoder', 'decoder_input_proj']):
+                param.requires_grad = False
 
+        # Keep vision encoder unfrozen
+        for param in self.model.vision_encoder.parameters():
+            param.requires_grad = True
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train BitMar model with episodic memory and attention analysis")
+        logger.info("🍼 Stage 1: Only vision encoder is trainable")
 
-    # Required arguments
-    parser.add_argument("--config", type=str, required=True, help="Path to configuration file")
+    def freeze_all_except_multimodal(self):
+        """Freeze text decoder, keep vision, text encoder, and fusion trainable for Stage 2"""
+        # Freeze text decoder (no generation yet)
+        for param in self.model.text_decoder.parameters():
+            param.requires_grad = False
 
-    # Optional arguments
-    parser.add_argument("--wandb_project", type=str, default="bitmar-training", help="Weights & Biases project name")
-    parser.add_argument("--max_epochs", type=int, help="Maximum number of epochs to train (overrides config)")
-    parser.add_argument("--track_attention_every_n_steps", type=int, default=1000, help="Track attention evolution every N steps")
-    parser.add_argument("--save_attention_every_n_epochs", type=int, default=5, help="Save attention analysis every N epochs")
-    parser.add_argument("--optimizer", type=str, choices=["adam", "adamw", "adamw8bit", "sgd", "lion"], help="Optimizer to use (overrides config)")
-    parser.add_argument("--device", type=str, help="Device to use for training (cuda, cpu)")
-    parser.add_argument("--resume_from_checkpoint", type=str, help="Path to checkpoint to resume from")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+        # Keep vision encoder trainable
+        for param in self.model.vision_encoder.parameters():
+            param.requires_grad = True
 
-    args = parser.parse_args()
+        # Keep text encoder trainable
+        for param in self.model.text_encoder.parameters():
+            param.requires_grad = True
 
-    try:
-        print("🚀 Starting BitMar training initialization...")
+        # Keep fusion module trainable (most important for alignment)
+        for param in self.model.fusion.parameters():
+            param.requires_grad = True
 
-        # Initialize trainer
-        print("📋 Loading configuration and initializing trainer...")
-        trainer = BitMarTrainer(args.config, device=args.device)
-        print("✅ Trainer initialized successfully")
+        # Keep memory trainable for multimodal episodes
+        for param in self.model.memory.parameters():
+            param.requires_grad = True
 
-        # Override config values with command line arguments
-        if args.max_epochs:
-            print(f"🔧 Overriding max_epochs: {trainer.config['training']['max_epochs']} -> {args.max_epochs}")
-            trainer.config['training']['max_epochs'] = args.max_epochs
-        if args.optimizer:
-            print(f"🔧 Overriding optimizer: {trainer.config['training'].get('optimizer', 'adamw')} -> {args.optimizer}")
-            trainer.config['training']['optimizer'] = args.optimizer
+        # Keep relevant projection layers trainable
+        for name, param in self.model.named_parameters():
+            if any(proj in name for proj in ['text_to_episode', 'memory_to_decoder']):
+                param.requires_grad = True
+            elif 'decoder_input_proj' in name:
+                param.requires_grad = False  # Not needed yet
 
-        # Override wandb project name if provided
-        if args.wandb_project:
-            print(f"🔧 Setting wandb project: {args.wandb_project}")
-            trainer.config['wandb']['project'] = args.wandb_project
+        logger.info("🔗 Stage 2: Vision, text encoder, fusion, and memory are trainable")
 
-        # Set tracking parameters as instance variables
-        trainer.track_attention_every_n_steps = args.track_attention_every_n_steps
-        trainer.save_attention_every_n_epochs = args.save_attention_every_n_epochs
+    def unfreeze_all_components(self):
+        """Unfreeze all model components for Stage 3"""
+        for param in self.model.parameters():
+            param.requires_grad = True
+        logger.info("📚 Stage 3: All components are trainable")
 
-        # Start training (wandb setup happens inside train() method)
-        print("🎯 Starting training process...")
-        logger.info("Starting BitMar training...")
-        logger.info(f"Configuration: {args.config}")
-        logger.info(f"Device: {trainer.device}")
-        logger.info(f"Max epochs: {trainer.config['training']['max_epochs']}")
-        logger.info(f"Wandb project: {trainer.config['wandb']['project']}")
+    def train_stage_1_visual_understanding(self) -> Dict[str, float]:
+        """Stage 1: Visual Understanding - Learn visual representations like babies"""
+        logger.info("🍼 STAGE 1 STARTING: Visual Understanding (like babies learning to see)")
 
-        print("📊 Beginning human-inspired 3-stage training...")
-        trainer.train()
+        # Configure for visual-only learning
+        self.freeze_all_except_vision()
+        stage_config = self.stage_configs[1]
 
-    except KeyboardInterrupt:
-        print("\n⚠️  Training interrupted by user")
-        logger.info("Training interrupted by user")
-    except FileNotFoundError as e:
-        print(f"❌ File not found error: {e}")
-        logger.error(f"File not found: {e}")
-        print("💡 Please check that all required files exist:")
-        print(f"   - Config file: {args.config}")
-        print("   - Data directory and files")
-        sys.exit(1)
-    except Exception as e:
-        print(f"❌ Training failed with error: {e}")
-        logger.error(f"Training failed with error: {e}")
-        import traceback
-        print("\n🔍 Full error traceback:")
-        traceback.print_exc()
-        sys.exit(1)
+        # Update learning rate for this stage
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = stage_config['learning_rate']
 
+        stage_metrics = {'vision_loss': [], 'vision_accuracy': [], 'visual_clustering_score': []}
+
+        for epoch in range(stage_config['epochs']):
+            logger.info(f"Stage 1, Epoch {epoch + 1}/{stage_config['epochs']}")
+
+            epoch_vision_loss = 0.0
+            epoch_batches = 0
+
+            train_loader = self.data_module.train_dataloader()
+            progress_bar = tqdm(train_loader, desc=f"Stage 1 - Epoch {epoch + 1}")
+
+            for batch_idx, batch in enumerate(progress_bar):
+                batch = self._safe_batch_to_device(batch)
+
+                # Stage 1: Only process vision features
+                vision_features = batch['vision_features']
+
+                # Forward through vision encoder
+                encoded_vision = self.model.encode_vision(vision_features)
+
+                # Vision reconstruction loss (learn good representations)
+                vision_reconstruction_loss = nn.MSELoss()(encoded_vision, vision_features)
+
+                # Vision clustering loss (encourage diverse representations)
+                vision_clustering_loss = self._compute_vision_clustering_loss(encoded_vision)
+
+                # Combined loss for Stage 1
+                loss = (stage_config['loss_weights']['vision_reconstruction'] * vision_reconstruction_loss +
+                       stage_config['loss_weights']['vision_clustering'] * vision_clustering_loss)
+
+                # Backward pass
+                self.optimizer.zero_grad()
+                loss.backward()
+
+                if self.config['training']['gradient_clip_val'] > 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(),
+                                                 self.config['training']['gradient_clip_val'])
+
+                self.optimizer.step()
+
+                # Track metrics
+                epoch_vision_loss += loss.item()
+                epoch_batches += 1
+
+                progress_bar.set_postfix({
+                    'vision_loss': f"{loss.item():.4f}",
+                    'recon_loss': f"{vision_reconstruction_loss.item():.4f}",
+                    'cluster_loss': f"{vision_clustering_loss.item():.4f}"
+                })
+
+                # Log to wandb
+                if self.wandb_logger and batch_idx % 50 == 0:
+                    wandb.log({
+                        'Stage_1/Vision_Loss': loss.item(),
+                        'Stage_1/Vision_Reconstruction_Loss': vision_reconstruction_loss.item(),
+                        'Stage_1/Vision_Clustering_Loss': vision_clustering_loss.item(),
+                        'Stage_1/Epoch': epoch,
+                        'Stage_1/Learning_Rate': self.optimizer.param_groups[0]['lr'],
+                        'stage': 1,
+                        'step': self.global_step
+                    }, step=self.global_step)
+
+                self.global_step += 1
+
+            # Epoch metrics
+            avg_vision_loss = epoch_vision_loss / epoch_batches if epoch_batches > 0 else 0
+            stage_metrics['vision_loss'].append(avg_vision_loss)
+
+            logger.info(f"Stage 1, Epoch {epoch + 1} - Average Vision Loss: {avg_vision_loss:.4f}")
+
+        self.stage_metrics['stage_1_metrics'] = stage_metrics
+        logger.info("🍼 STAGE 1 COMPLETED: Visual Understanding")
+        return {'avg_vision_loss': np.mean(stage_metrics['vision_loss'])}
+
+    def train_stage_2_visual_language_grounding(self) -> Dict[str, float]:
+        """Stage 2: Visual-Language Grounding - Connect words to visual concepts"""
+        logger.info("🔗 STAGE 2 STARTING: Visual-Language Grounding (connecting words to images)")
+
+        # Configure for multimodal alignment
+        self.freeze_all_except_multimodal()
+        stage_config = self.stage_configs[2]
+
+        # Update learning rate for this stage
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = stage_config['learning_rate']
+
+        stage_metrics = {'cross_modal_similarity': [], 'alignment_accuracy': [], 'caption_bleu': []}
+
+        for epoch in range(stage_config['epochs']):
+            logger.info(f"Stage 2, Epoch {epoch + 1}/{stage_config['epochs']}")
+
+            epoch_cross_modal_loss = 0.0
+            epoch_alignment_loss = 0.0
+            epoch_similarity = 0.0
+            epoch_batches = 0
+
+            train_loader = self.data_module.train_dataloader()
+            progress_bar = tqdm(train_loader, desc=f"Stage 2 - Epoch {epoch + 1}")
+
+            for batch_idx, batch in enumerate(progress_bar):
+                batch = self._safe_batch_to_device(batch)
+
+                # Stage 2: Process both text and vision for alignment
+                text_features, _ = self.model.encode_text(batch['input_ids'], batch['attention_mask'])
+                vision_latent = self.model.encode_vision(batch['vision_features'])
+
+                # Cross-modal fusion (learning alignment)
+                fused_features, cross_attention = self.model.fusion(text_features, vision_latent)
+
+                # Cross-modal contrastive loss (CLIP-style)
+                text_pooled = text_features.mean(dim=1)
+                cross_modal_loss = self.model.compute_cross_modal_contrastive_loss(
+                    text_pooled, vision_latent, temperature=0.07
+                )
+
+                # Visual-language alignment loss (encourage good fusion)
+                alignment_loss = self._compute_alignment_loss(text_pooled, vision_latent, fused_features.mean(dim=1))
+
+                # Combined loss for Stage 2
+                loss = (stage_config['loss_weights']['cross_modal_contrastive'] * cross_modal_loss +
+                       stage_config['loss_weights']['visual_language_alignment'] * alignment_loss)
+
+                # Backward pass
+                self.optimizer.zero_grad()
+                loss.backward()
+
+                if self.config['training']['gradient_clip_val'] > 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(),
+                                                 self.config['training']['gradient_clip_val'])
+
+                self.optimizer.step()
+
+                # Track metrics
+                epoch_cross_modal_loss += cross_modal_loss.item()
+                epoch_alignment_loss += alignment_loss.item()
+
+                # Compute cross-modal similarity
+                similarity = self._compute_cross_modal_similarity(text_features, vision_latent)
+                epoch_similarity += similarity
+                epoch_batches += 1
+
+                progress_bar.set_postfix({
+                    'total_loss': f"{loss.item():.4f}",
+                    'cross_modal': f"{cross_modal_loss.item():.4f}",
+                    'alignment': f"{alignment_loss.item():.4f}",
+                    'similarity': f"{similarity:.4f}"
+                })
+
+                # Log to wandb
+                if self.wandb_logger and batch_idx % 50 == 0:
+                    wandb.log({
+                        'Stage_2/Total_Loss': loss.item(),
+                        'Stage_2/Cross_Modal_Loss': cross_modal_loss.item(),
+                        'Stage_2/Alignment_Loss': alignment_loss.item(),
+                        'Stage_2/Cross_Modal_Similarity': similarity,
+                        'Stage_2/Epoch': epoch,
+                        'Stage_2/Learning_Rate': self.optimizer.param_groups[0]['lr'],
+                        'stage': 2,
+                        'step': self.global_step
+                    }, step=self.global_step)
+
+                self.global_step += 1
+
+            # Epoch metrics
+            avg_cross_modal_loss = epoch_cross_modal_loss / epoch_batches if epoch_batches > 0 else 0
+            avg_alignment_loss = epoch_alignment_loss / epoch_batches if epoch_batches > 0 else 0
+            avg_similarity = epoch_similarity / epoch_batches if epoch_batches > 0 else 0
+
+            stage_metrics['cross_modal_similarity'].append(avg_similarity)
+            stage_metrics['alignment_accuracy'].append(1.0 - avg_alignment_loss)  # Proxy for accuracy
+
+            logger.info(f"Stage 2, Epoch {epoch + 1} - Cross-Modal Similarity: {avg_similarity:.4f}, Alignment Loss: {avg_alignment_loss:.4f}")
+
+        self.stage_metrics['stage_2_metrics'] = stage_metrics
+        logger.info("🔗 STAGE 2 COMPLETED: Visual-Language Grounding")
+        return {
+            'avg_cross_modal_similarity': np.mean(stage_metrics['cross_modal_similarity']),
+            'avg_alignment_accuracy': np.mean(stage_metrics['alignment_accuracy'])
+        }
+
+    def train_stage_3_abstract_language_learning(self) -> Dict[str, float]:
+        """Stage 3: Abstract Language Learning - Learn pure language patterns"""
+        logger.info("📚 STAGE 3 STARTING: Abstract Language Learning (like reading books)")
+
+        # Configure for full language modeling
+        self.unfreeze_all_components()
+        stage_config = self.stage_configs[3]
+
+        # Update learning rate for this stage
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = stage_config['learning_rate']
+
+        stage_metrics = {'text_perplexity': [], 'language_accuracy': [], 'text_loss': []}
+
+        for epoch in range(stage_config['epochs']):
+            logger.info(f"Stage 3, Epoch {epoch + 1}/{stage_config['epochs']}")
+
+            epoch_text_loss = 0.0
+            epoch_perplexity = 0.0
+            epoch_batches = 0
+
+            train_loader = self.data_module.train_dataloader()
+            progress_bar = tqdm(train_loader, desc=f"Stage 3 - Epoch {epoch + 1}")
+
+            for batch_idx, batch in enumerate(progress_bar):
+                batch = self._safe_batch_to_device(batch)
+
+                # Stage 3: Full multimodal learning with emphasis on language
+                outputs = self.model(
+                    input_ids=batch['input_ids'],
+                    attention_mask=batch['attention_mask'],
+                    vision_features=batch['vision_features'],
+                    labels=batch['labels'],
+                    step=self.global_step
+                )
+
+                # Primary language modeling loss
+                language_loss = outputs['loss']
+
+                # Text understanding loss (additional objective)
+                text_understanding_loss = self._compute_text_understanding_loss(
+                    outputs['text_features'], outputs['logits'], batch['labels']
+                )
+
+                # Combined loss for Stage 3
+                loss = (stage_config['loss_weights']['language_modeling'] * language_loss +
+                       stage_config['loss_weights']['text_understanding'] * text_understanding_loss)
+
+                # Backward pass
+                self.optimizer.zero_grad()
+                loss.backward()
+
+                if self.config['training']['gradient_clip_val'] > 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(),
+                                                 self.config['training']['gradient_clip_val'])
+
+                self.optimizer.step()
+
+                # Track metrics
+                epoch_text_loss += language_loss.item()
+                perplexity = torch.exp(language_loss).item() if language_loss.item() < 10 else 100.0  # Cap perplexity
+                epoch_perplexity += perplexity
+                epoch_batches += 1
+
+                progress_bar.set_postfix({
+                    'total_loss': f"{loss.item():.4f}",
+                    'text_loss': f"{language_loss.item():.4f}",
+                    'perplexity': f"{perplexity:.2f}",
+                    'understanding': f"{text_understanding_loss.item():.4f}"
+                })
+
+                # Log to wandb
+                if self.wandb_logger and batch_idx % 50 == 0:
+                    wandb.log({
+                        'Stage_3/Total_Loss': loss.item(),
+                        'Stage_3/Language_Loss': language_loss.item(),
+                        'Stage_3/Text_Understanding_Loss': text_understanding_loss.item(),
+                        'Stage_3/Perplexity': perplexity,
+                        'Stage_3/Epoch': epoch,
+                        'Stage_3/Learning_Rate': self.optimizer.param_groups[0]['lr'],
+                        'stage': 3,
+                        'step': self.global_step
+                    }, step=self.global_step)
+
+                    # Also log comprehensive metrics using existing wandb logger
+                    if batch_idx % 100 == 0:  # Less frequent comprehensive logging
+                        try:
+                            self.wandb_logger.log_consolidated_metrics(
+                                outputs=outputs,
+                                epoch=epoch,
+                                step=self.global_step,
+                                lr=self.optimizer.param_groups[0]['lr'],
+                                model=self.model,
+                                memory_module=self.model.memory if hasattr(self.model, 'memory') else None,
+                                log_quantization=(batch_idx % 500 == 0)
+                            )
+                        except Exception as e:
+                            logger.debug(f"Comprehensive wandb logging failed: {e}")
+
+                self.global_step += 1
+
+            # Epoch metrics
+            avg_text_loss = epoch_text_loss / epoch_batches if epoch_batches > 0 else 0
+            avg_perplexity = epoch_perplexity / epoch_batches if epoch_batches > 0 else 0
+
+            stage_metrics['text_loss'].append(avg_text_loss)
+            stage_metrics['text_perplexity'].append(avg_perplexity)
+            stage_metrics['language_accuracy'].append(max(0, 1.0 - avg_text_loss / 10.0))  # Proxy accuracy
+
+            logger.info(f"Stage 3, Epoch {epoch + 1} - Text Loss: {avg_text_loss:.4f}, Perplexity: {avg_perplexity:.2f}")
+
+        self.stage_metrics['stage_3_metrics'] = stage_metrics
+        logger.info("📚 STAGE 3 COMPLETED: Abstract Language Learning")
+        return {
+            'avg_text_loss': np.mean(stage_metrics['text_loss']),
+            'avg_perplexity': np.mean(stage_metrics['text_perplexity']),
+            'avg_language_accuracy': np.mean(stage_metrics['language_accuracy'])
+        }
