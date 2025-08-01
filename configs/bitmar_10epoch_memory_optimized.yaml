@@ -1,0 +1,130 @@
+# BitMar 10-Epoch Memory-Optimized Configuration
+# Designed specifically to avoid OOM on 58GB systems
+# Maintains training quality while drastically reducing memory usage
+
+model:
+  # DISABLED progressive growing to save memory
+  progressive_growing:
+    enabled: false  # CRITICAL: Disable to avoid keeping multiple model states
+
+  # Reduced model dimensions for memory efficiency
+  vocab_size: 50257
+  text_encoder_dim: 192      # Reduced from 256
+  text_encoder_layers: 3     # Reduced from 4
+  text_encoder_heads: 3      # Reduced from 4
+
+  text_decoder_dim: 192      # Reduced from 256
+  text_decoder_layers: 3     # Reduced from 4
+  text_decoder_heads: 3      # Reduced from 4
+
+  # Aggressive vision compression for memory savings
+  vision_encoder_dim: 768
+  vision_latent_size: 64     # Reduced from 128
+  vision_hidden_size: 32     # Reduced from 64
+  vision_compression_method: "learnable_projection"
+  vision_spatial_pooling: true
+  vision_pool_size: 4        # Increased pooling for smaller features
+
+  # Minimal fusion layers
+  fusion_hidden_size: 96     # Reduced from 128
+  fusion_num_heads: 3        # Reduced from 4
+  fusion_num_layers: 1       # Reduced from 2
+
+  # Reduced episodic memory
+  memory_size: 16            # Reduced from 32
+  episode_dim: 96            # Reduced from 128
+  memory_alpha: 0.3          # Slightly reduced
+  direct_writing: true
+  memory_compression: true
+
+  # Shorter sequences to save memory
+  max_seq_len: 256           # Reduced from 512
+  dropout: 0.1               # Slightly reduced
+
+# Memory-optimized training configuration
+training:
+  max_epochs: 10
+
+  # DISABLED layer-wise learning rate decay to simplify optimizer state
+  layerwise_lr_decay:
+    enabled: false           # CRITICAL: Saves optimizer memory
+
+  # DISABLED adaptive batch scaling to use consistent small batches
+  adaptive_batch_scaling:
+    enabled: false           # CRITICAL: Prevents batch size increases
+
+  # Conservative learning rate settings
+  learning_rate: 1.5e-3      # Slightly reduced
+  min_lr: 5e-6
+  weight_decay: 0.03         # Reduced
+
+  # Simple cosine scheduler (no restarts to save memory)
+  scheduler: "cosine"        # No restarts
+  warmup_epochs: 0.5         # Short warmup
+
+  # Conservative gradient settings
+  gradient_clip_val: 0.5     # Reduced clipping
+  gradient_accumulation_steps: 4  # Increased to simulate larger batches
+
+  # DISABLED multi-task weighting to simplify training
+  multi_task_weighting:
+    enabled: false           # CRITICAL: Saves memory from dynamic tracking
+
+  # Memory-critical settings
+  device: "cuda:0"
+  mixed_precision: true      # Keep this for memory savings
+  compile_model: false       # CRITICAL: Disable compilation to save memory
+
+# Aggressive memory optimization mode
+quick_training_mode:
+  enabled: true
+  max_samples_per_epoch: 100000  # Limit samples to prevent memory overload
+
+  # CRITICAL: Disable memory-intensive preprocessing
+  intelligent_preprocessing:
+    enabled: false                    # CRITICAL: Disable caching
+    vision_compression_ratio: 16      # More aggressive compression if used
+    aggressive_spatial_pooling: true
+    precompute_vision_features: false # CRITICAL: No precomputation
+    precompute_text_tokenization: false # CRITICAL: No precomputation
+    use_optimized_dataloader: false   # Use standard loader
+    mixed_precision_cache: false      # CRITICAL: No caching
+
+# Memory-optimized data configuration
+data:
+  train_data_path: "../babylm_dataset/train_50M"
+  vision_data_path: "../babylm_dataset"
+
+  # CRITICAL: Small batch size to prevent OOM
+  batch_size: 8              # Much smaller than your 32
+  max_seq_length: 256        # Reduced sequence length
+
+  # Memory-efficient data loading
+  num_workers: 2             # Reduced workers
+  pin_memory: false          # CRITICAL: Disable pin memory
+  prefetch_factor: 1         # Minimal prefetching
+
+  # Conservative data mixing
+  text_ratio: 0.6            # Higher text ratio (cheaper than vision)
+  use_mixed_training: true
+  vision_samples_per_epoch: 5000  # Limit vision samples
+
+  # Memory-efficient tokenization
+  tokenizer_batch_size: 100  # Small tokenization batches
+
+  # CRITICAL: Disable memory-intensive features
+  cache_preprocessed: false  # No caching
+  use_memory_mapping: false  # No memory mapping
+
+# Attention analysis (minimal to save memory)
+attention_analysis:
+  enabled: true
+  save_frequency: 1000       # Less frequent saves
+  track_top_k: 5             # Fewer heads tracked
+  detailed_analysis: false   # Disable detailed analysis
+
+# WandB logging (minimal)
+wandb:
+  enabled: true
+  log_frequency: 100         # Less frequent logging
+  save_artifacts: false      # Don't save large artifacts

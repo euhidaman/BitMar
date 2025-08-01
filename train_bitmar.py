@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Dict, Optional
 import numpy as np
 from tqdm import tqdm
+import gc
+import psutil
 
 # Try to import bitsandbytes for 8-bit optimizer
 try:
@@ -492,6 +494,18 @@ class BitMarTrainer:
                     'loss': f"{loss.item():.4f}",
                     'avg_loss': f"{np.mean(epoch_losses):.4f}"
                 })
+
+                # Memory monitoring and cleanup every 50 steps
+                if self.global_step % 50 == 0:
+                    log_memory_usage(self.global_step, logger, self.device)
+
+                    # Force cleanup if memory usage is high
+                    if torch.cuda.is_available():
+                        gpu_allocated = torch.cuda.memory_allocated(self.device) / 1024**3
+                        gpu_total = torch.cuda.get_device_properties(self.device).total_memory / 1024**3
+                        if gpu_allocated > gpu_total * 0.8:  # 80% threshold
+                            logger.warning(f"High GPU memory usage detected, forcing cleanup...")
+                            force_cleanup()
 
                 # Log GPU memory usage every 100 steps
                 if self.global_step % 100 == 0 and torch.cuda.is_available():
@@ -1630,6 +1644,32 @@ class BitMarTrainer:
                 logger.info(f"🎯 Dynamic text ratio: {current_ratio:.2%} → {new_ratio:.2%}")
                 self.data_module.train_dataset.text_ratio = new_ratio
                 self.data_module.train_dataset._create_mixed_indices()  # Recreate indices
+
+    def log_memory_usage(step: int, logger, device=None):
+        """Log detailed memory usage to help prevent OOM"""
+        # System RAM
+        ram = psutil.virtual_memory()
+        logger.info(f"Step {step} - System RAM: {ram.percent:.1f}% ({ram.used/1024**3:.1f}GB/{ram.total/1024**3:.1f}GB)")
+
+        # GPU memory if available
+        if torch.cuda.is_available() and device:
+            gpu_allocated = torch.cuda.memory_allocated(device) / 1024**3
+            gpu_reserved = torch.cuda.memory_reserved(device) / 1024**3
+            gpu_total = torch.cuda.get_device_properties(device).total_memory / 1024**3
+            logger.info(f"Step {step} - GPU Memory: {gpu_allocated:.1f}GB allocated, {gpu_reserved:.1f}GB reserved, {gpu_total:.1f}GB total")
+
+            # Warning if memory usage is high
+            if gpu_allocated > gpu_total * 0.85:
+                logger.warning(f"HIGH GPU MEMORY USAGE: {gpu_allocated/gpu_total*100:.1f}%")
+            if ram.percent > 90:
+                logger.warning(f"HIGH SYSTEM MEMORY USAGE: {ram.percent:.1f}%")
+
+    def force_cleanup():
+        """Aggressive memory cleanup to prevent OOM"""
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 def load_config(config_path: str) -> Dict:
     """Load configuration from YAML file"""
     with open(config_path, 'r') as f:
