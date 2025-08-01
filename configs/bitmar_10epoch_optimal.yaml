@@ -108,8 +108,17 @@ training:
 # Quick training mode for fast experimentation WITHOUT reducing samples
 quick_training_mode:
   enabled: true
-  # Keep full dataset but optimize processing
-  max_samples_per_epoch: null  # Use full dataset
+  # Keep full dataset - DO NOT reduce samples for accuracy
+  max_samples_per_epoch: null  # Use full dataset for maximum accuracy
+  # INTELLIGENT PREPROCESSING: Precompute everything for massive speedup
+  intelligent_preprocessing:
+    enabled: true                          # Enable smart preprocessing
+    vision_compression_ratio: 8            # Compress 768->96 dims (8x smaller)
+    aggressive_spatial_pooling: true       # 14x14->3x3 patches (20x fewer)
+    precompute_vision_features: true       # Cache compressed features
+    precompute_text_tokenization: true     # Cache all tokenization
+    use_optimized_dataloader: true         # Use fast cached loading
+    mixed_precision_cache: true            # Store in FP16 for 2x memory reduction
   # Advanced optimizations for speed without quality loss
   optimizations:
     aggressive_image_compression: true     # Compress vision features more aggressively
@@ -119,9 +128,13 @@ quick_training_mode:
     efficient_attention: true             # Use efficient attention implementations
     cached_vision_features: true          # Cache processed vision features
     parallel_data_loading: true           # Optimize data loading
+    # NEW: Additional speed optimizations without dataset reduction
+    fused_optimizer: true                  # Use fused AdamW for speed
+    dataloader_prefetch_factor: 4          # Prefetch more batches
+    pin_memory_device: true                # Pin memory directly to GPU
   # Skip some validation epochs but keep quality tracking
   skip_validation_epochs: [1, 3, 5, 7, 9]  # Only validate on epochs 2, 4, 6, 8, 10
-  reduce_logging_frequency: false  # Keep detailed logging for tracking
+  reduce_logging_frequency: true          # Reduce logging frequency for speed
 
 # Enhanced data configuration with adaptive strategies
 data:
@@ -170,8 +183,19 @@ knowledge_distillation:
 # Enhanced logging for 10-epoch tracking
 wandb:
   project: "bitmar-10epoch-progressive"
+  # Fix: Add meaningful run names instead of random strings
+  run_name: "bitmar-progressive-{timestamp}-epoch{max_epochs}"
+  tags:
+    - "progressive-growing"
+    - "10-epoch"
+    - "full-dataset"
+    - "optimal-config"
+  notes: "BitMar training with progressive growing, layer-wise LR, and full dataset"
   log_every_n_steps: 20
   save_every_n_epochs: 2
+  # Add detailed run configuration logging
+  log_config: true
+  log_model_topology: true
 
 # Attention analysis (optimized for progressive growth)
 attention_analysis:

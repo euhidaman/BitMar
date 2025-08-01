@@ -1,0 +1,114 @@
+# BitMar FAST Training Configuration
+# Designed for quick experimentation with reduced dataset size
+# Simple, efficient training without complex optimizations
+
+model:
+  # Simple, fixed architecture (no progressive growing)
+  vocab_size: 50257
+  text_encoder_dim: 192        # Smaller for speed
+  text_encoder_layers: 3       # Fewer layers
+  text_encoder_heads: 3
+
+  text_decoder_dim: 192        # Smaller for speed
+  text_decoder_layers: 3       # Fewer layers
+  text_decoder_heads: 3
+
+  # Efficient vision processing
+  vision_encoder_dim: 768
+  vision_latent_size: 64       # Smaller for speed
+  vision_hidden_size: 32       # Smaller for speed
+  vision_compression_method: "simple_projection"
+  vision_spatial_pooling: true
+  vision_pool_size: 4          # More aggressive pooling
+
+  # Simple fusion
+  fusion_hidden_size: 96       # Smaller for speed
+  fusion_num_heads: 3
+  fusion_num_layers: 1         # Single layer only
+
+  # Minimal memory
+  memory_size: 16              # Smaller memory
+  episode_dim: 64              # Smaller episodes
+  memory_alpha: 0.3
+  direct_writing: true
+  memory_compression: true
+
+  # Model configuration
+  max_seq_len: 256             # Shorter sequences for speed
+  dropout: 0.1
+
+# Simple training configuration
+training:
+  max_epochs: 10
+  learning_rate: 3e-3          # Higher LR for faster convergence
+  min_lr: 1e-5
+  weight_decay: 0.01           # Lower weight decay
+
+  # Simple scheduler
+  scheduler: "cosine"
+  warmup_epochs: 0.5           # Shorter warmup
+
+  # Simple gradient handling
+  gradient_clip_val: 1.0
+  gradient_accumulation_steps: 1  # No accumulation for speed
+
+  # Fixed ratios (no dynamic weighting)
+  text_ratio: 0.3              # 30% text, 70% multimodal
+
+  # Performance settings
+  device: "cuda:0"
+  mixed_precision: true
+  compile_model: false         # Disable compilation for faster startup
+
+# FAST MODE: Severely limit dataset size
+quick_training_mode:
+  enabled: true
+  # DRASTICALLY reduce samples for speed
+  max_samples_per_epoch: 50000    # Only 50K samples per epoch instead of 3M+
+  # Simple optimizations only
+  optimizations:
+    mixed_precision_training: true
+    parallel_data_loading: true
+  # Skip most validation
+  skip_validation_epochs: [1, 2, 3, 4, 5, 6, 7, 8, 9]  # Only validate epoch 10
+  reduce_logging_frequency: true
+
+# Fast data configuration
+data:
+  dataset_dir: "../babylm_dataset"
+
+  # LARGE batch size for efficiency
+  batch_size: 64               # Much larger batches
+  max_seq_length: 256          # Shorter sequences
+  num_workers: 4               # Moderate workers
+  pin_memory: true
+  persistent_workers: true
+
+  # Enable mixed training but limit it
+  use_mixed_training: true
+  text_ratio: 0.3              # 30% text, 70% multimodal
+
+  # Disable all smart sampling for speed
+  smart_sampling:
+    enabled: false
+
+  # Text encoder
+  text_encoder_name: "gpt2"
+
+# Minimal validation
+validation:
+  batch_size: 32
+  max_samples: 1000            # Very small validation set
+  text_benchmarks: []          # Skip text benchmarks for speed
+  multimodal_benchmarks: []    # Skip multimodal benchmarks for speed
+
+# Minimal logging
+logging:
+  log_every_n_steps: 500       # Less frequent logging
+  save_every_n_epochs: 5       # Save less frequently
+  wandb_log_frequency: 100     # Less frequent wandb logging
+
+# Checkpointing
+checkpointing:
+  save_every_n_epochs: 10      # Only save at the end
+  keep_only_latest: true       # Don't keep old checkpoints

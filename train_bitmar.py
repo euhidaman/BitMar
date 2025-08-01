@@ -1,6 +1,7 @@
 """
 Training script for BitMar model
 Handles multimodal training with episodic memory and attention analysis
+Enhanced with intelligent dataset optimization for full dataset training
 """
 
 from src.attention_analysis import analyze_model_attention
@@ -9,6 +10,7 @@ from src.model import create_bitmar_model, count_parameters
 from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
 from src.modality_tracker import ModalityTracker  # NEW: Comprehensive modality tracking
+from src.dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader  # NEW: Intelligent optimization
 import os
 import sys
 import argparse

@@ -45,7 +45,7 @@ class MixedMultimodalTextDataset(Dataset):
 
         # Load multimodal data
         self._load_multimodal_data()
-
+        
         # Load text-only data from train_50M
         if self.load_text_data and split == "train":
             self._load_text_data()
@@ -54,7 +54,7 @@ class MixedMultimodalTextDataset(Dataset):
 
         # Create combined indices
         self._create_mixed_indices()
-
+        
         # Limit samples if specified
         if max_samples is not None and len(self.mixed_indices) > max_samples:
             random.seed(42)
@@ -80,7 +80,7 @@ class MixedMultimodalTextDataset(Dataset):
         cc_feat2 = np.load(cc_feat2_file, mmap_mode='r')
         cc_features = VisionFeaturesConcatenated(cc_feat1, cc_feat2)
 
-        # Load Localized Narratives
+        # Load Localized Narratives  
         ln_captions_file = self.dataset_dir / "local_narr_captions.json"
         ln_feat_file = self.dataset_dir / "local_narr_dino_v2_states.npy"
 
@@ -99,10 +99,10 @@ class MixedMultimodalTextDataset(Dataset):
     def _load_text_data(self):
         """Load text-only data from train_50M"""
         logger.info("Loading train_50M text data...")
-
+        
         self.text_samples = []
         train_50m_dir = self.dataset_dir / "train_50M"
-
+        
         if not train_50m_dir.exists():
             logger.warning("train_50M directory not found - extracting if needed...")
             from download_babylm_data import extract_train_50M_if_needed
@@ -114,7 +114,7 @@ class MixedMultimodalTextDataset(Dataset):
         # Expected train_50M files
         text_files = [
             "bnc_spoken.train",
-            "childes.train",
+            "childes.train", 
             "gutenberg.train",
             "open_subtitles.train",
             "simple_wiki.train",
@@ -140,7 +140,7 @@ class MixedMultimodalTextDataset(Dataset):
         """Create mixed indices for multimodal and text-only samples"""
         num_multimodal = len(self.multimodal_indices)
         num_text = len(self.text_samples)
-
+        
         if num_text == 0:
             # No text data, use only multimodal
             self.mixed_indices = [('multimodal', idx) for idx in self.multimodal_indices]
@@ -358,23 +358,23 @@ class HuggingFaceValidationDataset(Dataset):
 
 class VisionFeaturesConcatenated:
     """Memory-efficient concatenation of two vision feature arrays"""
-
+    
     def __init__(self, features_1, features_2):
         self.features_1 = features_1
         self.features_2 = features_2
         self.len_1 = len(features_1)
         self.len_2 = len(features_2)
         self.total_len = self.len_1 + self.len_2
-
+        
     def __len__(self):
         return self.total_len
-
+        
     def __getitem__(self, idx):
         if idx < self.len_1:
             return self.features_1[idx]
         else:
             return self.features_2[idx - self.len_1]
-
+            
     @property
     def shape(self):
         return (self.total_len, self.features_1.shape[1])
@@ -382,17 +382,17 @@ class VisionFeaturesConcatenated:
 
 class CombinedVisionFeatures:
     """Combine Conceptual Captions and Localized Narratives features"""
-
+    
     def __init__(self, cc_features, ln_features):
         self.cc_features = cc_features
         self.ln_features = ln_features
         self.cc_len = len(cc_features)
         self.ln_len = len(ln_features)
         self.total_len = self.cc_len + self.ln_len
-
+        
     def __len__(self):
         return self.total_len
-
+        
     def __getitem__(self, idx):
         if idx < self.cc_len:
             return self.cc_features[idx]

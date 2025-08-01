@@ -30,13 +30,13 @@ class AttentionHeadAnalyzer:
         self.num_encoder_layers = len(model.text_encoder.layers)
         self.num_decoder_layers = len(model.text_decoder.layers)
         self.num_heads = model.text_encoder.layers[0].attn.num_heads
-
+        
         # Updated for QFormer-based fusion (LearnableQueryFusion)
         # The fusion model now has query_layers and text2query_layers instead of cross_attention_layers
         self.fusion_query_layers = len(model.fusion.query_layers)
         self.fusion_text2query_layers = len(model.fusion.text2query_layers)
         self.total_fusion_layers = self.fusion_query_layers + self.fusion_text2query_layers
-
+        
         # Storage for attention patterns over time
         self.attention_history = {
             'encoder': defaultdict(list),
