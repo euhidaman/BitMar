@@ -19,6 +19,9 @@ import h5py
 import pickle
 import time
 
+# Fix tokenizer parallelism warnings
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 logger = logging.getLogger(__name__)
 
 
@@ -203,27 +206,37 @@ class MixedMultimodalTextDataset(Dataset):
 
         # Get compressed vision cache
         self.vision_cache = self.optimizer.get_compressed_vision_cache()
+        vision_samples = self.vision_cache['features'].shape[0]
         logger.info(f"📁 Vision cache shape: {self.vision_cache['features'].shape}")
 
         # Get tokenized cache
         self.text_cache = self.optimizer.get_tokenized_cache(self.max_seq_length)
-        logger.info(f"📁 Text cache: {len(self.text_cache)} samples")
+        text_samples = len(self.text_cache)
+        logger.info(f"📁 Text cache: {text_samples} samples")
 
-        # Create mixed indices (prioritize multimodal for speed)
-        num_multimodal = len(self.text_cache)
+        # CRITICAL FIX: Ensure vision and text caches are aligned
+        if vision_samples != text_samples:
+            logger.warning(f"Index mismatch: Vision={vision_samples}, Text={text_samples}")
+            # Use the smaller count to avoid index errors
+            aligned_samples = min(vision_samples, text_samples)
+            logger.info(f"Aligning to {aligned_samples} samples for safety")
+        else:
+            aligned_samples = vision_samples
+
+        # Create mixed indices using aligned sample count
+        multimodal_indices = [('multimodal', i) for i in range(aligned_samples)]
 
         # Limit text data for speed if enabled
         if self.load_text_data and self.split == "train":
             # Load minimal text data for speed
             text_samples = self._load_minimal_text_data()
-            num_text_desired = min(int(num_multimodal * self.text_ratio / (1 - self.text_ratio)), len(text_samples))
+            num_text_desired = min(int(aligned_samples * self.text_ratio / (1 - self.text_ratio)), len(text_samples))
             text_indices = [('text', i) for i in range(num_text_desired)]
         else:
             text_indices = []
             text_samples = []
 
         # Create mixed indices
-        multimodal_indices = [('multimodal', i) for i in range(num_multimodal)]
         self.mixed_indices = multimodal_indices + text_indices
 
         random.seed(42)
@@ -234,16 +247,11 @@ class MixedMultimodalTextDataset(Dataset):
 
         setup_time = time.time() - start_time
 
-        # Log performance summary
-        original_size = (self.vision_cache.attrs.get('original_size_gb', 0) +
-                        len(self.text_cache) * 0.001)  # Estimate text size
-        compressed_size = (self.vision_cache.attrs.get('compressed_size_gb', 0) +
-                          os.path.getsize(self.optimizer.cache_dir / f"tokenized_cache_{self.max_seq_length}.pkl") / 1e9)
-
+        # Log performance summary with correct sample counts
         logger.info(f"🎯 AGGRESSIVE OPTIMIZATION SUMMARY:")
         logger.info(f"   Setup time: {setup_time:.1f}s")
         logger.info(f"   Vision compression: {self.vision_cache.attrs.get('compression_ratio', 0):.1f}x")
-        logger.info(f"   Total size reduction: {original_size/compressed_size:.1f}x")
+        logger.info(f"   Aligned samples: {aligned_samples}")
         logger.info(f"   Dataset samples: {len(self.mixed_indices)}")
         logger.info(f"   Expected speedup: 20-50x per batch")
 
