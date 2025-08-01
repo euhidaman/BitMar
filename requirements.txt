@@ -23,6 +23,7 @@ psutil
 typing-extensions
 huggingface-hub
 lion-pytorch
+codecarbon
 
 # Additional testing dependencies
 pytest
