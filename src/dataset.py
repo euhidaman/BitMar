@@ -47,9 +47,12 @@ class AggressiveDataOptimizer:
         total_samples = cc_feat1.shape[0] + cc_feat2.shape[0]
         logger.info(f"Compressing {total_samples} vision samples with 50x compression...")
 
+        # Ultra-aggressive compression: 768*196 -> 64 dimensions
+        compressed_dim = 64
+        compression_ratio = (768 * 196) / compressed_dim  # Calculate ratio upfront
+        original_size_gb = (cc_feat1.nbytes + cc_feat2.nbytes) / 1e9
+
         with h5py.File(cache_file, 'w') as h5f:
-            # Ultra-aggressive compression: 768*196 -> 64 dimensions
-            compressed_dim = 64
             compressed_data = h5f.create_dataset(
                 'features',
                 shape=(total_samples, compressed_dim),
@@ -59,6 +62,8 @@ class AggressiveDataOptimizer:
             )
 
             chunk_size = 5000
+            projection_matrix = None
+
             for i in range(0, total_samples, chunk_size):
                 end_idx = min(i + chunk_size, total_samples)
 
@@ -79,24 +84,30 @@ class AggressiveDataOptimizer:
                 chunk_flat = chunk.reshape(chunk.shape[0], -1)  # Flatten spatial
 
                 # Random projection for ultra compression
-                if not hasattr(self, 'projection_matrix'):
+                if projection_matrix is None:
                     np.random.seed(42)
-                    self.projection_matrix = np.random.randn(chunk_flat.shape[1], compressed_dim).astype(np.float32)
-                    self.projection_matrix /= np.sqrt(chunk_flat.shape[1])  # Normalize
+                    projection_matrix = np.random.randn(chunk_flat.shape[1], compressed_dim).astype(np.float32)
+                    projection_matrix /= np.sqrt(chunk_flat.shape[1])  # Normalize
 
                 # Apply compression
-                compressed_chunk = chunk_flat @ self.projection_matrix
+                compressed_chunk = chunk_flat @ projection_matrix
                 compressed_data[i:end_idx] = compressed_chunk.astype(np.float16)
 
                 if i % 50000 == 0:
                     logger.info(f"Compressed {i}/{total_samples} samples...")
 
             # Store metadata
-            h5f.attrs['compression_ratio'] = chunk_flat.shape[1] / compressed_dim
-            h5f.attrs['original_size_gb'] = (cc_feat1.nbytes + cc_feat2.nbytes) / 1e9
-            h5f.attrs['compressed_size_gb'] = os.path.getsize(cache_file) / 1e9
+            h5f.attrs['compression_ratio'] = compression_ratio
+            h5f.attrs['original_size_gb'] = original_size_gb
+            h5f.attrs['total_samples'] = total_samples
 
-        logger.info(f"✅ Ultra-compression complete! {h5f.attrs['compression_ratio']:.1f}x smaller")
+        # File is now properly closed, calculate compressed size
+        compressed_size_gb = os.path.getsize(cache_file) / 1e9
+
+        logger.info(f"✅ Ultra-compression complete! {compression_ratio:.1f}x smaller")
+        logger.info(f"   Original: {original_size_gb:.2f}GB → Compressed: {compressed_size_gb:.2f}GB")
+
+        # Return opened file for reading
         return h5py.File(cache_file, 'r')
 
     def get_tokenized_cache(self, max_seq_length=256):
