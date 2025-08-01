@@ -779,7 +779,7 @@ class BitMarModel(nn.Module):
             config['text_encoder_dim'],
             config['episode_dim']
         )
-        
+
         self.memory_to_decoder = BitNetLinear(
             config['episode_dim'],
             config['fusion_hidden_size']
@@ -803,9 +803,22 @@ class BitMarModel(nn.Module):
         return text_features, attention_patterns
 
     def encode_vision(self, vision_features: torch.Tensor) -> torch.Tensor:
-        """Encode vision features using quantized vision encoder"""
+        """Encode vision features"""
+        # Check if we're using compressed features (64 dims) vs original (768 dims)
+        if vision_features.shape[-1] == 64:
+            # We're using compressed features - create a simple upsampling projection
+            if not hasattr(self, 'compressed_vision_proj'):
+                # Create projection layer on the fly for compressed features
+                self.compressed_vision_proj = BitNetLinear(64, self.config['vision_encoder_dim']).to(vision_features.device)
+                logger.info(f"Created compressed vision projection: 64 → {self.config['vision_encoder_dim']}")
+
+            # Project compressed features to expected dimension
+            vision_features = self.compressed_vision_proj(vision_features)
+
+        # Now process with normal vision encoder
         vision_latent = self.vision_encoder(
-            vision_features)  # [batch_size, vision_latent_size]
+            vision_features
+        )
         return vision_latent
 
     def create_episode(
