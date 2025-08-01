@@ -128,3 +128,11 @@ wandb:
   enabled: true
   log_frequency: 100         # Less frequent logging
   save_artifacts: false      # Don't save large artifacts
+
+# Output directories configuration
+output:
+  checkpoint_dir: "checkpoints"
+  log_dir: "logs"
+  attention_dir: "attention_analysis"
+  memory_dir: "memory_analysis"
+  results_dir: "results"
