@@ -1,6 +1,6 @@
 """
 Dataset processing for BitMar
-Handles complete BabyLM multimodal dataset (Conceptual Captions + Localized Narratives)
+Handles complete BabyLM multimodal dataset with intelligent optimization
 + train_50M text-only data for enhanced language modeling
 """
 
@@ -15,12 +15,17 @@ import logging
 import random
 import os
 from pathlib import Path
+import h5py
+import pickle
+
+# Import the intelligent optimizer
+from .dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader
 
 logger = logging.getLogger(__name__)
 
 
 class MixedMultimodalTextDataset(Dataset):
-    """Mixed dataset combining multimodal data and text-only training from train_50M"""
+    """Mixed dataset combining multimodal data and text-only training from train_50M with intelligent optimization"""
 
     def __init__(
         self,
@@ -30,39 +35,112 @@ class MixedMultimodalTextDataset(Dataset):
         split: str = "train",
         max_samples: Optional[int] = None,
         text_ratio: float = 0.3,  # 30% text-only, 70% multimodal
-        load_text_data: bool = True
+        load_text_data: bool = True,
+        config: Dict = None  # NEW: Add config for optimizations
     ):
         self.dataset_dir = Path(dataset_dir)
         self.max_seq_length = max_seq_length
         self.split = split
         self.text_ratio = text_ratio
         self.load_text_data = load_text_data
+        self.config = config or {}
 
         # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+        # Check if intelligent preprocessing is enabled
+        quick_mode = self.config.get('quick_training_mode', {})
+        intelligent_preprocessing = quick_mode.get('intelligent_preprocessing', {})
+
+        if intelligent_preprocessing.get('enabled', False):
+            logger.info("🚀 INTELLIGENT PREPROCESSING ENABLED - Setting up optimized dataset...")
+            self._setup_optimized_dataset()
+        else:
+            logger.info("Using standard dataset loading...")
+            self._setup_standard_dataset()
+
+    def _setup_optimized_dataset(self):
+        """Setup dataset with intelligent preprocessing and caching"""
+        logger.info("🔧 Setting up intelligent dataset optimization...")
+
+        # Initialize optimizer
+        optimizer_config = {
+            'vision_compression_ratio': self.config.get('quick_training_mode', {}).get('intelligent_preprocessing', {}).get('vision_compression_ratio', 8),
+            'max_seq_length': self.max_seq_length,
+            'aggressive_pooling': self.config.get('quick_training_mode', {}).get('intelligent_preprocessing', {}).get('aggressive_spatial_pooling', True),
+            'mixed_precision': self.config.get('quick_training_mode', {}).get('intelligent_preprocessing', {}).get('mixed_precision_cache', True),
+            'text_ratio': self.text_ratio
+        }
+
+        self.optimizer = IntelligentDatasetOptimizer(
+            dataset_dir=str(self.dataset_dir),
+            config=optimizer_config
+        )
+
+        # Run preprocessing (only happens once)
+        logger.info("🏗️ Running intelligent preprocessing (this may take 2-3 hours on first run)...")
+
+        # Precompute vision features
+        vision_cache_file = self.optimizer.precompute_and_cache_vision_features()
+        logger.info(f"✅ Vision features cached: {vision_cache_file}")
+
+        # Precompute text tokenization
+        text_cache_file = self.optimizer.precompute_text_tokenization()
+        logger.info(f"✅ Text tokenization cached: {text_cache_file}")
+
+        # Create optimized indices
+        indices_cache_file = self.optimizer.create_optimized_dataset_indices()
+        logger.info(f"✅ Optimized indices created: {indices_cache_file}")
+
+        # Load cached data
+        self._load_cached_data()
+
+        # Log optimization summary
+        summary = self.optimizer.get_optimization_summary()
+        logger.info(f"🎯 Optimization Summary:")
+        for key, value in summary.items():
+            logger.info(f"   {key}: {value}")
+
+    def _load_cached_data(self):
+        """Load preprocessed cached data for lightning-fast training"""
+        cache_dir = self.optimizer.cache_dir
+
+        # Load compressed vision features
+        self.vision_cache = h5py.File(cache_dir / "compressed_vision_features.h5", 'r')
+        logger.info(f"📁 Loaded compressed vision cache: {self.vision_cache['compressed_features'].shape}")
+
+        # Load tokenized text
+        with open(cache_dir / "tokenized_text.pkl", 'rb') as f:
+            self.text_cache = pickle.load(f)
+        logger.info(f"📁 Loaded tokenized text cache: {len(self.text_cache)} samples")
+
+        # Load optimized indices
+        with open(cache_dir / "optimized_indices.pkl", 'rb') as f:
+            self.mixed_indices = pickle.load(f)
+        logger.info(f"📁 Loaded optimized indices: {len(self.mixed_indices)} mixed samples")
+
+        # Set flags for optimized mode
+        self.use_cached_data = True
+        self.multimodal_indices = [i for sample_type, i in self.mixed_indices if sample_type == 'multimodal']
+        self.text_samples = [i for sample_type, i in self.mixed_indices if sample_type == 'text_only']
+
+    def _setup_standard_dataset(self):
+        """Setup dataset with standard loading (slower but no preprocessing)"""
+        self.use_cached_data = False
+
         # Load multimodal data
         self._load_multimodal_data()
-        
+
         # Load text-only data from train_50M
-        if self.load_text_data and split == "train":
+        if self.load_text_data and self.split == "train":
             self._load_text_data()
         else:
             self.text_samples = []
 
         # Create combined indices
         self._create_mixed_indices()
-        
-        # Limit samples if specified
-        if max_samples is not None and len(self.mixed_indices) > max_samples:
-            random.seed(42)
-            self.mixed_indices = random.sample(self.mixed_indices, max_samples)
-
-        logger.info(f"Loaded {len(self.mixed_indices)} total samples for {split} split")
-        logger.info(f"  - Multimodal: {len(self.multimodal_indices)} samples")
-        logger.info(f"  - Text-only: {len(self.text_samples)} samples")
 
     def _load_multimodal_data(self):
         """Load multimodal data (existing implementation)"""
@@ -80,7 +158,7 @@ class MixedMultimodalTextDataset(Dataset):
         cc_feat2 = np.load(cc_feat2_file, mmap_mode='r')
         cc_features = VisionFeaturesConcatenated(cc_feat1, cc_feat2)
 
-        # Load Localized Narratives  
+        # Load Localized Narratives
         ln_captions_file = self.dataset_dir / "local_narr_captions.json"
         ln_feat_file = self.dataset_dir / "local_narr_dino_v2_states.npy"
 
@@ -99,10 +177,10 @@ class MixedMultimodalTextDataset(Dataset):
     def _load_text_data(self):
         """Load text-only data from train_50M"""
         logger.info("Loading train_50M text data...")
-        
+
         self.text_samples = []
         train_50m_dir = self.dataset_dir / "train_50M"
-        
+
         if not train_50m_dir.exists():
             logger.warning("train_50M directory not found - extracting if needed...")
             from download_babylm_data import extract_train_50M_if_needed
@@ -114,7 +192,7 @@ class MixedMultimodalTextDataset(Dataset):
         # Expected train_50M files
         text_files = [
             "bnc_spoken.train",
-            "childes.train", 
+            "childes.train",
             "gutenberg.train",
             "open_subtitles.train",
             "simple_wiki.train",
@@ -140,7 +218,7 @@ class MixedMultimodalTextDataset(Dataset):
         """Create mixed indices for multimodal and text-only samples"""
         num_multimodal = len(self.multimodal_indices)
         num_text = len(self.text_samples)
-        
+
         if num_text == 0:
             # No text data, use only multimodal
             self.mixed_indices = [('multimodal', idx) for idx in self.multimodal_indices]
@@ -358,23 +436,23 @@ class HuggingFaceValidationDataset(Dataset):
 
 class VisionFeaturesConcatenated:
     """Memory-efficient concatenation of two vision feature arrays"""
-    
+
     def __init__(self, features_1, features_2):
         self.features_1 = features_1
         self.features_2 = features_2
         self.len_1 = len(features_1)
         self.len_2 = len(features_2)
         self.total_len = self.len_1 + self.len_2
-        
+
     def __len__(self):
         return self.total_len
-        
+
     def __getitem__(self, idx):
         if idx < self.len_1:
             return self.features_1[idx]
         else:
             return self.features_2[idx - self.len_1]
-            
+
     @property
     def shape(self):
         return (self.total_len, self.features_1.shape[1])
@@ -382,17 +460,17 @@ class VisionFeaturesConcatenated:
 
 class CombinedVisionFeatures:
     """Combine Conceptual Captions and Localized Narratives features"""
-    
+
     def __init__(self, cc_features, ln_features):
         self.cc_features = cc_features
         self.ln_features = ln_features
         self.cc_len = len(cc_features)
         self.ln_len = len(ln_features)
         self.total_len = self.cc_len + self.ln_len
-        
+
     def __len__(self):
         return self.total_len
-        
+
     def __getitem__(self, idx):
         if idx < self.cc_len:
             return self.cc_features[idx]
@@ -450,17 +528,23 @@ class BabyLMDataModule:
                 split="train",
                 max_samples=max_samples,
                 text_ratio=self.text_ratio,
-                load_text_data=True
+                load_text_data=True,
+                config=self.config  # PASS CONFIG FOR INTELLIGENT PREPROCESSING
             )
         else:
             logger.info("Using multimodal-only training")
-            self.train_dataset = CompleteBabyLMDataset(
+            # Create legacy dataset but pass config through mixed dataset
+            temp_mixed = MixedMultimodalTextDataset(
                 dataset_dir=self.dataset_dir,
                 tokenizer_name=self.tokenizer_name,
                 max_seq_length=self.max_seq_length,
                 split="train",
-                max_samples=max_samples
+                max_samples=max_samples,
+                text_ratio=0.0,  # No text-only samples
+                load_text_data=False,
+                config=self.config  # PASS CONFIG FOR INTELLIGENT PREPROCESSING
             )
+            self.train_dataset = temp_mixed
 
         # Create validation datasets from HuggingFace
         for dataset_name in self.validation_datasets:
