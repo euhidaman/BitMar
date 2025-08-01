@@ -18,8 +18,16 @@ from pathlib import Path
 import h5py
 import pickle
 
-# Import the intelligent optimizer
-from .dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader
+# Import the intelligent optimizer - fix relative import
+try:
+    from .dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader
+except ImportError:
+    try:
+        from dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader
+    except ImportError:
+        logger.warning("Could not import dataset optimizer - intelligent preprocessing disabled")
+        IntelligentDatasetOptimizer = None
+        OptimizedDataLoader = None
 
 logger = logging.getLogger(__name__)
 
@@ -252,32 +260,48 @@ class MixedMultimodalTextDataset(Dataset):
 
     def _get_multimodal_sample(self, idx: int) -> Dict[str, torch.Tensor]:
         """Get a multimodal sample"""
-        caption = self.multimodal_captions[idx]
-        vision_feature = self.multimodal_features[idx]
+        if hasattr(self, 'use_cached_data') and self.use_cached_data:
+            # Use cached compressed data (much faster!)
+            vision_features = torch.from_numpy(self.vision_cache['compressed_features'][idx]).float()
+            text_data = self.text_cache[idx]
 
-        # Tokenize caption
-        encoded = self.tokenizer(
-            caption,
-            max_length=self.max_seq_length,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        )
+            return {
+                'input_ids': torch.tensor(text_data['input_ids']),
+                'attention_mask': torch.tensor(text_data['attention_mask']),
+                'labels': torch.tensor(text_data['input_ids']),  # Labels = input_ids for language modeling
+                'vision_features': vision_features,
+                'caption': f"cached_sample_{idx}",  # Placeholder caption
+                'sample_type': 'multimodal',
+                'index': idx
+            }
+        else:
+            # Standard loading (slower)
+            caption = self.multimodal_captions[idx]
+            vision_feature = self.multimodal_features[idx]
 
-        input_ids = encoded['input_ids'].squeeze(0)
-        attention_mask = encoded['attention_mask'].squeeze(0)
-        labels = input_ids.clone()
-        labels[attention_mask == 0] = -100
+            # Tokenize caption
+            encoded = self.tokenizer(
+                caption,
+                max_length=self.max_seq_length,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
 
-        return {
-            'input_ids': input_ids,
-            'attention_mask': attention_mask,
-            'labels': labels,
-            'vision_features': torch.tensor(vision_feature.copy(), dtype=torch.float32),
-            'caption': caption,
-            'sample_type': 'multimodal',
-            'index': idx
-        }
+            input_ids = encoded['input_ids'].squeeze(0)
+            attention_mask = encoded['attention_mask'].squeeze(0)
+            labels = input_ids.clone()
+            labels[attention_mask == 0] = -100
+
+            return {
+                'input_ids': input_ids,
+                'attention_mask': attention_mask,
+                'labels': labels,
+                'vision_features': torch.tensor(vision_feature.copy(), dtype=torch.float32),
+                'caption': caption,
+                'sample_type': 'multimodal',
+                'index': idx
+            }
 
     def _get_text_sample(self, idx: int) -> Dict[str, torch.Tensor]:
         """Get a text-only sample"""
