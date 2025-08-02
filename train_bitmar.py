@@ -631,13 +631,24 @@ class BitMarTrainer:
 
                         # Generate comprehensive graphs every 200 steps
                         if self.global_step % 200 == 0 and self.global_step > 0:
-                            graph_path = self.modality_tracker.create_modality_graphs(
-                                self.global_step)
-                            self.modality_tracker.save_metrics_data(
-                                self.global_step)
-                            logger.info(
-                                f"📊 Generated modality analysis graphs at step {self.global_step}")
+                            try:
+                                graph_path = self.modality_tracker.create_modality_graphs(
+                                    self.global_step)
+                                self.modality_tracker.save_metrics_data(
+                                    self.global_step)
+                                logger.info(
+                                    f"📊 Generated modality analysis graphs at step {self.global_step}")
+                            except (KeyboardInterrupt, SystemExit):
+                                logger.info(
+                                    "🛑 Graph generation interrupted by user")
+                                raise
+                            except Exception as e:
+                                logger.warning(
+                                    f"Graph generation failed at step {self.global_step}: {e}")
 
+                    except (KeyboardInterrupt, SystemExit):
+                        logger.info("🛑 Modality tracking interrupted by user")
+                        raise
                     except Exception as e:
                         logger.warning(
                             f"Modality tracking failed at step {self.global_step}: {e}")
@@ -689,9 +700,17 @@ class BitMarTrainer:
                                     'vision_latent', None)
                             )
 
-                            if self.global_step % 200 == 0 and self.global_step > 0:  # Less frequent logging, avoid zero
-                                logger.info(
-                                    f"🎯 Tracked attention evolution at step {self.global_step}")
+                    except (KeyboardInterrupt, SystemExit):
+                        logger.info(
+                            "🛑 Attention evolution tracking interrupted by user")
+                        raise
+                    except Exception as e:
+                        logger.warning(
+                            f"Attention evolution tracking failed at step {self.global_step}: {e}")
+
+                        if self.global_step % 200 == 0 and self.global_step > 0:  # Less frequent logging, avoid zero
+                            logger.info(
+                                f"🎯 Tracked attention evolution at step {self.global_step}")
 
                     except Exception as e:
                         logger.warning(
@@ -1488,6 +1507,35 @@ class BitMarTrainer:
                 # Update batch size based on adaptive scaling
                 self._update_batch_size(epoch)
 
+        except KeyboardInterrupt:
+            logger.info("🛑 Training interrupted by user")
+            logger.info("💾 Saving current state before exit...")
+
+            # Save emergency checkpoint
+            try:
+                self.save_checkpoint(epoch, is_best=False)
+                logger.info("✅ Emergency checkpoint saved")
+            except Exception as e:
+                logger.error(f"❌ Failed to save emergency checkpoint: {e}")
+
+            # Re-raise to trigger finally block
+            raise
+
+        except Exception as e:
+            logger.error(f"❌ Training failed with error: {e}")
+            logger.info("💾 Attempting to save emergency checkpoint...")
+
+            # Save emergency checkpoint
+            try:
+                self.save_checkpoint(epoch, is_best=False)
+                logger.info("✅ Emergency checkpoint saved")
+            except Exception as save_e:
+                logger.error(
+                    f"❌ Failed to save emergency checkpoint: {save_e}")
+
+            # Re-raise the original exception
+            raise
+
         finally:
             # Stop carbon emissions tracking and get results
             emissions = emissions_tracker.stop()
@@ -1499,7 +1547,7 @@ class BitMarTrainer:
 
                 # Log to wandb if available
                 if self.wandb_logger:
-                    self.wandb_logger.log_final_metrics({
+                    self.wandb_logger.log_metrics({
                         "carbon_emissions_kg": emissions,
                         "carbon_emissions_g": emissions * 1000
                     })
