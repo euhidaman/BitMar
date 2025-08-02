@@ -9,8 +9,12 @@ from src.dataset import create_data_module
 from src.model import create_bitmar_model, count_parameters
 from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
-from src.modality_tracker import ModalityTracker  # NEW: Comprehensive modality tracking
-from src.dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader  # NEW: Intelligent optimization
+# NEW: Comprehensive modality tracking
+from src.modality_tracker import ModalityTracker
+# NEW: Intelligent optimization
+from src.dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader
+# NEW: HuggingFace compatibility
+from src.hf_compatibility import save_bitmar_as_hf_model
 from codecarbon import EmissionsTracker
 import os
 import sys
@@ -28,6 +32,8 @@ import numpy as np
 from tqdm import tqdm
 import gc
 import psutil
+import traceback
+import shutil
 
 # Try to import bitsandbytes for 8-bit optimizer
 try:
@@ -78,7 +84,8 @@ class BitMarTrainer:
         elif isinstance(config, dict):
             self.config = config
         else:
-            raise TypeError("config must be either a string path or a dictionary")
+            raise TypeError(
+                "config must be either a string path or a dictionary")
 
         # Set device - prioritize user specification, then config, then auto-detect
         if device:
@@ -87,16 +94,20 @@ class BitMarTrainer:
             self.device = torch.device(self.config['training']['device'])
         else:
             # Force CUDA device index specification when available
-            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            self.device = torch.device(
+                "cuda:0" if torch.cuda.is_available() else "cpu")
 
         # Ensure CUDA is initialized if available
         if self.device.type == 'cuda':
             torch.cuda.init()
-            logger.info(f"Using CUDA device: {torch.cuda.get_device_name(self.device)}")
+            logger.info(
+                f"Using CUDA device: {torch.cuda.get_device_name(self.device)}")
             # Don't set default tensor type to avoid DataLoader issues
-            logger.info("CUDA initialized, model will be moved to GPU explicitly")
+            logger.info(
+                "CUDA initialized, model will be moved to GPU explicitly")
         else:
-            logger.warning("CUDA not available, using CPU. Training will be slow.")
+            logger.warning(
+                "CUDA not available, using CPU. Training will be slow.")
 
         # Initialize tracking variables
         self.global_step = 0
@@ -153,14 +164,16 @@ class BitMarTrainer:
 
     def setup_model_and_data(self, max_samples: Optional[int] = None):
         """Initialize model and data loaders with progressive growing support"""
-        logger.info("Setting up model and data with advanced training strategies...")
+        logger.info(
+            "Setting up model and data with advanced training strategies...")
 
         # Check for quick training mode
         quick_mode = self.config.get('quick_training_mode', {})
         if quick_mode.get('enabled', False):
             # Don't limit samples - use optimizations instead
             optimizations = quick_mode.get('optimizations', {})
-            logger.info(f"🚀 QUICK TRAINING MODE: Using advanced optimizations without sample reduction")
+            logger.info(
+                f"🚀 QUICK TRAINING MODE: Using advanced optimizations without sample reduction")
 
             # Apply optimizations
             if optimizations.get('aggressive_image_compression', False):
@@ -186,21 +199,26 @@ class BitMarTrainer:
 
             # Start with smaller model
             start_layers = progressive_config.get('start_layers', {})
-            model_config['text_encoder_layers'] = start_layers.get('text_encoder_layers', 2)
-            model_config['text_decoder_layers'] = start_layers.get('text_decoder_layers', 2)
-            model_config['fusion_num_layers'] = start_layers.get('fusion_num_layers', 1)
+            model_config['text_encoder_layers'] = start_layers.get(
+                'text_encoder_layers', 2)
+            model_config['text_decoder_layers'] = start_layers.get(
+                'text_decoder_layers', 2)
+            model_config['fusion_num_layers'] = start_layers.get(
+                'fusion_num_layers', 1)
 
             logger.info(f"Starting with: {model_config['text_encoder_layers']} encoder layers, "
-                       f"{model_config['text_decoder_layers']} decoder layers, "
-                       f"{model_config['fusion_num_layers']} fusion layers")
+                        f"{model_config['text_decoder_layers']} decoder layers, "
+                        f"{model_config['fusion_num_layers']} fusion layers")
 
             # Store growth schedule for later use
-            self.growth_schedule = progressive_config.get('growth_schedule', {})
+            self.growth_schedule = progressive_config.get(
+                'growth_schedule', {})
             self.target_layers = progressive_config.get('final_layers', {})
             self.progressive_growing_enabled = True
         else:
             self.progressive_growing_enabled = False
-            logger.info("Progressive growing disabled - using fixed architecture")
+            logger.info(
+                "Progressive growing disabled - using fixed architecture")
 
         self.model = create_bitmar_model(model_config)
 
@@ -215,13 +233,16 @@ class BitMarTrainer:
         # Force all model components to GPU
         for name, param in self.model.named_parameters():
             if param.device != self.device:
-                logger.warning(f"Parameter {name} on wrong device {param.device}, moving to {self.device}")
+                logger.warning(
+                    f"Parameter {name} on wrong device {param.device}, moving to {self.device}")
                 param.data = param.data.to(self.device)
 
         # Check GPU memory usage after model loading
         if torch.cuda.is_available():
-            memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
-            logger.info(f"GPU memory allocated after model loading: {memory_allocated:.2f} GB")
+            memory_allocated = torch.cuda.memory_allocated(
+                self.device) / 1024**3  # GB
+            logger.info(
+                f"GPU memory allocated after model loading: {memory_allocated:.2f} GB")
 
         # Log model info
         param_count = count_parameters(self.model)
@@ -259,7 +280,8 @@ class BitMarTrainer:
             logger.warning("Attention evolution tracker not available")
 
         # Create enhanced data module with adaptive strategies
-        logger.info("Setting up enhanced data module with adaptive strategies...")
+        logger.info(
+            "Setting up enhanced data module with adaptive strategies...")
 
         # Enhanced data config for 10-epoch training
         enhanced_data_config = self.config['data'].copy()
@@ -278,51 +300,68 @@ class BitMarTrainer:
 
         for key, fallback_value in required_keys.items():
             if key not in enhanced_data_config:
-                logger.warning(f"Missing required key '{key}' in config, using fallback: {fallback_value}")
+                logger.warning(
+                    f"Missing required key '{key}' in config, using fallback: {fallback_value}")
                 enhanced_data_config[key] = fallback_value
 
-        logger.info(f"Using dataset directory: {enhanced_data_config['dataset_dir']}")
+        logger.info(
+            f"Using dataset directory: {enhanced_data_config['dataset_dir']}")
         logger.info(f"Using batch size: {enhanced_data_config['batch_size']}")
-        logger.info(f"Using max sequence length: {enhanced_data_config['max_seq_length']}")
+        logger.info(
+            f"Using max sequence length: {enhanced_data_config['max_seq_length']}")
 
         # Apply quick training mode settings
         if quick_mode.get('enabled', False):
             logger.info("🚀 Applying quick training mode data settings...")
             # DON'T disable mixed training - we still want text+multimodal!
             # enhanced_data_config['use_mixed_training'] = False  # REMOVED - this was causing multimodal-only
-            enhanced_data_config['batch_size'] = max(enhanced_data_config.get('batch_size', 16), 32)  # Force larger batch
-            enhanced_data_config['max_seq_length'] = min(enhanced_data_config.get('max_seq_length', 512), 256)  # Reduce sequence length
-            logger.info(f"Quick mode: batch_size={enhanced_data_config['batch_size']}, max_seq_length={enhanced_data_config['max_seq_length']}")
-            logger.info("📊 Quick mode: Preserving mixed training (text + multimodal) for better learning")
+            enhanced_data_config['batch_size'] = max(
+                enhanced_data_config.get('batch_size', 16), 32)  # Force larger batch
+            enhanced_data_config['max_seq_length'] = min(enhanced_data_config.get(
+                'max_seq_length', 512), 256)  # Reduce sequence length
+            logger.info(
+                f"Quick mode: batch_size={enhanced_data_config['batch_size']}, max_seq_length={enhanced_data_config['max_seq_length']}")
+            logger.info(
+                "📊 Quick mode: Preserving mixed training (text + multimodal) for better learning")
 
         # Dynamic multi-task weighting
-        multi_task_config = self.config.get('training', {}).get('multi_task_weighting', {})
+        multi_task_config = self.config.get(
+            'training', {}).get('multi_task_weighting', {})
         if multi_task_config.get('enabled', False) and not quick_mode.get('enabled', False):
             initial_ratio = multi_task_config.get('initial_text_ratio', 0.5)
             enhanced_data_config['text_ratio'] = initial_ratio
             self.dynamic_weighting = True
-            self.target_text_ratio = multi_task_config.get('target_text_ratio', 0.4)
-            self.adjustment_frequency = multi_task_config.get('adjustment_frequency', 100)
-            logger.info(f"Dynamic multi-task weighting: {initial_ratio:.1%} → {self.target_text_ratio:.1%}")
+            self.target_text_ratio = multi_task_config.get(
+                'target_text_ratio', 0.4)
+            self.adjustment_frequency = multi_task_config.get(
+                'adjustment_frequency', 100)
+            logger.info(
+                f"Dynamic multi-task weighting: {initial_ratio:.1%} → {self.target_text_ratio:.1%}")
         else:
-            enhanced_data_config['text_ratio'] = self.config.get('training', {}).get('text_ratio', 0.4)
+            enhanced_data_config['text_ratio'] = self.config.get(
+                'training', {}).get('text_ratio', 0.4)
             self.dynamic_weighting = False
 
         # Adaptive batch scaling
-        batch_config = self.config.get('training', {}).get('adaptive_batch_scaling', {})
+        batch_config = self.config.get('training', {}).get(
+            'adaptive_batch_scaling', {})
         if batch_config.get('enabled', False) and not quick_mode.get('enabled', False):
             start_batch_size = batch_config.get('start_batch_size', 8)
             enhanced_data_config['batch_size'] = start_batch_size
             self.adaptive_batch_scaling = True
-            self.batch_scaling_schedule = batch_config.get('scaling_schedule', {})
-            logger.info(f"Adaptive batch scaling enabled - starting with batch size {start_batch_size}")
+            self.batch_scaling_schedule = batch_config.get(
+                'scaling_schedule', {})
+            logger.info(
+                f"Adaptive batch scaling enabled - starting with batch size {start_batch_size}")
         else:
             self.adaptive_batch_scaling = False
 
-        logger.info(f"Enhanced training - Text ratio: {enhanced_data_config['text_ratio']:.1%}")
+        logger.info(
+            f"Enhanced training - Text ratio: {enhanced_data_config['text_ratio']:.1%}")
 
         # Debug: Log the keys in enhanced_data_config
-        logger.info(f"Enhanced data config keys: {list(enhanced_data_config.keys())}")
+        logger.info(
+            f"Enhanced data config keys: {list(enhanced_data_config.keys())}")
 
         self.data_module = create_data_module(enhanced_data_config)
         self.data_module.setup(max_samples=max_samples)
@@ -389,7 +428,8 @@ class BitMarTrainer:
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
-            logger.info(f"Unknown optimizer '{optimizer_type}', falling back to AdamW")
+            logger.info(
+                f"Unknown optimizer '{optimizer_type}', falling back to AdamW")
 
         # Setup learning rate scheduler
         max_epochs = int(self.config['training']['max_epochs'])
@@ -434,7 +474,8 @@ class BitMarTrainer:
                     loss = outputs['loss']
                 except RuntimeError as e:
                     if "out of memory" in str(e).lower() or "device" in str(e).lower():
-                        logger.warning(f"Device/memory error in forward pass: {e}")
+                        logger.warning(
+                            f"Device/memory error in forward pass: {e}")
                         # Force device consistency and retry
                         self._force_model_device_consistency()
                         torch.cuda.empty_cache() if torch.cuda.is_available() else None
@@ -525,18 +566,25 @@ class BitMarTrainer:
 
                     # Force cleanup if memory usage is high
                     if torch.cuda.is_available():
-                        gpu_allocated = torch.cuda.memory_allocated(self.device) / 1024**3
-                        gpu_total = torch.cuda.get_device_properties(self.device).total_memory / 1024**3
+                        gpu_allocated = torch.cuda.memory_allocated(
+                            self.device) / 1024**3
+                        gpu_total = torch.cuda.get_device_properties(
+                            self.device).total_memory / 1024**3
                         if gpu_allocated > gpu_total * 0.8:  # 80% threshold
-                            logger.warning(f"High GPU memory usage detected, forcing cleanup...")
+                            logger.warning(
+                                f"High GPU memory usage detected, forcing cleanup...")
                             self._force_cleanup()
 
                 # Log GPU memory usage every 100 steps
                 if self.global_step % 100 == 0 and torch.cuda.is_available():
-                    memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
-                    memory_reserved = torch.cuda.memory_reserved(self.device) / 1024**3  # GB
-                    gpu_util = torch.cuda.utilization(self.device) if hasattr(torch.cuda, 'utilization') else -1
-                    logger.info(f"Step {self.global_step}: GPU Memory - Allocated: {memory_allocated:.2f}GB, Reserved: {memory_reserved:.2f}GB")
+                    memory_allocated = torch.cuda.memory_allocated(
+                        self.device) / 1024**3  # GB
+                    memory_reserved = torch.cuda.memory_reserved(
+                        self.device) / 1024**3  # GB
+                    gpu_util = torch.cuda.utilization(self.device) if hasattr(
+                        torch.cuda, 'utilization') else -1
+                    logger.info(
+                        f"Step {self.global_step}: GPU Memory - Allocated: {memory_allocated:.2f}GB, Reserved: {memory_reserved:.2f}GB")
 
                 # Enhanced logging with wandb logger - fix step counting
                 log_every_n_steps = self.config.get(
@@ -568,9 +616,10 @@ class BitMarTrainer:
                         # Continue training without wandb logging for this step
 
                 # Comprehensive modality tracking (NEW!)
-                modality_track_steps = self.config.get('track_attention_every_n_steps', 50)
+                modality_track_steps = self.config.get(
+                    'track_attention_every_n_steps', 50)
                 if (self.modality_tracker and modality_track_steps > 0 and
-                    self.global_step % modality_track_steps == 0):
+                        self.global_step % modality_track_steps == 0):
 
                     try:
                         self.modality_tracker.track_step(
@@ -582,12 +631,16 @@ class BitMarTrainer:
 
                         # Generate comprehensive graphs every 200 steps
                         if self.global_step % 200 == 0 and self.global_step > 0:
-                            graph_path = self.modality_tracker.create_modality_graphs(self.global_step)
-                            self.modality_tracker.save_metrics_data(self.global_step)
-                            logger.info(f"📊 Generated modality analysis graphs at step {self.global_step}")
+                            graph_path = self.modality_tracker.create_modality_graphs(
+                                self.global_step)
+                            self.modality_tracker.save_metrics_data(
+                                self.global_step)
+                            logger.info(
+                                f"📊 Generated modality analysis graphs at step {self.global_step}")
 
                     except Exception as e:
-                        logger.warning(f"Modality tracking failed at step {self.global_step}: {e}")
+                        logger.warning(
+                            f"Modality tracking failed at step {self.global_step}: {e}")
 
                 # Attention analysis (less frequent to avoid overhead)
                 attention_log_steps = self.config.get(
@@ -727,10 +780,12 @@ class BitMarTrainer:
                             # Check for numerical stability
                             if torch.isfinite(outputs['loss']) and not (torch.isnan(outputs['loss']) or torch.isinf(outputs['loss'])):
                                 # Clamp extreme loss values to prevent numerical instability
-                                loss_value = max(0.0, min(loss_value, 100.0))  # Clamp between 0 and 100
+                                # Clamp between 0 and 100
+                                loss_value = max(0.0, min(loss_value, 100.0))
                                 val_losses.append(loss_value)
                             else:
-                                logger.warning(f"Non-finite loss detected in validation batch {batch_idx}: {loss_value}")
+                                logger.warning(
+                                    f"Non-finite loss detected in validation batch {batch_idx}: {loss_value}")
                                 # Skip this batch but continue validation
                                 continue
 
@@ -761,7 +816,8 @@ class BitMarTrainer:
                             f"Validation batch {batch_idx} in loader {loader_idx} failed: {e}")
                         # Add detailed error logging for debugging
                         import traceback
-                        logger.warning(f"Validation error traceback: {traceback.format_exc()}")
+                        logger.warning(
+                            f"Validation error traceback: {traceback.format_exc()}")
                         continue
 
         # Calculate total number of batches across all loaders for averaging
@@ -773,11 +829,14 @@ class BitMarTrainer:
             val_metrics['val_loss'] = float(np.mean(val_losses))
             # Additional sanity check on the mean
             if not np.isfinite(val_metrics['val_loss']) or val_metrics['val_loss'] < 0:
-                logger.warning(f"Invalid mean validation loss: {val_metrics['val_loss']}, using fallback")
+                logger.warning(
+                    f"Invalid mean validation loss: {val_metrics['val_loss']}, using fallback")
                 val_metrics['val_loss'] = 10.0  # Reasonable fallback value
         else:
-            logger.warning("No valid validation losses collected, using fallback value")
-            val_metrics['val_loss'] = 10.0  # Use a reasonable fallback instead of inf
+            logger.warning(
+                "No valid validation losses collected, using fallback value")
+            # Use a reasonable fallback instead of inf
+            val_metrics['val_loss'] = 10.0
 
         val_metrics['val_memory_entropy'] = (
             val_metrics['val_memory_entropy'] / total_batches) if total_batches > 0 else 0.0
@@ -787,7 +846,8 @@ class BitMarTrainer:
         # Final validation of all metrics
         for key, value in val_metrics.items():
             if not np.isfinite(value):
-                logger.warning(f"Non-finite metric detected: {key}={value}, setting to 0")
+                logger.warning(
+                    f"Non-finite metric detected: {key}={value}, setting to 0")
                 val_metrics[key] = 0.0 if 'similarity' in key or 'entropy' in key else 10.0
 
         # Clear GPU cache and restore training mode
@@ -987,7 +1047,8 @@ class BitMarTrainer:
                 try:
                     return operation_func()
                 except Exception as retry_e:
-                    logger.error(f"Retry failed for {operation_name}: {retry_e}")
+                    logger.error(
+                        f"Retry failed for {operation_name}: {retry_e}")
                     raise retry_e
             else:
                 raise e
@@ -998,7 +1059,8 @@ class BitMarTrainer:
             # Check model device
             model_device = next(self.model.parameters()).device
             if model_device != self.device:
-                logger.warning(f"Model moved from {self.device} to {model_device}. Moving back...")
+                logger.warning(
+                    f"Model moved from {self.device} to {model_device}. Moving back...")
                 self.model.to(self.device)
                 # Force model to stay on device with stronger pinning
                 if torch.cuda.is_available():
@@ -1028,7 +1090,8 @@ class BitMarTrainer:
                 # Only recreate if significant portion of states are on wrong device
                 wrong_device_ratio = wrong_device_count / max(total_states, 1)
                 if wrong_device_ratio > 0.5 and wrong_device_count > 0:  # More than 50% of states on wrong device
-                    logger.warning(f"Optimizer state moved to wrong device ({wrong_device_count}/{total_states} tensors). Recreating optimizer...")
+                    logger.warning(
+                        f"Optimizer state moved to wrong device ({wrong_device_count}/{total_states} tensors). Recreating optimizer...")
                     self._recreate_optimizer_with_state_preservation()
 
         except Exception as e:
@@ -1044,7 +1107,8 @@ class BitMarTrainer:
         try:
             # Store current learning rate and other important state
             current_lr = self.optimizer.param_groups[0]['lr']
-            current_step_count = getattr(self.optimizer, '_step_count', 0) if hasattr(self.optimizer, '_step_count') else 0
+            current_step_count = getattr(self.optimizer, '_step_count', 0) if hasattr(
+                self.optimizer, '_step_count') else 0
 
             # Store momentum and other state if available (for Adam/AdamW)
             preserved_state = {}
@@ -1056,7 +1120,8 @@ class BitMarTrainer:
                         for key, value in state.items():
                             if torch.is_tensor(value):
                                 try:
-                                    preserved_entry[key] = value.to(self.device).clone()
+                                    preserved_entry[key] = value.to(
+                                        self.device).clone()
                                 except Exception:
                                     # Skip if can't move to device - don't log the exception details
                                     pass
@@ -1079,17 +1144,19 @@ class BitMarTrainer:
                     current_params = []
                     for param_group in self.optimizer.param_groups:
                         current_params.extend(param_group['params'])
-                    
+
                     # Only restore state for parameters that still exist
                     old_param_list = list(preserved_state.keys())
                     for i, param in enumerate(current_params):
                         if i < len(old_param_list) and old_param_list[i] in preserved_state:
                             self.optimizer.state[param] = preserved_state[old_param_list[i]]
-                        
-                except Exception as restore_e:
-                    logger.warning(f"Could not restore optimizer state: {restore_e}")
 
-            logger.info(f"Optimizer recreated on {self.device} with LR={current_lr:.2e}")
+                except Exception as restore_e:
+                    logger.warning(
+                        f"Could not restore optimizer state: {restore_e}")
+
+            logger.info(
+                f"Optimizer recreated on {self.device} with LR={current_lr:.2e}")
 
         except Exception as e:
             logger.error(f"Optimizer recreation failed: {e}")
@@ -1191,7 +1258,8 @@ class BitMarTrainer:
                 if torch.is_tensor(value):
                     # Use pin_memory and non_blocking for faster transfers
                     if value.device != self.device:
-                        device_batch[key] = value.to(self.device, non_blocking=True)
+                        device_batch[key] = value.to(
+                            self.device, non_blocking=True)
                     else:
                         device_batch[key] = value
                 else:
@@ -1221,7 +1289,8 @@ class BitMarTrainer:
                 self._device_warnings_count += 1
                 # Only log every 50 warnings to avoid spam
                 if self._device_warnings_count % 50 == 1:
-                    logger.warning(f"Device inconsistency detected ({self._device_warnings_count} times). Fixing silently...")
+                    logger.warning(
+                        f"Device inconsistency detected ({self._device_warnings_count} times). Fixing silently...")
 
                 # Force model back to correct device
                 self._force_model_device_consistency()
@@ -1364,7 +1433,8 @@ class BitMarTrainer:
 
                         # Create token evolution plots for common tokens
                         if epoch >= 3:  # Need several epochs for meaningful evolution
-                            common_tokens = ['the', 'a', 'dog', 'cat', 'person']
+                            common_tokens = ['the', 'a',
+                                             'dog', 'cat', 'person']
                             for token_text in common_tokens:
                                 try:
                                     token_ids = self.attention_evolution_tracker.tokenizer.encode(
@@ -1424,7 +1494,8 @@ class BitMarTrainer:
 
             # Log carbon emissions
             if emissions:
-                logger.info(f"🌱 Training carbon emissions: {emissions:.6f} kg CO2")
+                logger.info(
+                    f"🌱 Training carbon emissions: {emissions:.6f} kg CO2")
 
                 # Log to wandb if available
                 if self.wandb_logger:
@@ -1453,6 +1524,91 @@ class BitMarTrainer:
         if self.wandb_logger:
             self.wandb_logger.finish()
 
+        # Save model in HuggingFace format for evaluation pipeline compatibility
+        logger.info(
+            "💾 Saving model in HuggingFace format for evaluation pipeline compatibility...")
+        try:
+            hf_save_dir = self.checkpoint_dir / "hf_model"
+            save_bitmar_as_hf_model(
+                bitmar_model=self.model,
+                config_dict=self.config['model'],
+                save_directory=hf_save_dir,
+                tokenizer=self.model.tokenizer if hasattr(
+                    self.model, 'tokenizer') else None
+            )
+            logger.info(f"✅ HuggingFace model saved to: {hf_save_dir}")
+
+            # Save model for both 2024 and 2025 evaluation pipelines
+            eval_model_dir_2024 = Path("./final_model_2024")
+            eval_model_dir_2025 = Path("./final_model")
+
+            # Copy for 2024 pipeline (multimodal evaluation)
+            if eval_model_dir_2024.exists():
+                shutil.rmtree(eval_model_dir_2024)
+            shutil.copytree(hf_save_dir, eval_model_dir_2024)
+            logger.info(
+                f"✅ Model prepared for 2024 pipeline (multimodal): {eval_model_dir_2024}")
+
+            # Copy for 2025 pipeline (text-only evaluation)
+            if eval_model_dir_2025.exists():
+                shutil.rmtree(eval_model_dir_2025)
+            shutil.copytree(hf_save_dir, eval_model_dir_2025)
+            logger.info(
+                f"✅ Model prepared for 2025 pipeline (text-only): {eval_model_dir_2025}")
+
+            # Create evaluation instructions
+            eval_instructions = f"""
+# BitMar Model Evaluation Instructions
+
+Your BitMar model has been saved and is ready for evaluation on both pipelines:
+
+## Text-only Evaluation (2025 Pipeline)
+```bash
+cd ../evaluation-pipeline-2025
+
+# Fast evaluation (text-only tasks)
+./eval_zero_shot_fast.sh '../BitMar/final_model' 'checkpoint_1M' 'causal'
+
+# Full evaluation including fine-tuning
+./eval_finetuning.sh '../BitMar/final_model'
+```
+
+## Multimodal Evaluation (2024 Pipeline)
+```bash
+cd ../evaluation-pipeline-2024
+
+# Multimodal tasks (Winoground + VQA)
+./eval_multimodal.sh '../BitMar/final_model_2024'
+
+# DevBench evaluation
+./eval_devbench.sh '../BitMar/final_model_2024' bitmar
+
+# Copy BitMar DevBench integration file
+cp ../BitMar/devbench_bitmar.py devbench/model_classes/bitmar.py
+```
+
+## Model Details
+- Model Type: BitMar (Multimodal BitNet with Episodic Memory)
+- Text Encoder Layers: {self.config['model'].get('text_encoder_layers', 3)}
+- Text Decoder Layers: {self.config['model'].get('text_decoder_layers', 3)}
+- Vision Latent Size: {self.config['model'].get('vision_latent_size', 64)}
+- Memory Size: {self.config['model'].get('memory_size', 16)}
+- Training Epochs: {self.config['training']['max_epochs']}
+
+Both models are identical - they're just copied to different locations for convenience with the respective evaluation pipelines.
+"""
+
+            with open("EVALUATION_INSTRUCTIONS.md", "w") as f:
+                f.write(eval_instructions)
+
+            logger.info(
+                "📋 Evaluation instructions saved to EVALUATION_INSTRUCTIONS.md")
+
+        except Exception as e:
+            logger.error(f"Failed to save HuggingFace model: {e}")
+            logger.warning(
+                "Model will not be available for evaluation pipeline")
+
         logger.info("Training completed!")
 
     def _apply_progressive_growing(self, epoch: int):
@@ -1468,7 +1624,8 @@ class BitMarTrainer:
         if not growth_actions:
             return
 
-        logger.info(f"🚀 Progressive growing at epoch {epoch + 1}: {growth_actions}")
+        logger.info(
+            f"🚀 Progressive growing at epoch {epoch + 1}: {growth_actions}")
 
         for action in growth_actions:
             if action == "add_encoder_layer":
@@ -1506,7 +1663,8 @@ class BitMarTrainer:
                 self.model.text_encoder.layers.append(new_layer)
                 self.model.text_encoder.num_layers += 1
 
-                logger.info(f"✅ Added encoder layer: {current_layers} → {len(self.model.text_encoder.layers)}")
+                logger.info(
+                    f"✅ Added encoder layer: {current_layers} → {len(self.model.text_encoder.layers)}")
 
         except Exception as e:
             logger.error(f"Failed to add encoder layer: {e}")
@@ -1534,7 +1692,8 @@ class BitMarTrainer:
                 self.model.text_decoder.layers.append(new_layer)
                 self.model.text_decoder.num_layers += 1
 
-                logger.info(f"✅ Added decoder layer: {current_layers} → {len(self.model.text_decoder.layers)}")
+                logger.info(
+                    f"✅ Added decoder layer: {current_layers} → {len(self.model.text_decoder.layers)}")
 
         except Exception as e:
             logger.error(f"Failed to add decoder layer: {e}")
@@ -1563,7 +1722,8 @@ class BitMarTrainer:
                     self.model.cross_modal_fusion.layers.append(new_layer)
                     self.model.cross_modal_fusion.num_layers += 1
 
-                    logger.info(f"✅ Added fusion layer: {current_layers} → {len(self.model.cross_modal_fusion.layers)}")
+                    logger.info(
+                        f"✅ Added fusion layer: {current_layers} → {len(self.model.cross_modal_fusion.layers)}")
 
         except Exception as e:
             logger.error(f"Failed to add fusion layer: {e}")
@@ -1641,13 +1801,15 @@ class BitMarTrainer:
             if epoch_range.startswith('epoch_'):
                 start_end = epoch_range.split('_')[1].split('_')
                 if len(start_end) == 2:
-                    start_epoch, end_epoch = int(start_end[0]), int(start_end[1])
+                    start_epoch, end_epoch = int(
+                        start_end[0]), int(start_end[1])
                     if start_epoch <= epoch + 1 <= end_epoch:
                         new_batch_size = batch_size
                         break
 
         if new_batch_size and new_batch_size != self.data_module.batch_size:
-            logger.info(f"📈 Adaptive batch scaling: {self.data_module.batch_size} → {new_batch_size}")
+            logger.info(
+                f"📈 Adaptive batch scaling: {self.data_module.batch_size} → {new_batch_size}")
 
             # Update data module batch size
             self.data_module.batch_size = new_batch_size
@@ -1662,12 +1824,17 @@ class BitMarTrainer:
 
         if step % self.adjustment_frequency == 0:
             # Simple linear interpolation from initial to target ratio
-            progress = min(1.0, step / (self.config['training']['max_epochs'] * 1000))  # Approximate steps
+            # Approximate steps
+            progress = min(
+                1.0, step / (self.config['training']['max_epochs'] * 1000))
             current_ratio = self.data_module.train_dataset.text_ratio
-            new_ratio = current_ratio + (self.target_text_ratio - current_ratio) * 0.1  # Gradual adjustment
+            new_ratio = current_ratio + \
+                (self.target_text_ratio - current_ratio) * \
+                0.1  # Gradual adjustment
 
             if abs(new_ratio - current_ratio) > 0.01:  # Only update if significant change
-                logger.info(f"🎯 Dynamic text ratio: {current_ratio:.2%} → {new_ratio:.2%}")
+                logger.info(
+                    f"🎯 Dynamic text ratio: {current_ratio:.2%} → {new_ratio:.2%}")
                 self.data_module.train_dataset.text_ratio = new_ratio
                 self.data_module.train_dataset._create_mixed_indices()  # Recreate indices
 
@@ -1675,18 +1842,22 @@ class BitMarTrainer:
         """Log detailed memory usage to help prevent OOM"""
         # System RAM
         ram = psutil.virtual_memory()
-        logger.info(f"Step {step} - System RAM: {ram.percent:.1f}% ({ram.used/1024**3:.1f}GB/{ram.total/1024**3:.1f}GB)")
+        logger.info(
+            f"Step {step} - System RAM: {ram.percent:.1f}% ({ram.used/1024**3:.1f}GB/{ram.total/1024**3:.1f}GB)")
 
         # GPU memory if available
         if torch.cuda.is_available() and self.device:
             gpu_allocated = torch.cuda.memory_allocated(self.device) / 1024**3
             gpu_reserved = torch.cuda.memory_reserved(self.device) / 1024**3
-            gpu_total = torch.cuda.get_device_properties(self.device).total_memory / 1024**3
-            logger.info(f"Step {step} - GPU Memory: {gpu_allocated:.1f}GB allocated, {gpu_reserved:.1f}GB reserved, {gpu_total:.1f}GB total")
+            gpu_total = torch.cuda.get_device_properties(
+                self.device).total_memory / 1024**3
+            logger.info(
+                f"Step {step} - GPU Memory: {gpu_allocated:.1f}GB allocated, {gpu_reserved:.1f}GB reserved, {gpu_total:.1f}GB total")
 
             # Warning if memory usage is high
             if gpu_allocated > gpu_total * 0.85:
-                logger.warning(f"HIGH GPU MEMORY USAGE: {gpu_allocated/gpu_total*100:.1f}%")
+                logger.warning(
+                    f"HIGH GPU MEMORY USAGE: {gpu_allocated/gpu_total*100:.1f}%")
             if ram.percent > 90:
                 logger.warning(f"HIGH SYSTEM MEMORY USAGE: {ram.percent:.1f}%")
 
@@ -1696,6 +1867,8 @@ class BitMarTrainer:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+
+
 def load_config(config_path: str) -> Dict:
     """Load configuration from YAML file"""
     with open(config_path, 'r') as f:
