@@ -504,7 +504,7 @@ class BabyLMDataModule:
         self.config = config
         self.tokenizer_name = config.get('text_encoder_name', 'gpt2')
 
-        # Dataset parameters with proper fallbacks
+        # Dataset parameters with proper fallbacks to prevent KeyError
         self.dataset_dir = config.get('dataset_dir', '../babylm_dataset')
         self.max_seq_length = config.get('max_seq_length', 256)
         self.hf_token = config.get('hf_token') or os.getenv('HF_TOKEN', '')
@@ -524,9 +524,20 @@ class BabyLMDataModule:
             'glue/sst2'  # Use simpler, more reliable validation dataset
         ])
 
-        # Validate critical paths
+        # Validate critical paths and log warnings if needed
         if not os.path.exists(self.dataset_dir):
             logger.warning(f"Dataset directory {self.dataset_dir} does not exist. Please ensure babylm_dataset is available.")
+            # Try alternative paths
+            alt_paths = ['babylm_dataset', '../babylm_dataset', '../../babylm_dataset']
+            for alt_path in alt_paths:
+                if os.path.exists(alt_path):
+                    logger.info(f"Found alternative dataset path: {alt_path}")
+                    self.dataset_dir = alt_path
+                    break
+
+        logger.info(f"Using dataset directory: {self.dataset_dir}")
+        logger.info(f"Using batch size: {self.batch_size}")
+        logger.info(f"Using max sequence length: {self.max_seq_length}")
 
         # Datasets
         self.train_dataset = None

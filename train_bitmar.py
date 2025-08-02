@@ -1079,13 +1079,13 @@ class BitMarTrainer:
                     current_params = []
                     for param_group in self.optimizer.param_groups:
                         current_params.extend(param_group['params'])
-
+                    
                     # Only restore state for parameters that still exist
                     old_param_list = list(preserved_state.keys())
                     for i, param in enumerate(current_params):
                         if i < len(old_param_list) and old_param_list[i] in preserved_state:
                             self.optimizer.state[param] = preserved_state[old_param_list[i]]
-
+                        
                 except Exception as restore_e:
                     logger.warning(f"Could not restore optimizer state: {restore_e}")
 
