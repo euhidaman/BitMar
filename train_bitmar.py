@@ -222,20 +222,37 @@ class BitMarTrainer:
 
         self.model = create_bitmar_model(model_config)
 
-        # Force model to GPU with verification
+        # Apply memory-efficient model settings
+        if hasattr(self.model, 'gradient_checkpointing_enable'):
+            self.model.gradient_checkpointing_enable()
+            logger.info("✅ Gradient checkpointing enabled")
+
+        # Enable memory-efficient attention if available
+        if hasattr(self.model, 'config') and hasattr(self.model.config, 'use_memory_efficient_attention'):
+            self.model.config.use_memory_efficient_attention = True
+            logger.info("✅ Memory-efficient attention enabled")
+
+        # Force model to GPU with verification and CPU memory cleanup
         self.model.to(self.device)
         logger.info(f"Model moved to device: {self.device}")
+
+        # Immediate cleanup after model transfer
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # Verify model is actually on GPU
         model_device = next(self.model.parameters()).device
         logger.info(f"Model parameters are on device: {model_device}")
 
-        # Force all model components to GPU
+        # Force all model components to GPU and clear CPU references
         for name, param in self.model.named_parameters():
             if param.device != self.device:
                 logger.warning(
                     f"Parameter {name} on wrong device {param.device}, moving to {self.device}")
                 param.data = param.data.to(self.device)
+                # Clear any lingering CPU references
+                gc.collect()
 
         # Check GPU memory usage after model loading
         if torch.cuda.is_available():
@@ -291,11 +308,15 @@ class BitMarTrainer:
             'dataset_dir': "../babylm_dataset",
             'max_seq_length': 256,
             'batch_size': 16,
-            'num_workers': 4,
-            'pin_memory': True,
+            'num_workers': 2,  # Reduced from 4 to save CPU memory
+            'pin_memory': False,  # Disable pin_memory to save CPU memory
             'text_encoder_name': 'gpt2',
-            'persistent_workers': True,
-            'validation_datasets': ['glue/sst2']
+            'persistent_workers': False,  # Disable to reduce memory usage
+            'validation_datasets': ['glue/sst2'],
+            # NEW: CPU memory optimization settings
+            'prefetch_factor': 1,  # Reduce prefetching to save CPU memory
+            'drop_last': True,  # Drop incomplete batches to avoid memory fragmentation
+            'memory_efficient_loading': True,  # Enable memory-efficient data loading
         }
 
         for key, fallback_value in required_keys.items():
@@ -323,6 +344,17 @@ class BitMarTrainer:
                 f"Quick mode: batch_size={enhanced_data_config['batch_size']}, max_seq_length={enhanced_data_config['max_seq_length']}")
             logger.info(
                 "📊 Quick mode: Preserving mixed training (text + multimodal) for better learning")
+
+        # Apply CPU memory optimizations to data loading
+        enhanced_data_config.update({
+            # Max 2 workers
+            'num_workers': min(enhanced_data_config.get('num_workers', 2), 2),
+            'pin_memory': False,  # Disable pinned memory to save CPU RAM
+            'persistent_workers': False,  # Disable persistent workers
+            'prefetch_factor': 1,  # Minimal prefetching
+            'multiprocessing_context': None,  # Use default (spawn on Windows)
+        })
+        logger.info("🔧 Applied CPU memory optimizations to data loading")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get(
@@ -365,6 +397,9 @@ class BitMarTrainer:
 
         self.data_module = create_data_module(enhanced_data_config)
         self.data_module.setup(max_samples=max_samples)
+
+        # Apply CPU memory optimizations
+        self._optimize_cpu_memory()
 
         # Setup optimizer with layer-wise learning rates
         self.setup_advanced_optimizer()
@@ -460,8 +495,12 @@ class BitMarTrainer:
                 if self.global_step % 500 == 0:
                     self._silent_device_check()
 
-                # Use safe batch transfer method
-                batch = self._safe_batch_to_device(batch)
+                # Check memory usage every 100 steps and warn if high
+                if self.global_step % 100 == 0:
+                    self._check_memory_usage(self.global_step)
+
+                # Use efficient batch transfer method to minimize CPU memory usage
+                batch = self._efficient_batch_transfer(batch)
 
                 # Forward pass with device-aware error handling
                 try:
@@ -726,9 +765,15 @@ class BitMarTrainer:
                 if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
                     self.scheduler.step()
 
-                # Memory cleanup every 100 steps to prevent OOM
-                if self.global_step > 0 and self.global_step % 100 == 0:
-                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                # Aggressive memory cleanup every 50 steps to prevent CPU/GPU OOM
+                if self.global_step > 0 and self.global_step % 50 == 0:
+                    self._force_cleanup()
+
+                # Clear batch references immediately after processing
+                del batch
+                if 'outputs' in locals():
+                    del outputs
+                gc.collect()  # Quick garbage collection every batch
 
             except Exception as e:
                 logger.error(
@@ -1910,11 +1955,106 @@ Both models are identical - they're just copied to different locations for conve
                 logger.warning(f"HIGH SYSTEM MEMORY USAGE: {ram.percent:.1f}%")
 
     def _force_cleanup(self):
-        """Aggressive memory cleanup to prevent OOM"""
-        gc.collect()
+        """Aggressive memory cleanup to prevent CPU and GPU OOM"""
+        # Force garbage collection multiple times
+        for _ in range(3):
+            gc.collect()
+
+        # GPU cleanup
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+            # Clear memory pool if available
+            if hasattr(torch.cuda, 'memory_pool_empty_cache'):
+                torch.cuda.memory_pool_empty_cache()
+
+        # CPU memory optimization
+        import ctypes
+        if hasattr(ctypes, 'windll'):  # Windows
+            try:
+                ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, -1, -1)
+            except:
+                pass
+
+        # Log memory usage after cleanup
+        if hasattr(psutil, 'virtual_memory'):
+            ram = psutil.virtual_memory()
+            logger.debug(
+                f"🧹 After cleanup - RAM: {ram.percent:.1f}% ({ram.used/1024**3:.1f}GB/{ram.total/1024**3:.1f}GB)")
+
+    def _optimize_cpu_memory(self):
+        """Optimize CPU memory usage during training"""
+        # Limit tensor creation on CPU
+        torch.set_num_threads(min(4, torch.get_num_threads()))
+
+        # Enable memory-efficient attention if available
+        if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+            torch.backends.cuda.enable_flash_sdp(True)
+
+        # Reduce CPU caching
+        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+
+        # Set conservative CPU memory settings
+        if hasattr(torch.backends.cudnn, 'benchmark'):
+            torch.backends.cudnn.benchmark = False  # Reduces memory usage
+
+        logger.info("🔧 CPU memory optimizations applied")
+
+    def _check_memory_usage(self, step: int, warn_threshold: float = 80.0):
+        """Check both CPU and GPU memory usage and warn if high"""
+        warnings = []
+
+        # Check CPU memory
+        if hasattr(psutil, 'virtual_memory'):
+            ram = psutil.virtual_memory()
+            if ram.percent > warn_threshold:
+                warnings.append(f"High CPU RAM usage: {ram.percent:.1f}%")
+
+        # Check GPU memory
+        if torch.cuda.is_available():
+            gpu_allocated = torch.cuda.memory_allocated(self.device) / 1024**3
+            gpu_total = torch.cuda.get_device_properties(
+                self.device).total_memory / 1024**3
+            gpu_percent = (gpu_allocated / gpu_total) * 100
+
+            if gpu_percent > warn_threshold:
+                warnings.append(f"High GPU memory usage: {gpu_percent:.1f}%")
+
+        # Log warnings and trigger cleanup if needed
+        if warnings:
+            logger.warning(
+                f"⚠️  Step {step} - Memory warnings: {', '.join(warnings)}")
+            if any("High CPU RAM" in w for w in warnings):
+                logger.info("🧹 Triggering aggressive CPU memory cleanup...")
+                self._force_cleanup()
+
+    def _efficient_batch_transfer(self, batch):
+        """Efficiently transfer batch to GPU with minimal CPU memory usage"""
+        try:
+            # Transfer tensors one by one and delete from CPU immediately
+            gpu_batch = {}
+
+            for key, value in batch.items():
+                if isinstance(value, torch.Tensor):
+                    # Move to GPU and immediately delete CPU reference
+                    gpu_batch[key] = value.to(self.device, non_blocking=True)
+                    del value  # Explicit deletion
+                else:
+                    gpu_batch[key] = value
+
+            # Clear the original batch
+            batch.clear()
+            del batch
+
+            # Force cleanup
+            gc.collect()
+
+            return gpu_batch
+
+        except Exception as e:
+            logger.warning(
+                f"Efficient batch transfer failed: {e}, falling back to standard transfer")
+            return self._safe_batch_to_device(batch)
 
 
 def load_config(config_path: str) -> Dict:

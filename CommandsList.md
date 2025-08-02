@@ -207,7 +207,11 @@ cd ../evaluation-pipeline-2024 && python collect_results.py bitmar-model --inclu
 
 ## ⚠️ **Important Notes**
 
-1. **Memory Management**: The RTX A6000 config uses conservative batch sizes (8-16) to prevent OOM
+1. **Memory Management**: 
+   - RTX A6000 config uses conservative batch sizes (8-16) to prevent GPU OOM
+   - **CPU Memory Optimized**: Reduced data workers, disabled pin_memory, aggressive cleanup
+   - **Automatic Memory Monitoring**: Warns at 80% CPU/GPU usage and triggers cleanup
+   - **Efficient Batch Transfer**: Minimizes CPU-GPU memory transfer overhead
 2. **HuggingFace Login**: Required for Winoground and EWoK dataset access
 3. **Training Time**: Expect ~8-12 hours for 10 epochs on RTX A6000
 4. **Disk Space**: Ensure ~50GB free space for datasets and model checkpoints
@@ -234,6 +238,13 @@ python -c "from src.hf_compatibility import BitMarForCausalLM; print('✅ BitMar
 # Check dataset paths
 ls ../babylm_dataset/train_50M/
 ls ../babylm_dataset/
+
+# Memory troubleshooting commands
+python -c "import psutil; ram=psutil.virtual_memory(); print(f'CPU RAM: {ram.percent:.1f}% ({ram.used/1024**3:.1f}GB/{ram.total/1024**3:.1f}GB)')"
+python -c "import torch; print(f'GPU Available: {torch.cuda.is_available()}'); print(f'GPU Memory: {torch.cuda.memory_allocated()/1024**3:.1f}GB allocated') if torch.cuda.is_available() else None"
+
+# Test memory-efficient training
+python test_training_fixes.py
 ```
 
 ## 🔧 **Advanced Configuration Options**
