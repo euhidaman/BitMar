@@ -304,19 +304,21 @@ class BitMarTrainer:
         enhanced_data_config = self.config['data'].copy()
 
         # Ensure all required keys are included with proper fallbacks
+        # ⚡ OPTIMIZED FOR MAXIMUM GPU UTILIZATION ⚡
         required_keys = {
             'dataset_dir': "../babylm_dataset",
             'max_seq_length': 256,
-            'batch_size': 16,
-            'num_workers': 2,  # Reduced from 4 to save CPU memory
-            'pin_memory': False,  # Disable pin_memory to save CPU memory
+            'batch_size': 32,  # Increased for better GPU utilization
+            'num_workers': 4,  # Restored for parallel data loading
+            'pin_memory': True,  # Re-enabled for faster GPU transfer
             'text_encoder_name': 'gpt2',
-            'persistent_workers': False,  # Disable to reduce memory usage
+            'persistent_workers': True,  # Re-enabled for faster data loading
             'validation_datasets': ['glue/sst2'],
-            # NEW: CPU memory optimization settings
-            'prefetch_factor': 1,  # Reduce prefetching to save CPU memory
-            'drop_last': True,  # Drop incomplete batches to avoid memory fragmentation
-            'memory_efficient_loading': True,  # Enable memory-efficient data loading
+            # GPU-optimized settings
+            'prefetch_factor': 4,  # Increased prefetching for GPU feeding
+            'drop_last': True,  # Keep this for consistent batch sizes
+            'memory_efficient_loading': False,  # Disable CPU optimizations that hurt GPU
+            'non_blocking': True,  # Enable non-blocking transfers
         }
 
         for key, fallback_value in required_keys.items():
@@ -345,16 +347,17 @@ class BitMarTrainer:
             logger.info(
                 "📊 Quick mode: Preserving mixed training (text + multimodal) for better learning")
 
-        # Apply CPU memory optimizations to data loading
+        # Apply GPU-optimized data loading for maximum performance
         enhanced_data_config.update({
-            # Max 2 workers
-            'num_workers': min(enhanced_data_config.get('num_workers', 2), 2),
-            'pin_memory': False,  # Disable pinned memory to save CPU RAM
-            'persistent_workers': False,  # Disable persistent workers
-            'prefetch_factor': 1,  # Minimal prefetching
+            # Optimize for GPU utilization
+            'num_workers': min(enhanced_data_config.get('num_workers', 4), 8),
+            'pin_memory': True,  # Enable pinned memory for faster GPU transfer
+            'persistent_workers': True,  # Keep workers alive for efficiency
+            'prefetch_factor': 4,  # Increased prefetching for GPU pipeline
             'multiprocessing_context': None,  # Use default (spawn on Windows)
         })
-        logger.info("🔧 Applied CPU memory optimizations to data loading")
+        logger.info(
+            "⚡ Applied GPU-optimized data loading for maximum performance")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get(

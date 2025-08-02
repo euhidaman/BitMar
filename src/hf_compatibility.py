@@ -244,26 +244,163 @@ class BitMarForCausalLM(PreTrainedModel):
 AutoConfig.register("bitmar", BitMarConfig)
 AutoModel.register(BitMarConfig, BitMarForCausalLM)
 
+# Also register for AutoModelForCausalLM compatibility
+try:
+    from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification
+    AutoModelForCausalLM.register(BitMarConfig, BitMarForCausalLM)
+    logger.info("✅ BitMarForCausalLM registered successfully")
+except ImportError:
+    logger.warning("AutoModelForCausalLM not available")
+
+
+class BitMarForSequenceClassification(PreTrainedModel):
+    """
+    BitMar model for sequence classification tasks (GLUE, etc.)
+    Compatible with AutoModelForSequenceClassification
+    """
+    config_class = BitMarConfig
+
+    def __init__(self, config):
+        super().__init__(config)
+
+        # Convert config to BitMar format
+        bitmar_config = {
+            'vocab_size': config.vocab_size,
+            'text_encoder_dim': config.text_encoder_dim,
+            'text_encoder_layers': config.text_encoder_layers,
+            'text_encoder_heads': config.text_encoder_heads,
+            'text_decoder_dim': config.text_decoder_dim,
+            'text_decoder_layers': config.text_decoder_layers,
+            'text_decoder_heads': config.text_decoder_heads,
+            'vision_encoder_dim': config.vision_encoder_dim,
+            'vision_latent_size': config.vision_latent_size,
+            'vision_hidden_size': config.vision_hidden_size,
+            'fusion_hidden_size': config.fusion_hidden_size,
+            'fusion_num_heads': config.fusion_num_heads,
+            'fusion_num_layers': config.fusion_num_layers,
+            'memory_size': config.memory_size,
+            'episode_dim': config.episode_dim,
+            'memory_alpha': config.memory_alpha,
+            'max_seq_len': config.max_seq_len,
+            'dropout': config.dropout,
+            'text_encoder_name': config.text_encoder_name,
+            'direct_writing': config.direct_writing,
+            'memory_compression': config.memory_compression,
+            'vision_compression_method': config.vision_compression_method,
+            'vision_spatial_pooling': config.vision_spatial_pooling,
+            'vision_pool_size': config.vision_pool_size,
+        }
+
+        # Create the actual BitMar model
+        self.bitmar = BitMarModel(bitmar_config)
+
+        # Add classification head
+        self.num_labels = getattr(config, 'num_labels', 2)
+        self.classifier = nn.Linear(config.text_decoder_dim, self.num_labels)
+
+        # Store config for easy access
+        self.bitmar_config = bitmar_config
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        vision_features: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        **kwargs
+    ):
+        """
+        Forward pass for sequence classification
+        """
+        if input_ids is None:
+            raise ValueError("input_ids is required")
+
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
+        # For text-only evaluation, create dummy vision features
+        if vision_features is None:
+            batch_size = input_ids.shape[0]
+            device = input_ids.device
+            vision_features = torch.zeros(
+                batch_size,
+                self.bitmar_config['vision_latent_size'],
+                device=device,
+                dtype=torch.float32
+            )
+
+        # Call BitMar forward to get text representations
+        outputs = self.bitmar(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            vision_features=vision_features,
+            labels=None,  # Don't compute LM loss
+            mode="inference"
+        )
+
+        # Get the text features for classification
+        # Use the last hidden state or pooled output
+        if 'text_features' in outputs:
+            pooled_output = outputs['text_features'].mean(
+                dim=1)  # Mean pooling
+        elif 'text_latent' in outputs:
+            pooled_output = outputs['text_latent']
+        else:
+            # Fallback: use the logits and pool them
+            pooled_output = outputs['logits'].mean(dim=1)
+
+        # Apply classification head
+        logits = self.classifier(pooled_output)
+
+        loss = None
+        if labels is not None:
+            if self.num_labels == 1:
+                # Regression task
+                loss_fct = nn.MSELoss()
+                loss = loss_fct(logits.squeeze(), labels.squeeze())
+            else:
+                # Classification task
+                loss_fct = nn.CrossEntropyLoss()
+                loss = loss_fct(
+                    logits.view(-1, self.num_labels), labels.view(-1))
+
+        from transformers.modeling_outputs import SequenceClassifierOutput
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=None,
+            attentions=None,
+        )
+
+
+# Register sequence classification model
+try:
+    AutoModelForSequenceClassification.register(
+        BitMarConfig, BitMarForSequenceClassification)
+    logger.info("✅ BitMarForSequenceClassification registered successfully")
+except ImportError:
+    logger.warning("AutoModelForSequenceClassification not available")
+
 
 class BitMarProcessor:
     """
     Custom processor for BitMar model compatible with 2024 evaluation pipeline
     Handles both text and vision inputs
     """
-    
+
     def __init__(self, tokenizer, image_processor=None):
         self.tokenizer = tokenizer
         self.image_processor = image_processor
-        
+
     def __call__(self, text=None, images=None, return_tensors="pt", **kwargs):
         """Process inputs for BitMar model"""
         result = {}
-        
+
         # Process text
         if text is not None:
             if isinstance(text, str):
                 text = [text]
-            
+
             tokenized = self.tokenizer(
                 text,
                 return_tensors=return_tensors,
@@ -272,16 +409,18 @@ class BitMarProcessor:
                 **kwargs
             )
             result.update(tokenized)
-        
+
         # Process images
         if images is not None:
             if isinstance(images, Image.Image):
                 images = [images]
-            
+
             # Simple image processing - convert to tensors
             if self.image_processor is not None:
-                vision_features = self.image_processor(images, return_tensors=return_tensors)
-                result['vision_features'] = vision_features.get('pixel_values', vision_features)
+                vision_features = self.image_processor(
+                    images, return_tensors=return_tensors)
+                result['vision_features'] = vision_features.get(
+                    'pixel_values', vision_features)
             else:
                 # Default processing: resize and normalize
                 processed_images = []
@@ -291,11 +430,12 @@ class BitMarProcessor:
                     # Resize to 224x224 and normalize
                     img = img.resize((224, 224))
                     img_array = np.array(img) / 255.0
-                    img_tensor = torch.tensor(img_array).permute(2, 0, 1).float()
+                    img_tensor = torch.tensor(
+                        img_array).permute(2, 0, 1).float()
                     processed_images.append(img_tensor)
-                
+
                 result['vision_features'] = torch.stack(processed_images)
-        
+
         return result
 
 
@@ -304,18 +444,18 @@ class BitMarEvalModel:
     BitMar model wrapper for DevBench evaluation (2024 pipeline)
     Compatible with the EvalModel interface expected by DevBench
     """
-    
+
     def __init__(self, model, processor=None, device="cpu"):
         self.device = device
         self.model = model.to(device)
         self.processor = processor
         self.tokenizer = processor.tokenizer if processor else None
-        
+
         # Required methods for DevBench
         self.get_image_features = self.get_all_image_feats
         self.get_text_features = self.get_all_text_feats
         self.get_similarity_scores = self.get_all_sim_scores
-    
+
     def get_all_sim_scores(self, dataloader):
         """
         Gets image-text similarity scores from a dataloader using BitMar model
@@ -327,34 +467,35 @@ class BitMarEvalModel:
                 num_images = len(d["images"])
                 num_texts = len(d["text"])
                 sims = np.zeros((num_images, num_texts))
-                
+
                 for i, image in enumerate(d["images"]):
                     if image.mode != 'RGB':
                         image = image.convert('RGB')
-                    
+
                     for j, text in enumerate(d["text"]):
                         # Prepare inputs for each image-text pair
                         prompt = f"The caption for this image is: {text}."
-                        encoding = self.processor(images=image, text=prompt, return_tensors="pt")
-                        
+                        encoding = self.processor(
+                            images=image, text=prompt, return_tensors="pt")
+
                         # Move to device
                         for key in encoding:
                             if torch.is_tensor(encoding[key]):
                                 encoding[key] = encoding[key].to(self.device)
-                        
+
                         # Set labels for loss computation
                         encoding['labels'] = encoding['input_ids']
-                        
+
                         # Forward pass
                         outputs = self.model(**encoding)
-                        
+
                         # Use negative loss as similarity score
                         sims[i, j] = -outputs['loss'].detach().cpu().numpy()
-                
+
                 all_sims.append(sims)
-        
+
         return np.stack(all_sims, axis=0)
-    
+
     def get_all_image_feats(self, dataloader):
         """
         Gets image features from a dataloader
@@ -365,31 +506,33 @@ class BitMarEvalModel:
             for d in tqdm(dataloader, desc="Processing data"):
                 images_rgb = [image.convert("RGB") for image in d["images"]]
                 dummy_texts = [" "] * len(images_rgb)
-                
-                encoding = self.processor(images=images_rgb, text=dummy_texts, return_tensors="pt")
-                
+
+                encoding = self.processor(
+                    images=images_rgb, text=dummy_texts, return_tensors="pt")
+
                 # Move to device
                 for key in encoding:
                     if torch.is_tensor(encoding[key]):
                         encoding[key] = encoding[key].to(self.device)
-                
+
                 encoding["labels"] = encoding["input_ids"]
-                
+
                 # Get hidden states from the model
                 outputs = self.model(**encoding, output_hidden_states=True)
-                
+
                 # Extract features from last hidden state
                 if hasattr(outputs, 'hidden_states') and outputs.hidden_states:
                     hidden_states = outputs.hidden_states[-1]
                 else:
                     # Fallback: use the model's vision features
-                    hidden_states = self.model.bitmar.last_vision_features if hasattr(self.model.bitmar, 'last_vision_features') else encoding['vision_features']
-                
+                    hidden_states = self.model.bitmar.last_vision_features if hasattr(
+                        self.model.bitmar, 'last_vision_features') else encoding['vision_features']
+
                 mean_feats = hidden_states.mean(dim=1).detach().cpu().numpy()
                 all_feats.append(mean_feats)
-        
+
         return np.concatenate(all_feats, axis=0)
-    
+
     def get_all_text_feats(self, dataloader):
         """
         Gets text features from a dataloader
@@ -398,33 +541,36 @@ class BitMarEvalModel:
         all_feats = []
         with torch.no_grad():
             for d in tqdm(dataloader, desc="Processing data"):
-                texts = d["text"] if isinstance(d["text"], list) else [d["text"]]
-                
+                texts = d["text"] if isinstance(
+                    d["text"], list) else [d["text"]]
+
                 # Create dummy vision features
                 dummy_vision = torch.zeros(len(texts), 3, 224, 224)
-                
-                encoding = self.processor(images=dummy_vision, text=texts, return_tensors="pt")
-                
+
+                encoding = self.processor(
+                    images=dummy_vision, text=texts, return_tensors="pt")
+
                 # Move to device
                 for key in encoding:
                     if torch.is_tensor(encoding[key]):
                         encoding[key] = encoding[key].to(self.device)
-                
+
                 encoding["labels"] = encoding["input_ids"]
-                
+
                 # Get hidden states from the model
                 outputs = self.model(**encoding, output_hidden_states=True)
-                
+
                 # Extract text features
                 if hasattr(outputs, 'hidden_states') and outputs.hidden_states:
                     hidden_states = outputs.hidden_states[-1]
                 else:
                     # Fallback: use text embeddings
-                    hidden_states = self.model.bitmar.last_text_features if hasattr(self.model.bitmar, 'last_text_features') else encoding['input_ids']
-                
+                    hidden_states = self.model.bitmar.last_text_features if hasattr(
+                        self.model.bitmar, 'last_text_features') else encoding['input_ids']
+
                 mean_feats = hidden_states.mean(dim=1).detach().cpu().numpy()
                 all_feats.append(mean_feats)
-        
+
         return np.concatenate(all_feats, axis=0)
 
 
@@ -462,10 +608,10 @@ def save_bitmar_as_hf_model(
     # Save tokenizer if provided
     if tokenizer is not None:
         tokenizer.save_pretrained(save_dir)
-        
+
         # Create and save processor for 2024 evaluation pipeline
         processor = BitMarProcessor(tokenizer=tokenizer)
-        
+
         # Save processor configuration
         processor_config = {
             "processor_class": "BitMarProcessor",
@@ -473,10 +619,10 @@ def save_bitmar_as_hf_model(
             "feature_extractor_class": None,
             "image_processor_class": None
         }
-        
+
         with open(save_dir / "preprocessor_config.json", "w") as f:
             json.dump(processor_config, f, indent=2)
-    
+
     # Create a model card with evaluation instructions
     model_card_content = f"""---
 license: mit
@@ -534,14 +680,15 @@ processor = BitMarProcessor(tokenizer=tokenizer)
 eval_model = BitMarEvalModel(model=model, processor=processor, device="cuda")
 ```
 """
-    
+
     with open(save_dir / "README.md", "w") as f:
         f.write(model_card_content)
 
     logger.info(f"✅ BitMar model saved in HuggingFace format to: {save_dir}")
     logger.info(f"📋 Model card created with evaluation instructions")
-    logger.info(f"🔧 Processor configuration saved for 2024 pipeline compatibility")
-    
+    logger.info(
+        f"🔧 Processor configuration saved for 2024 pipeline compatibility")
+
     return hf_model
 
 
