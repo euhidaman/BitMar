@@ -779,7 +779,7 @@ class BitMarModel(nn.Module):
             config['text_encoder_dim'],
             config['episode_dim']
         )
-        
+
         self.memory_to_decoder = BitNetLinear(
             config['episode_dim'],
             config['fusion_hidden_size']
@@ -811,10 +811,10 @@ class BitMarModel(nn.Module):
                 # Create projection layer on the fly for compressed features
                 self.compressed_vision_proj = BitNetLinear(64, self.config['vision_encoder_dim']).to(vision_features.device)
                 logger.info(f"Created compressed vision projection: 64 → {self.config['vision_encoder_dim']}")
-            
+
             # Project compressed features to expected dimension
             vision_features = self.compressed_vision_proj(vision_features)
-        
+
         # Now process with normal vision encoder
         vision_latent = self.vision_encoder(
             vision_features
@@ -835,8 +835,24 @@ class BitMarModel(nn.Module):
         # Project text to episode dimension
         text_projected = self.text_to_episode(text_pooled)
 
-        # Combine text and vision features
-        episode = text_projected + vision_latent  # Simple addition fusion
+        # Handle dimension mismatch between text and vision features
+        # Vision features might be compressed (e.g., 64D) while text is projected to episode_dim (e.g., 96D)
+        if text_projected.shape[-1] != vision_latent.shape[-1]:
+            # Create or use a vision projection layer to match text dimensions
+            if not hasattr(self, 'vision_to_episode'):
+                # Dynamically create the projection layer
+                vision_dim = vision_latent.shape[-1]
+                episode_dim = text_projected.shape[-1]
+                self.vision_to_episode = BitNetLinear(vision_dim, episode_dim).to(vision_latent.device)
+                logger.info(f"Created vision projection layer: {vision_dim}D -> {episode_dim}D")
+
+            # Project vision features to match text dimensions
+            vision_projected = self.vision_to_episode(vision_latent)
+        else:
+            vision_projected = vision_latent
+
+        # Combine text and vision features (now with matching dimensions)
+        episode = text_projected + vision_projected  # Simple addition fusion
 
         return episode
 
