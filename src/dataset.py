@@ -504,26 +504,29 @@ class BabyLMDataModule:
         self.config = config
         self.tokenizer_name = config.get('text_encoder_name', 'gpt2')
 
-        # Dataset parameters
-        self.dataset_dir = config['dataset_dir']
-        self.max_seq_length = config['max_seq_length']
+        # Dataset parameters with proper fallbacks
+        self.dataset_dir = config.get('dataset_dir', '../babylm_dataset')
+        self.max_seq_length = config.get('max_seq_length', 256)
         self.hf_token = config.get('hf_token') or os.getenv('HF_TOKEN', '')
 
         # Mixed training parameters
         self.use_mixed_training = config.get('use_mixed_training', False)
         self.text_ratio = config.get('text_ratio', 0.3)
 
-        # DataLoader parameters
-        self.batch_size = config['batch_size']
-        self.num_workers = config['num_workers']
-        self.pin_memory = config['pin_memory']
+        # DataLoader parameters with proper fallbacks
+        self.batch_size = config.get('batch_size', 16)
+        self.num_workers = config.get('num_workers', 4)
+        self.pin_memory = config.get('pin_memory', True)
         self.persistent_workers = config.get('persistent_workers', True)
 
         # Validation datasets
         self.validation_datasets = config.get('validation_datasets', [
-            'ewok-core/ewok-core-1.0',
-            'facebook/winoground'
+            'glue/sst2'  # Use simpler, more reliable validation dataset
         ])
+
+        # Validate critical paths
+        if not os.path.exists(self.dataset_dir):
+            logger.warning(f"Dataset directory {self.dataset_dir} does not exist. Please ensure babylm_dataset is available.")
 
         # Datasets
         self.train_dataset = None

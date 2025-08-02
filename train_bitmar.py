@@ -264,6 +264,27 @@ class BitMarTrainer:
         # Enhanced data config for 10-epoch training
         enhanced_data_config = self.config['data'].copy()
 
+        # Ensure all required keys are included with proper fallbacks
+        required_keys = {
+            'dataset_dir': "../babylm_dataset",
+            'max_seq_length': 256,
+            'batch_size': 16,
+            'num_workers': 4,
+            'pin_memory': True,
+            'text_encoder_name': 'gpt2',
+            'persistent_workers': True,
+            'validation_datasets': ['glue/sst2']
+        }
+
+        for key, fallback_value in required_keys.items():
+            if key not in enhanced_data_config:
+                logger.warning(f"Missing required key '{key}' in config, using fallback: {fallback_value}")
+                enhanced_data_config[key] = fallback_value
+
+        logger.info(f"Using dataset directory: {enhanced_data_config['dataset_dir']}")
+        logger.info(f"Using batch size: {enhanced_data_config['batch_size']}")
+        logger.info(f"Using max sequence length: {enhanced_data_config['max_seq_length']}")
+
         # Apply quick training mode settings
         if quick_mode.get('enabled', False):
             logger.info("🚀 Applying quick training mode data settings...")
@@ -299,6 +320,9 @@ class BitMarTrainer:
             self.adaptive_batch_scaling = False
 
         logger.info(f"Enhanced training - Text ratio: {enhanced_data_config['text_ratio']:.1%}")
+
+        # Debug: Log the keys in enhanced_data_config
+        logger.info(f"Enhanced data config keys: {list(enhanced_data_config.keys())}")
 
         self.data_module = create_data_module(enhanced_data_config)
         self.data_module.setup(max_samples=max_samples)
@@ -1033,8 +1057,8 @@ class BitMarTrainer:
                             if torch.is_tensor(value):
                                 try:
                                     preserved_entry[key] = value.to(self.device).clone()
-                                except:
-                                    # Skip if can't move to device
+                                except Exception:
+                                    # Skip if can't move to device - don't log the exception details
                                     pass
                             else:
                                 preserved_entry[key] = value
@@ -1042,24 +1066,26 @@ class BitMarTrainer:
                             preserved_state[param_id] = preserved_entry
 
             # Recreate optimizer
-            old_optimizer_type = self.config.get('optimizer', 'adamw').lower()
-            self.setup_optimizer()
+            self.setup_advanced_optimizer()
 
             # Restore learning rate
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = current_lr
 
-            # Try to restore preserved state
+            # Try to restore preserved state with better error handling
             if preserved_state and hasattr(self.optimizer, 'state'):
                 try:
-                    # Only restore if the parameter structure matches
-                    param_ids = list(self.optimizer.state_dict()['param_groups'][0]['params']);
-                    for i, param_id in enumerate(param_ids):
-                        if i < len(preserved_state):
-                            old_param_id = list(preserved_state.keys())[i]
-                            if old_param_id in preserved_state:
-                                # Restore the state for this parameter
-                                self.optimizer.state[param_id] = preserved_state[old_param_id]
+                    # Get current parameter list
+                    current_params = []
+                    for param_group in self.optimizer.param_groups:
+                        current_params.extend(param_group['params'])
+
+                    # Only restore state for parameters that still exist
+                    old_param_list = list(preserved_state.keys())
+                    for i, param in enumerate(current_params):
+                        if i < len(old_param_list) and old_param_list[i] in preserved_state:
+                            self.optimizer.state[param] = preserved_state[old_param_list[i]]
+
                 except Exception as restore_e:
                     logger.warning(f"Could not restore optimizer state: {restore_e}")
 
@@ -1068,7 +1094,7 @@ class BitMarTrainer:
         except Exception as e:
             logger.error(f"Optimizer recreation failed: {e}")
             # Fallback to basic setup
-            self.setup_optimizer()
+            self.setup_advanced_optimizer()
 
     def _force_model_device_consistency(self):
         """Aggressively force model to stay on target device"""
