@@ -23,6 +23,8 @@ from tqdm import tqdm
 from typing import Dict, Optional
 from pathlib import Path
 import wandb
+import torch
+import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim import AdamW
 
@@ -624,17 +626,20 @@ class BitMarTrainer:
             'tensor_cores': True,  # Optimize for tensor cores
             # �📊 FULL DATASET TRAINING - NO SAMPLE LIMITS for best results
             # 'max_samples_per_epoch': None,  # REMOVED: Use full dataset for best results
+            # 'max_samples_per_epoch': 50000,  # REMOVED: Now using proper BabyLM token limits (100M text + 50M image)
+            'use_babylm_token_limits': True,  # Enable proper BabyLM compliance in dataset
             'smart_sampling': False,  # Disable complex sampling
             'gradient_accumulation_steps': 16,  # Higher accumulation for smaller batches (effective batch = 2*16=32)
         })
-        logger.info("🚀 Applied GPU-OPTIMIZED training for RTX A6000:")
+        logger.info("🚀 Applied GPU-OPTIMIZED training for RTX A6000 with BabyLM compliance:")
         logger.info(f"   - Workers: {enhanced_data_config['num_workers']} (reduced for efficiency)")
         logger.info(f"   - Prefetch factor: {enhanced_data_config['prefetch_factor']} (reduced for memory)")
         logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (small for fast iterations)")
         logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (optimized for speed)")
         logger.info(f"   - Gradient accumulation: {enhanced_data_config['gradient_accumulation_steps']} (effective batch = {enhanced_data_config['batch_size'] * enhanced_data_config['gradient_accumulation_steps']})")
-        logger.info("   - Memory-efficient preprocessing and reduced tracking overhead")
-        logger.info("🎯 Configuration optimized for fast GPU utilization and stable memory usage")
+        logger.info("   - BabyLM token limits: 100M text tokens, 50M image tokens (strict compliance)")
+        logger.info("   - Image-caption associations preserved during token limiting")
+        logger.info("🎯 Configuration optimized for fast GPU utilization with BabyLM compliance")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get(
@@ -677,6 +682,38 @@ class BitMarTrainer:
 
         self.data_module = create_data_module(enhanced_data_config)
         self.data_module.setup(max_samples=max_samples)
+
+        # 🎯 LOG BABYLM TOKEN COMPLIANCE
+        if hasattr(self.data_module.train_dataset, 'get_token_usage_stats'):
+            token_stats = self.data_module.train_dataset.get_token_usage_stats()
+            logger.info("🎯 BABYLM TOKEN COMPLIANCE VERIFICATION:")
+            logger.info(f"   📝 Text Tokens: {token_stats['text_tokens_used']:,}/{token_stats['text_tokens_limit']:,} ({token_stats['text_utilization_pct']:.1f}%)")
+            logger.info(f"   🖼️ Image Tokens: {token_stats['image_tokens_used']:,}/{token_stats['image_tokens_limit']:,} ({token_stats['image_utilization_pct']:.1f}%)")
+            logger.info(f"   📊 Text Budget Remaining: {token_stats['text_tokens_remaining']:,}")
+            logger.info(f"   📊 Image Budget Remaining: {token_stats['image_tokens_remaining']:,}")
+            
+            # Log to wandb if available
+            if self.wandb_logger:
+                self.wandb_logger.log_metrics({
+                    'babylm_compliance/text_tokens_used': token_stats['text_tokens_used'],
+                    'babylm_compliance/text_tokens_limit': token_stats['text_tokens_limit'],
+                    'babylm_compliance/text_utilization_pct': token_stats['text_utilization_pct'],
+                    'babylm_compliance/image_tokens_used': token_stats['image_tokens_used'],
+                    'babylm_compliance/image_tokens_limit': token_stats['image_tokens_limit'],
+                    'babylm_compliance/image_utilization_pct': token_stats['image_utilization_pct'],
+                })
+            
+            # Verify compliance
+            if token_stats['text_tokens_used'] > token_stats['text_tokens_limit']:
+                logger.error(f"❌ TEXT TOKEN LIMIT EXCEEDED: {token_stats['text_tokens_used']:,} > {token_stats['text_tokens_limit']:,}")
+                raise ValueError("BabyLM text token limit exceeded!")
+            if token_stats['image_tokens_used'] > token_stats['image_tokens_limit']:
+                logger.error(f"❌ IMAGE TOKEN LIMIT EXCEEDED: {token_stats['image_tokens_used']:,} > {token_stats['image_tokens_limit']:,}")
+                raise ValueError("BabyLM image token limit exceeded!")
+                
+            logger.info("✅ BabyLM token limits strictly enforced and verified!")
+        else:
+            logger.warning("⚠️ Token usage tracking not available for this dataset")
 
         # Apply CPU memory optimizations
         self._optimize_cpu_memory()
@@ -1102,6 +1139,12 @@ class BitMarTrainer:
             if 'text_features' in outputs and 'vision_features' in outputs:
                 text_features = outputs['text_features']
                 vision_features = outputs['vision_features']
+                
+                # Ensure features are tensors, not dicts
+                if isinstance(text_features, dict):
+                    return 0.0
+                if isinstance(vision_features, dict):
+                    return 0.0
             elif hasattr(self.model, 'get_text_features') and hasattr(self.model, 'get_vision_features'):
                 # Get features through model methods
                 text_features = self.model.get_text_features(

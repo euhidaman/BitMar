@@ -88,6 +88,46 @@ class BitMarWandbLogger:
             for i, idx in enumerate(top_k_indices):
                 metrics[f'Memory/Top_{i+1}_Slot_Access'] = memory_attn[:, idx].mean().item()
             
+        # Cross-modal similarity tracking
+        if 'cross_modal_similarity' in outputs:
+            similarity = outputs['cross_modal_similarity']
+            if isinstance(similarity, (int, float)):
+                metrics['CrossModal/Similarity'] = similarity
+            elif hasattr(similarity, 'item'):
+                metrics['CrossModal/Similarity'] = similarity.item()
+                
+        # Component-specific loss tracking
+        if 'text_loss' in outputs:
+            metrics['Loss/Text_Component'] = outputs['text_loss'].item() if hasattr(outputs['text_loss'], 'item') else outputs['text_loss']
+        if 'vision_loss' in outputs:
+            metrics['Loss/Vision_Component'] = outputs['vision_loss'].item() if hasattr(outputs['vision_loss'], 'item') else outputs['vision_loss']
+        if 'fusion_loss' in outputs:
+            metrics['Loss/Fusion_Component'] = outputs['fusion_loss'].item() if hasattr(outputs['fusion_loss'], 'item') else outputs['fusion_loss']
+            
+        # Quadrangle attention patterns
+        if 'attention_patterns' in outputs and outputs['attention_patterns']:
+            patterns = outputs['attention_patterns']
+            if isinstance(patterns, dict):
+                for pattern_name, pattern_weights in patterns.items():
+                    if hasattr(pattern_weights, 'mean'):
+                        metrics[f'QuadrangleAttention/{pattern_name}_mean'] = pattern_weights.mean().item()
+                        metrics[f'QuadrangleAttention/{pattern_name}_std'] = pattern_weights.std().item()
+                        
+        # GPU memory tracking
+        if torch.cuda.is_available():
+            memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+            memory_reserved = torch.cuda.memory_reserved() / 1024**3   # GB
+            metrics['Hardware/GPU_Memory_Allocated_GB'] = memory_allocated
+            metrics['Hardware/GPU_Memory_Reserved_GB'] = memory_reserved
+            
+        # BabyLM token compliance tracking
+        if 'babylm_tokens' in outputs:
+            token_stats = outputs['babylm_tokens']
+            metrics['BabyLM/Text_Tokens_Used'] = token_stats.get('text_used', 0)
+            metrics['BabyLM/Image_Tokens_Used'] = token_stats.get('image_used', 0)
+            metrics['BabyLM/Text_Utilization_Pct'] = token_stats.get('text_util_pct', 0)
+            metrics['BabyLM/Image_Utilization_Pct'] = token_stats.get('image_util_pct', 0)
+            
         # Feature analysis
         if 'text_features' in outputs and outputs['text_features'] is not None:
             text_feat = outputs['text_features']

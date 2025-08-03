@@ -41,12 +41,12 @@ data:
   text_encoder_name: "gpt2"
   max_seq_length: 128 # Increased for better performance
 
-  # DataLoader settings - Optimized for full dataset training
-  batch_size: 32 # Larger batch size for efficiency
-  num_workers: 8 # More workers for faster data loading
+  # DataLoader settings - Optimized for GPU and BabyLM compliance
+  batch_size: 2 # Small batch size for memory efficiency with gradient accumulation
+  num_workers: 4 # Reduced workers for stability
   pin_memory: true
   persistent_workers: true
-  prefetch_factor: 4 # Added for faster data loading
+  prefetch_factor: 2 # Reduced for memory efficiency
 
   # Full dataset training (no sample limits)
   # max_samples: null  # Train on entire dataset for best results
@@ -59,9 +59,9 @@ data:
     - "glue/sst2" # Public dataset, no auth required
 
 training:
-  # Training configuration - 10 EPOCHS FULL DATASET
+  # Training configuration - 10 EPOCHS with BabyLM compliance
   max_epochs: 10
-  accumulate_grad_batches: 4 # Larger effective batch size
+  accumulate_grad_batches: 16 # Higher accumulation for small batch (effective batch = 2*16=32)
   gradient_clip_val: 1.0
   val_check_interval: 1000
   scheduler: "cosine"
@@ -70,8 +70,8 @@ training:
   learning_rate: 0.0002 # Slightly higher LR for faster learning
   weight_decay: 0.01
 
-  # Full dataset settings
-  gradient_accumulation_steps: 4 # Effective batch size = 32 * 4 = 128
+  # GPU optimization settings
+  gradient_accumulation_steps: 16 # Matches accumulate_grad_batches
   save_every_n_epochs: 2 # Save checkpoints every 2 epochs
 
 # Weights & Biases configuration - OPTIMIZED FOR SPEED

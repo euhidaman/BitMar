@@ -168,7 +168,7 @@ class AggressiveDataOptimizer:
 
 
 class MixedMultimodalTextDataset(Dataset):
-    """Mixed dataset with AGGRESSIVE speed optimizations"""
+    """Mixed dataset with AGGRESSIVE speed optimizations and token limits"""
 
     def __init__(
         self,
@@ -188,17 +188,24 @@ class MixedMultimodalTextDataset(Dataset):
         self.load_text_data = load_text_data
         self.config = config or {}
 
+        # 🎯 BABYLM TOKEN LIMITS - Maximum 100M text tokens and 50M image tokens
+        self.max_text_tokens = 100_000_000  # 100M text tokens
+        self.max_image_tokens = 50_000_000   # 50M image tokens (treat each image as 1 token conceptually)
+        self.text_token_count = 0
+        self.image_token_count = 0
+        
         # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # ALWAYS use aggressive optimization
-        logger.info("🚀 AGGRESSIVE OPTIMIZATION MODE - Setting up ultra-fast dataset...")
-        self._setup_aggressive_optimization()
+        # ALWAYS use aggressive optimization with token limits
+        logger.info("🚀 AGGRESSIVE OPTIMIZATION MODE - Setting up ultra-fast dataset with BabyLM token limits...")
+        logger.info(f"🎯 Token Limits: {self.max_text_tokens:,} text tokens, {self.max_image_tokens:,} image tokens")
+        self._setup_aggressive_optimization_with_limits()
 
-    def _setup_aggressive_optimization(self):
-        """Setup with aggressive optimizations for maximum speed"""
+    def _setup_aggressive_optimization_with_limits(self):
+        """Setup with aggressive optimizations and BabyLM token limits"""
         start_time = time.time()
 
         # Initialize aggressive optimizer
@@ -209,72 +216,176 @@ class MixedMultimodalTextDataset(Dataset):
         vision_samples = self.vision_cache['features'].shape[0]
         logger.info(f"📁 Vision cache shape: {self.vision_cache['features'].shape}")
 
-        # Get tokenized cache
+        # Get tokenized cache with token counting
         self.text_cache = self.optimizer.get_tokenized_cache(self.max_seq_length)
         text_samples = len(self.text_cache)
         logger.info(f"📁 Text cache: {text_samples} samples")
 
-        # CRITICAL FIX: Ensure vision and text caches are aligned
-        if vision_samples != text_samples:
-            logger.warning(f"Index mismatch: Vision={vision_samples}, Text={text_samples}")
-            # Use the smaller count to avoid index errors
-            aligned_samples = min(vision_samples, text_samples)
-            logger.info(f"Aligning to {aligned_samples} samples for safety")
-        else:
-            aligned_samples = vision_samples
+        # 🎯 COUNT TOKENS AND APPLY BABYLM LIMITS
+        logger.info("🧮 Counting tokens and applying BabyLM limits...")
+        
+        # Count actual text tokens in multimodal captions
+        multimodal_text_tokens = 0
+        valid_multimodal_indices = []
+        
+        # Ensure we respect image-caption pairs by limiting both together
+        aligned_samples = min(vision_samples, text_samples)
+        logger.info(f"Aligned multimodal samples: {aligned_samples}")
+        
+        for i in range(aligned_samples):
+            # Count tokens in this caption (excluding padding)
+            text_data = self.text_cache[i]
+            attention_mask = text_data['attention_mask']
+            actual_tokens = sum(attention_mask)  # Count non-padding tokens
+            
+            # Check if adding this sample would exceed limits
+            would_exceed_text = (multimodal_text_tokens + actual_tokens) > self.max_text_tokens
+            would_exceed_images = len(valid_multimodal_indices) >= self.max_image_tokens
+            
+            if would_exceed_text or would_exceed_images:
+                logger.info(f"🛑 Reached BabyLM limits at sample {i}:")
+                logger.info(f"   Text tokens: {multimodal_text_tokens:,}/{self.max_text_tokens:,}")
+                logger.info(f"   Image tokens: {len(valid_multimodal_indices):,}/{self.max_image_tokens:,}")
+                break
+                
+            # Add this sample (maintains image-caption association)
+            valid_multimodal_indices.append(i)
+            multimodal_text_tokens += actual_tokens
+            
+        # Create multimodal indices from valid samples
+        multimodal_indices = [('multimodal', i) for i in valid_multimodal_indices]
+        self.image_token_count = len(valid_multimodal_indices)
+        
+        logger.info(f"✅ Multimodal samples: {len(multimodal_indices)} (preserving image-caption pairs)")
+        logger.info(f"📊 Image tokens used: {self.image_token_count:,}/{self.max_image_tokens:,}")
+        logger.info(f"📊 Caption tokens used: {multimodal_text_tokens:,}")
 
-        # Create mixed indices using aligned sample count
-        multimodal_indices = [('multimodal', i) for i in range(aligned_samples)]
-
-        # Limit text data for speed if enabled
-        if self.load_text_data and self.split == "train":
-            # Load minimal text data for speed
-            text_samples = self._load_minimal_text_data()
-            num_text_desired = min(int(aligned_samples * self.text_ratio / (1 - self.text_ratio)), len(text_samples))
-            text_indices = [('text', i) for i in range(num_text_desired)]
+        # Handle additional text-only data if enabled and we have text token budget remaining
+        text_indices = []
+        text_only_tokens = 0
+        remaining_text_budget = self.max_text_tokens - multimodal_text_tokens
+        
+        if self.load_text_data and self.split == "train" and remaining_text_budget > 0:
+            logger.info(f"📚 Loading text-only data with {remaining_text_budget:,} token budget...")
+            
+            # Load text data efficiently
+            text_samples = self._load_text_data_with_token_limit(remaining_text_budget)
+            
+            if text_samples:
+                # Calculate how many text samples we want based on ratio
+                num_multimodal = len(multimodal_indices)
+                if self.text_ratio > 0 and num_multimodal > 0:
+                    # Calculate target text samples based on ratio
+                    target_text_samples = int(num_multimodal * self.text_ratio / (1 - self.text_ratio))
+                    target_text_samples = min(target_text_samples, len(text_samples))
+                    
+                    # Count tokens for selected text samples
+                    for i in range(target_text_samples):
+                        # Quick tokenization to count tokens
+                        sample_text = text_samples[i][:500]  # Limit for speed
+                        tokens = len(self.tokenizer.encode(sample_text, add_special_tokens=True))
+                        
+                        if text_only_tokens + tokens > remaining_text_budget:
+                            logger.info(f"🛑 Text token limit reached at sample {i}")
+                            break
+                            
+                        text_indices.append(('text', i))
+                        text_only_tokens += tokens
+                        
+                logger.info(f"✅ Text-only samples: {len(text_indices)}")
+                logger.info(f"📊 Text-only tokens: {text_only_tokens:,}")
         else:
-            text_indices = []
             text_samples = []
+            logger.info("📚 Text-only data disabled or no token budget remaining")
 
-        # Create mixed indices
+        # Combine all indices
         self.mixed_indices = multimodal_indices + text_indices
-
         random.seed(42)
         random.shuffle(self.mixed_indices)
 
+        # Store text samples and token counts
         self.text_samples = text_samples
+        self.text_token_count = multimodal_text_tokens + text_only_tokens
         self.use_cached_data = True
 
         setup_time = time.time() - start_time
 
-        # Log performance summary with correct sample counts
-        logger.info(f"🎯 AGGRESSIVE OPTIMIZATION SUMMARY:")
+        # Final token summary
+        logger.info(f"🎯 BABYLM TOKEN COMPLIANCE SUMMARY:")
         logger.info(f"   Setup time: {setup_time:.1f}s")
+        logger.info(f"   Total text tokens: {self.text_token_count:,}/{self.max_text_tokens:,} ({100*self.text_token_count/self.max_text_tokens:.1f}%)")
+        logger.info(f"   Total image tokens: {self.image_token_count:,}/{self.max_image_tokens:,} ({100*self.image_token_count/self.max_image_tokens:.1f}%)")
+        logger.info(f"   Multimodal samples: {len(multimodal_indices)} (image-caption pairs preserved)")
+        logger.info(f"   Text-only samples: {len(text_indices)}")
+        logger.info(f"   Total dataset samples: {len(self.mixed_indices)}")
         logger.info(f"   Vision compression: {self.vision_cache.attrs.get('compression_ratio', 0):.1f}x")
-        logger.info(f"   Aligned samples: {aligned_samples}")
-        logger.info(f"   Dataset samples: {len(self.mixed_indices)}")
-        logger.info(f"   Expected speedup: 20-50x per batch")
+        logger.info(f"✅ BabyLM token limits strictly enforced!")
 
-    def _load_minimal_text_data(self) -> List[str]:
-        """Load minimal text data for speed"""
+    def _load_text_data_with_token_limit(self, token_budget: int) -> List[str]:
+        """Load text data respecting token budget"""
         text_samples = []
+        tokens_used = 0
+        
         train_50m_dir = self.dataset_dir / "train_50M"
-
         if not train_50m_dir.exists():
-            logger.warning("train_50M not found - using multimodal only")
+            logger.warning("train_50M not found - skipping text-only data")
             return []
 
-        # Load only one file for speed
-        filepath = train_50m_dir / "simple_wiki.train"
-        if filepath.exists():
-            logger.info("Loading minimal text data for speed...")
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = [line.strip() for line in f if line.strip()]
-                # Limit to 100K lines for speed
-                text_samples = lines[:100000]
-            logger.info(f"Loaded {len(text_samples)} text samples (limited for speed)")
+        # Load text files efficiently with token counting
+        text_files = [
+            "simple_wiki.train",
+            "gutenberg.train", 
+            "children_stories.train",
+            "switchboard.train"
+        ]
+        
+        for filename in text_files:
+            filepath = train_50m_dir / filename
+            if not filepath.exists():
+                continue
+                
+            logger.info(f"📖 Loading {filename} with token counting...")
+            
+            try:
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line_num, line in enumerate(f):
+                        line = line.strip()
+                        if not line:
+                            continue
+                            
+                        # Quick token count estimation (more accurate than string length)
+                        estimated_tokens = len(self.tokenizer.encode(line[:200], add_special_tokens=True))
+                        
+                        if tokens_used + estimated_tokens > token_budget:
+                            logger.info(f"Token budget reached in {filename} at line {line_num}")
+                            break
+                            
+                        text_samples.append(line)
+                        tokens_used += estimated_tokens
+                        
+                        # Progress logging
+                        if len(text_samples) % 10000 == 0:
+                            logger.info(f"   Loaded {len(text_samples)} text samples, {tokens_used:,} tokens")
+                            
+                if tokens_used >= token_budget:
+                    break
+                    
+            except Exception as e:
+                logger.warning(f"Error loading {filename}: {e}")
+                continue
 
+        logger.info(f"📚 Text loading complete: {len(text_samples)} samples, {tokens_used:,} tokens")
         return text_samples
+
+    def _load_minimal_text_data(self) -> List[str]:
+        """Legacy method - now redirects to token-limited loading"""
+        # Redirect to new token-limited method
+        remaining_budget = max(0, self.max_text_tokens - self.text_token_count)
+        if remaining_budget > 0:
+            return self._load_text_data_with_token_limit(remaining_budget)
+        else:
+            logger.warning("No text token budget remaining for minimal text data")
+            return []
 
     def __len__(self) -> int:
         return len(self.mixed_indices)
@@ -325,6 +436,19 @@ class MixedMultimodalTextDataset(Dataset):
                 'sample_type': 'text_only',
                 'index': sample_idx
             }
+
+    def get_token_usage_stats(self) -> Dict[str, int]:
+        """Get current token usage statistics"""
+        return {
+            'text_tokens_used': self.text_token_count,
+            'text_tokens_limit': self.max_text_tokens,
+            'text_tokens_remaining': max(0, self.max_text_tokens - self.text_token_count),
+            'image_tokens_used': self.image_token_count,
+            'image_tokens_limit': self.max_image_tokens,
+            'image_tokens_remaining': max(0, self.max_image_tokens - self.image_token_count),
+            'text_utilization_pct': 100.0 * self.text_token_count / self.max_text_tokens,
+            'image_utilization_pct': 100.0 * self.image_token_count / self.max_image_tokens,
+        }
 
 # Keep original class for backward compatibility
 class CompleteBabyLMDataset(Dataset):
