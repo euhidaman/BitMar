@@ -1,7 +1,7 @@
 """
 BitMar Model Architecture
 BitNet-quantized Vision-Language Episodic Memory Transformer
-Combines 1.58-bit quantization, DiNOv2 vision, and Larimar episodic memory
+Combines 1.58-bit quantization, DiNOv2 vision, Larimar episodic memory, and QFormer Quadrangle Attention
 """
 
 import torch
@@ -12,6 +12,9 @@ from typing import Dict, List, Optional, Tuple, Union
 from transformers import AutoTokenizer
 import math
 import logging
+
+# Import our new Quadrangle Attention implementation
+from .quadrangle_attention import QuadrangleAttention, QuadrangleTransformerBlock, EpisodicQuadrangleProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -543,8 +546,9 @@ class EpisodicMemory(nn.Module):
 
 class LearnableQueryFusion(nn.Module):
     """
-    QFormer-inspired Cross-modal fusion using learnable queries
-    Bridges text and vision modalities through learned query tokens
+    Enhanced QFormer-inspired Cross-modal fusion using Quadrangle Attention
+    Bridges text and vision modalities through quadrangle attention patterns
+    Integrates with episodic memory for human-like learning
     """
 
     def __init__(
@@ -555,7 +559,9 @@ class LearnableQueryFusion(nn.Module):
         num_queries: int = 32,
         num_heads: int = 8,
         num_layers: int = 2,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        use_quadrangle: bool = True,
+        episodic_memory_size: int = 1024
     ):
         super().__init__()
         self.text_dim = text_dim
@@ -564,6 +570,7 @@ class LearnableQueryFusion(nn.Module):
         self.num_queries = num_queries
         self.num_heads = num_heads
         self.num_layers = num_layers
+        self.use_quadrangle = use_quadrangle
 
         # Learnable query tokens - these bridge text and vision
         self.query_tokens = nn.Parameter(
@@ -574,56 +581,33 @@ class LearnableQueryFusion(nn.Module):
         self.text_proj = BitNetLinear(text_dim, hidden_dim)
         self.vision_proj = BitNetLinear(vision_dim, hidden_dim)
 
-        # Query-based attention layers
-        self.query_layers = nn.ModuleList()
-        for i in range(num_layers):
-            layer = nn.ModuleDict({
-                # Query-to-Text attention (queries attend to text)
-                'q2t_attention': BitNetAttention(
-                    dim=hidden_dim,
-                    num_heads=num_heads,
-                    dropout=dropout
-                ),
-                'q2t_norm': nn.LayerNorm(hidden_dim),
+        if self.use_quadrangle:
+            # Use Quadrangle Attention with episodic memory integration
+            self.quadrangle_processor = EpisodicQuadrangleProcessor(
+                dim=hidden_dim,
+                num_heads=num_heads,
+                num_layers=num_layers,
+                memory_size=episodic_memory_size,
+                episode_dim=hidden_dim // 2,
+                memory_alpha=0.1
+            )
+            
+            # Query integration layers for quadrangle output
+            self.query_integration = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.GELU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(hidden_dim, hidden_dim)
+                ) for _ in range(num_layers)
+            ])
+            
+        else:
+            # Fallback to original query-based attention layers
+            self._init_original_attention_layers(dropout)
 
-                # Query-to-Vision attention (queries attend to vision)
-                'q2v_attention': BitNetAttention(
-                    dim=hidden_dim,
-                    num_heads=num_heads,
-                    dropout=dropout
-                ),
-                'q2v_norm': nn.LayerNorm(hidden_dim),
-
-                # Query self-attention (queries attend to each other)
-                'self_attention': BitNetAttention(
-                    dim=hidden_dim,
-                    num_heads=num_heads,
-                    dropout=dropout
-                ),
-                'self_norm': nn.LayerNorm(hidden_dim),
-
-                # MLP for query refinement
-                'mlp': BitNetMLP(hidden_dim, hidden_dim * 4, dropout),
-                'mlp_norm': nn.LayerNorm(hidden_dim)
-            })
-            self.query_layers.append(layer)
-
-        # Text-to-Query attention (text tokens attend to learned queries)
-        self.text2query_layers = nn.ModuleList()
-        for i in range(num_layers):
-            layer = nn.ModuleDict({
-                'attention': BitNetAttention(
-                    dim=hidden_dim,
-                    num_heads=num_heads,
-                    dropout=dropout
-                ),
-                'norm': nn.LayerNorm(hidden_dim),
-                'mlp': BitNetMLP(hidden_dim, hidden_dim * 4, dropout),
-                'mlp_norm': nn.LayerNorm(hidden_dim)
-            })
-            self.text2query_layers.append(layer)
-
-        # Output projection
+        
+        # Query-based output projection
         self.output_proj = BitNetLinear(hidden_dim, hidden_dim)
 
         # Learnable position embeddings for queries
@@ -631,15 +615,68 @@ class LearnableQueryFusion(nn.Module):
             torch.randn(1, num_queries, hidden_dim))
         nn.init.trunc_normal_(self.query_pos_embed, std=0.02)
 
+    def _init_original_attention_layers(self, dropout: float):
+        """Initialize original query-based attention layers for fallback"""
+        # Query-based attention layers
+        self.query_layers = nn.ModuleList()
+        for i in range(self.num_layers):
+            layer = nn.ModuleDict({
+                # Query-to-Text attention (queries attend to text)
+                'q2t_attention': BitNetAttention(
+                    dim=self.hidden_dim,
+                    num_heads=self.num_heads,
+                    dropout=dropout
+                ),
+                'q2t_norm': nn.LayerNorm(self.hidden_dim),
+
+                # Query-to-Vision attention (queries attend to vision)
+                'q2v_attention': BitNetAttention(
+                    dim=self.hidden_dim,
+                    num_heads=self.num_heads,
+                    dropout=dropout
+                ),
+                'q2v_norm': nn.LayerNorm(self.hidden_dim),
+
+                # Query self-attention (queries attend to each other)
+                'self_attention': BitNetAttention(
+                    dim=self.hidden_dim,
+                    num_heads=self.num_heads,
+                    dropout=dropout
+                ),
+                'self_norm': nn.LayerNorm(self.hidden_dim),
+
+                # MLP for query refinement
+                'mlp': BitNetMLP(self.hidden_dim, self.hidden_dim * 4, dropout),
+                'mlp_norm': nn.LayerNorm(self.hidden_dim)
+            })
+            self.query_layers.append(layer)
+
+        # Text-to-Query attention (text tokens attend to learned queries)
+        self.text2query_layers = nn.ModuleList()
+        for i in range(self.num_layers):
+            layer = nn.ModuleDict({
+                'attention': BitNetAttention(
+                    dim=self.hidden_dim,
+                    num_heads=self.num_heads,
+                    dropout=dropout
+                ),
+                'norm': nn.LayerNorm(self.hidden_dim),
+                'mlp': BitNetMLP(self.hidden_dim, self.hidden_dim * 4, dropout),
+                'mlp_norm': nn.LayerNorm(self.hidden_dim)
+            })
+            self.text2query_layers.append(layer)
+
     def forward(
         self,
         text_features: torch.Tensor,
-        vision_features: torch.Tensor
+        vision_features: torch.Tensor,
+        mode: str = "train"
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Args:
             text_features: [batch_size, seq_len, text_dim]
             vision_features: [batch_size, vision_dim]
+            mode: Training mode for episodic memory ("episodic_capture", "consolidation", "integration", "train")
 
         Returns:
             fused_features: [batch_size, seq_len, hidden_dim]
@@ -649,16 +686,75 @@ class LearnableQueryFusion(nn.Module):
 
         # Project to common dimension
         text_proj = self.text_proj(text_features)  # [B, seq_len, hidden_dim]
-        vision_proj = self.vision_proj(
-            vision_features).unsqueeze(1)  # [B, 1, hidden_dim]
+        vision_proj = self.vision_proj(vision_features)  # [B, hidden_dim]
+        
+        # Expand vision features to match text sequence length
+        vision_expanded = vision_proj.unsqueeze(1).expand(-1, seq_len, -1)  # [B, seq_len, hidden_dim]
+
+        if self.use_quadrangle:
+            # Use Quadrangle Attention for enhanced multimodal understanding
+            result = self.quadrangle_processor(
+                text_features=text_proj,
+                image_features=vision_expanded,
+                mode=mode
+            )
+            
+            enhanced_text = result['text_features']
+            enhanced_image = result['image_features']
+            attention_maps = result['attention_maps']
+            
+            # Initialize learnable queries
+            queries = self.query_tokens.expand(batch_size, -1, -1)
+            queries = queries + self.query_pos_embed
+            
+            # Integrate queries with enhanced features through attention
+            for i, integration_layer in enumerate(self.query_integration):
+                # Attend to enhanced text and image features
+                query_context = torch.cat([
+                    enhanced_text.mean(dim=1, keepdim=True),  # Global text context
+                    enhanced_image.mean(dim=1, keepdim=True)  # Global image context
+                ], dim=1)  # [B, 2, hidden_dim]
+                
+                # Apply integration layer
+                integrated_queries = integration_layer(queries)
+                
+                # Query attention to multimodal context
+                query_attn_weights = F.softmax(
+                    torch.matmul(integrated_queries, query_context.transpose(1, 2)) / math.sqrt(self.hidden_dim),
+                    dim=-1
+                )
+                attended_context = torch.matmul(query_attn_weights, query_context)
+                queries = queries + attended_context
+            
+            # Project queries back to text sequence
+            output = self.output_proj(enhanced_text + queries.mean(dim=1, keepdim=True))
+            
+            # Add episodic information to attention maps
+            attention_maps.update({
+                'episodic_episode': result.get('episode'),
+                'memory_usage': result.get('memory_usage'),
+                'memory_age': result.get('memory_age')
+            })
+            
+            return output, attention_maps
+            
+        else:
+            # Fallback to original query-based attention
+            return self._forward_original(text_proj, vision_proj)
+
+    def _forward_original(
+        self, 
+        text_proj: torch.Tensor, 
+        vision_proj: torch.Tensor
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Original forward implementation for fallback"""
+        batch_size, seq_len = text_proj.shape[:2]
+        vision_proj = vision_proj.unsqueeze(1)  # [B, 1, hidden_dim]
 
         # Initialize learnable queries
-        queries = self.query_tokens.expand(
-            batch_size, -1, -1)  # [B, num_queries, hidden_dim]
-        queries = queries + self.query_pos_embed  # Add positional encoding
+        queries = self.query_tokens.expand(batch_size, -1, -1)
+        queries = queries + self.query_pos_embed
 
-        # Attention tracking removed for performance
-        
         # Phase 1: Query learning - queries extract information from both modalities
         for i, layer in enumerate(self.query_layers):
             # Query-to-Text: queries attend to text tokens
@@ -802,7 +898,7 @@ class BitMarModel(nn.Module):
             output_dim=config['vision_latent_size']
         )
 
-        # Cross-modal fusion with BitNet
+        # Cross-modal fusion with Quadrangle Attention
         self.fusion = CrossModalFusion(
             text_dim=config['text_encoder_dim'],
             vision_dim=config['vision_latent_size'],
@@ -810,7 +906,10 @@ class BitMarModel(nn.Module):
             # NEW: Use config parameter
             num_queries=config.get('fusion_num_queries', 32),
             num_heads=config['fusion_num_heads'],
-            num_layers=config['fusion_num_layers']
+            num_layers=config['fusion_num_layers'],
+            # Enable Quadrangle Attention with episodic memory
+            use_quadrangle=config.get('use_quadrangle_attention', True),
+            episodic_memory_size=config.get('quadrangle_memory_size', config['memory_size'])
         )
 
         # Episodic memory with BitNet quantization
@@ -948,17 +1047,17 @@ class BitMarModel(nn.Module):
         if mode == "episodic_capture":
             # Phase 1: Fast episodic capture with enhanced QFormer attention
             # Use full QFormer capacity for rich multimodal encoding
-            fused_features, attention_weights = self.fusion(text_features, vision_latent)
+            fused_features, attention_weights = self.fusion(text_features, vision_latent, mode)
             
             # Enhance attention patterns for better episodic encoding
             for key, attn in attention_weights.items():
-                if 'q2v' in key or 'q2t' in key:
+                if isinstance(attn, torch.Tensor) and 'q2v' in key or 'q2t' in key:
                     # Sharpen cross-modal attention for clearer episodic traces
                     attention_weights[key] = torch.softmax(attn * 1.5, dim=-1)
             
         elif mode == "consolidation":
             # Phase 2: Pattern extraction and memory replay-aware fusion
-            fused_features, attention_weights = self.fusion(text_features, vision_latent)
+            fused_features, attention_weights = self.fusion(text_features, vision_latent, mode)
             
             # Add consolidation-specific processing
             # Encourage pattern extraction by emphasizing consistent attention patterns
@@ -966,24 +1065,24 @@ class BitMarModel(nn.Module):
             
             # Pattern consistency regularization (encourage stable patterns)
             for key, attn in attention_weights.items():
-                if 'query_self' in key:
+                if isinstance(attn, torch.Tensor) and 'query_self' in key:
                     # Encourage self-consistency in query patterns
                     attention_weights[key] = torch.softmax(attn * 1.2, dim=-1)
             
         elif mode == "integration":
             # Phase 3: Semantic integration with refined processing
-            fused_features, attention_weights = self.fusion(text_features, vision_latent)
+            fused_features, attention_weights = self.fusion(text_features, vision_latent, mode)
             
             # Integration-specific refinement
             # Emphasize semantic coherence by smoothing attention patterns
             for key, attn in attention_weights.items():
-                if 't2q' in key:
+                if isinstance(attn, torch.Tensor) and 't2q' in key:
                     # Smoother text-to-query attention for semantic integration
                     attention_weights[key] = torch.softmax(attn * 0.8, dim=-1)
         
         else:
             # Fallback to standard fusion
-            fused_features, attention_weights = self.fusion(text_features, vision_latent)
+            fused_features, attention_weights = self.fusion(text_features, vision_latent, mode)
         
         # Add consolidation mode information to attention weights
         attention_weights['consolidation_mode'] = mode
@@ -1024,9 +1123,9 @@ class BitMarModel(nn.Module):
             fused_features, cross_attention = self._consolidation_fusion(
                 text_features, vision_latent, mode)
         else:
-            # Standard fusion for regular training
+            # Standard fusion for regular training - pass mode for Quadrangle Attention
             fused_features, cross_attention = self.fusion(
-                text_features, vision_latent)
+                text_features, vision_latent, mode)
 
         # Create multimodal episode
         episode = self.create_episode(
