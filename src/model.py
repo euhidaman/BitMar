@@ -24,22 +24,34 @@ class BitNetLinear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
 
-        # Weight parameters (full precision for training)
+        # Weight parameters with proper initialization to prevent NaN
         self.weight = nn.Parameter(torch.randn(out_features, in_features))
         self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
 
-        # Quantization scaling factors
+        # Initialize weights with Xavier uniform for stability
+        with torch.no_grad():
+            nn.init.xavier_uniform_(self.weight, gain=0.1)  # Small gain to prevent saturation
+            self.weight.clamp_(-1.0, 1.0)  # Clamp to prevent extreme values
+            if self.bias is not None:
+                self.bias.zero_()
+
+        # Quantization scaling factors with safe initialization
         self.register_buffer('weight_scale', torch.ones(1))
         self.register_buffer('input_scale', torch.ones(1))
 
     def quantize_weights_1_58_bit(self, weight: torch.Tensor) -> torch.Tensor:
-        """BitNet b1.58 weight quantization: {-1, 0, +1}"""
+        """BitNet b1.58 weight quantization: {-1, 0, +1} with numerical stability"""
+        # Clamp input weights to prevent extreme values
+        weight_clamped = torch.clamp(weight, min=-5.0, max=5.0)
+        
         # Compute scaling factor with numerical stability
-        scale = weight.abs().mean()
-        self.weight_scale.data = scale.clamp(min=1e-5, max=1e3)  # Prevent extreme scales
+        scale = weight_clamped.abs().mean()
+        scale = scale.clamp(min=1e-8, max=10.0)  # Prevent extreme scales
+        self.weight_scale.data = scale
 
         # Normalize weights with gradient clipping
-        weight_norm = torch.clamp(weight / self.weight_scale, min=-10.0, max=10.0)
+        weight_norm = weight_clamped / scale
+        weight_norm = torch.clamp(weight_norm, min=-3.0, max=3.0)
 
         # 1.58-bit quantization with threshold
         threshold = 2.0 / 3.0  # Optimal threshold for ternary quantization
@@ -53,47 +65,70 @@ class BitNetLinear(nn.Module):
         return quantized
 
     def quantize_activations_8bit(self, x: torch.Tensor) -> torch.Tensor:
-        """8-bit activation quantization with numerical stability"""
+        """8-bit activation quantization with enhanced numerical stability"""
         # Clamp extreme values to prevent overflow
-        x_clamped = torch.clamp(x, min=-1e6, max=1e6)
+        x_clamped = torch.clamp(x, min=-100.0, max=100.0)
+        
+        # Check for NaN/Inf values
+        if not torch.isfinite(x_clamped).all():
+            logger.warning("Non-finite values in activation quantization, using fallback")
+            return torch.clamp(x, min=-1.0, max=1.0)
 
-        # Compute quantization parameters
+        # Compute quantization parameters with stability checks
         x_min, x_max = x_clamped.min(), x_clamped.max()
 
-        # Prevent division by zero
+        # Prevent division by zero and handle edge cases
         range_val = x_max - x_min
-        if range_val < 1e-8:
+        if range_val < 1e-6:
             return x_clamped
 
         scale = range_val / 255.0
-        self.input_scale.data = scale.clamp(min=1e-8, max=1e3)
+        scale = scale.clamp(min=1e-6, max=100.0)
+        self.input_scale.data = scale
 
-        # Quantize to 8-bit
+        # Quantize to 8-bit with bounds checking
         zero_point = (-x_min / scale).round().clamp(0, 255)
         quantized = ((x_clamped / scale) + zero_point).round().clamp(0, 255)
 
-        # Dequantize
+        # Dequantize with final stability check
         dequantized = scale * (quantized - zero_point)
+        dequantized = torch.clamp(dequantized, min=-100.0, max=100.0)
+        
         return dequantized
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Check input for NaN/Inf values
+        if not torch.isfinite(x).all():
+            logger.warning("Non-finite input to BitNetLinear, clamping...")
+            x = torch.clamp(x, min=-10.0, max=10.0)
+        
         if self.training:
             # Full precision training with straight-through estimator
             # Forward pass with quantized weights but gradients flow through original weights
             weight_q = self.quantize_weights_1_58_bit(self.weight)
             weight_forward = weight_q * self.weight_scale
 
-            # Use original weight for gradient computation
+            # Use original weight for gradient computation (straight-through estimator)
             weight_forward = weight_forward + \
                 (self.weight - self.weight.detach())
 
-            return F.linear(x, weight_forward, self.bias)
+            # Clamp weights to prevent extreme outputs
+            weight_forward = torch.clamp(weight_forward, min=-5.0, max=5.0)
+            
+            output = F.linear(x, weight_forward, self.bias)
+            
+            # Final output clamping for stability
+            output = torch.clamp(output, min=-50.0, max=50.0)
+            return output
         else:
             # Inference with full quantization
             weight_q = self.quantize_weights_1_58_bit(
                 self.weight) * self.weight_scale
             x_q = self.quantize_activations_8bit(x)
-            return F.linear(x_q, weight_q, self.bias)
+            
+            output = F.linear(x_q, weight_q, self.bias)
+            output = torch.clamp(output, min=-50.0, max=50.0)
+            return output
 
 
 class BitNetMLP(nn.Module):
@@ -441,7 +476,8 @@ class EpisodicMemory(nn.Module):
                     chunk_size = end_idx - i
 
                     # Get LRU indices for this chunk
-                    _, chunk_lru_indices = self.memory_age.topk(chunk_size, largest=False)
+                    _, chunk_lru_indices = self.memory_age.topk(
+                        chunk_size, largest=False)
 
                     # Update memory slots with proper dtype conversion
                     episode_chunk = episode[i:end_idx].detach()
@@ -449,7 +485,8 @@ class EpisodicMemory(nn.Module):
                     if episode_chunk.dtype != self.memory.dtype:
                         episode_chunk = episode_chunk.to(self.memory.dtype)
                     self.memory[chunk_lru_indices] = episode_chunk
-                    self.memory_age[chunk_lru_indices] = self.memory_age.max() + 1 + i
+                    self.memory_age[chunk_lru_indices] = self.memory_age.max(
+                    ) + 1 + i
                     self.memory_usage[chunk_lru_indices] += 1
             else:
                 # Normal case: batch_size <= memory_size
@@ -531,7 +568,8 @@ class LearnableQueryFusion(nn.Module):
         self.num_layers = num_layers
 
         # Learnable query tokens - these bridge text and vision
-        self.query_tokens = nn.Parameter(torch.randn(1, num_queries, hidden_dim))
+        self.query_tokens = nn.Parameter(
+            torch.randn(1, num_queries, hidden_dim))
         nn.init.trunc_normal_(self.query_tokens, std=0.02)
 
         # Projection layers to common dimension
@@ -591,7 +629,8 @@ class LearnableQueryFusion(nn.Module):
         self.output_proj = BitNetLinear(hidden_dim, hidden_dim)
 
         # Learnable position embeddings for queries
-        self.query_pos_embed = nn.Parameter(torch.randn(1, num_queries, hidden_dim))
+        self.query_pos_embed = nn.Parameter(
+            torch.randn(1, num_queries, hidden_dim))
         nn.init.trunc_normal_(self.query_pos_embed, std=0.02)
 
     def forward(
@@ -612,10 +651,12 @@ class LearnableQueryFusion(nn.Module):
 
         # Project to common dimension
         text_proj = self.text_proj(text_features)  # [B, seq_len, hidden_dim]
-        vision_proj = self.vision_proj(vision_features).unsqueeze(1)  # [B, 1, hidden_dim]
+        vision_proj = self.vision_proj(
+            vision_features).unsqueeze(1)  # [B, 1, hidden_dim]
 
         # Initialize learnable queries
-        queries = self.query_tokens.expand(batch_size, -1, -1)  # [B, num_queries, hidden_dim]
+        queries = self.query_tokens.expand(
+            batch_size, -1, -1)  # [B, num_queries, hidden_dim]
         queries = queries + self.query_pos_embed  # Add positional encoding
 
         attention_weights = {}
@@ -772,7 +813,8 @@ class BitMarModel(nn.Module):
             text_dim=config['text_encoder_dim'],
             vision_dim=config['vision_latent_size'],
             hidden_dim=config['fusion_hidden_size'],
-            num_queries=config.get('fusion_num_queries', 32),  # NEW: Use config parameter
+            # NEW: Use config parameter
+            num_queries=config.get('fusion_num_queries', 32),
             num_heads=config['fusion_num_heads'],
             num_layers=config['fusion_num_layers']
         )
@@ -802,6 +844,34 @@ class BitMarModel(nn.Module):
             config['text_decoder_dim']
         )
 
+        # CRITICAL FIX: Pre-initialize dynamic projection layers to prevent NaN
+        # These layers were previously created on-the-fly during forward pass
+        
+        # Vision projection for compressed features (64 -> vision_encoder_dim)
+        self.compressed_vision_proj = BitNetLinear(
+            64, config['vision_encoder_dim']
+        )
+        
+        # Vision to episode projection (vision_latent_size -> episode_dim)
+        self.vision_to_episode = BitNetLinear(
+            config['vision_latent_size'], 
+            config['episode_dim']
+        )
+        
+        # Enhanced initialization for numerical stability
+        with torch.no_grad():
+            # Initialize compressed vision projection
+            nn.init.xavier_uniform_(self.compressed_vision_proj.weight, gain=0.1)
+            if self.compressed_vision_proj.bias is not None:
+                self.compressed_vision_proj.bias.zero_()
+            self.compressed_vision_proj.weight.clamp_(-1.0, 1.0)
+            
+            # Initialize vision to episode projection
+            nn.init.xavier_uniform_(self.vision_to_episode.weight, gain=0.1)
+            if self.vision_to_episode.bias is not None:
+                self.vision_to_episode.bias.zero_()
+            self.vision_to_episode.weight.clamp_(-1.0, 1.0)
+
         # Tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained('gpt2')
         if self.tokenizer.pad_token is None:
@@ -817,14 +887,9 @@ class BitMarModel(nn.Module):
         """Encode vision features"""
         # Check if we're using compressed features (64 dims) vs original (768 dims)
         if vision_features.shape[-1] == 64:
-            # We're using compressed features - create a simple upsampling projection
-            if not hasattr(self, 'compressed_vision_proj'):
-                # Create projection layer on the fly for compressed features
-                self.compressed_vision_proj = BitNetLinear(64, self.config['vision_encoder_dim']).to(vision_features.device)
-                logger.info(f"Created compressed vision projection: 64 → {self.config['vision_encoder_dim']}")
-
-            # Project compressed features to expected dimension
+            # We're using compressed features - use pre-initialized projection layer
             vision_features = self.compressed_vision_proj(vision_features)
+            logger.debug(f"Using compressed vision projection: 64 → {self.config['vision_encoder_dim']}")
 
         # Now process with normal vision encoder
         vision_latent = self.vision_encoder(
@@ -849,16 +914,17 @@ class BitMarModel(nn.Module):
         # Handle dimension mismatch between text and vision features
         # Vision features might be compressed (e.g., 64D) while text is projected to episode_dim (e.g., 96D)
         if text_projected.shape[-1] != vision_latent.shape[-1]:
-            # Create or use a vision projection layer to match text dimensions
-            if not hasattr(self, 'vision_to_episode'):
-                # Dynamically create the projection layer
-                vision_dim = vision_latent.shape[-1]
-                episode_dim = text_projected.shape[-1]
-                self.vision_to_episode = BitNetLinear(vision_dim, episode_dim).to(vision_latent.device)
-                logger.info(f"Created vision projection layer: {vision_dim}D -> {episode_dim}D")
-
-            # Project vision features to match text dimensions
-            vision_projected = self.vision_to_episode(vision_latent)
+            # Use pre-initialized vision projection layer to match text dimensions
+            try:
+                vision_projected = self.vision_to_episode(vision_latent)
+                # Check for NaN/Inf values and clamp if necessary
+                if not torch.isfinite(vision_projected).all():
+                    logger.warning("Non-finite values in vision projection, clamping...")
+                    vision_projected = torch.clamp(vision_projected, -10.0, 10.0)
+            except Exception as e:
+                logger.error(f"Vision projection failed: {e}")
+                # Fallback: use zero projection
+                vision_projected = torch.zeros_like(text_projected)
         else:
             vision_projected = vision_latent
 
