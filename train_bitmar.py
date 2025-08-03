@@ -569,24 +569,24 @@ class BitMarTrainer:
             # Enable GPU-optimized data preprocessing
             'gpu_preprocessing': True,
             'async_data_transfer': True,
-            # 🚀 SPEED OPTIMIZATIONS for fast epochs
+            # 🚀 SPEED OPTIMIZATIONS for 10 epochs full dataset
             'fast_tokenization': True,  # Use fast tokenizers
             'precomputed_features': True,  # Use precomputed vision features when possible
             'aggressive_caching': True,  # Cache frequently used data
             'reduced_validation_frequency': True,  # Validate less frequently for speed
             'skip_expensive_metrics': True,  # Skip computationally expensive metrics
-            # 📊 DATASET SIZE OPTIMIZATION for faster epochs
-            'max_samples_per_epoch': 50000,  # Limit samples per epoch for speed
+            # 📊 FULL DATASET TRAINING - NO SAMPLE LIMITS for best results
+            # 'max_samples_per_epoch': None,  # REMOVED: Use full dataset for best results
             'smart_sampling': True,  # Use intelligent sampling strategies
-            'gradient_accumulation_steps': 8,  # Larger effective batch size
+            'gradient_accumulation_steps': 4,  # Optimized effective batch size
         })
-        logger.info("🚀 Applied ULTRA-AGGRESSIVE GPU-optimized data loading for 2-3 hour epochs:")
+        logger.info("🚀 Applied FULL DATASET GPU-optimized training for 10 epochs:")
         logger.info(f"   - Workers: {enhanced_data_config['num_workers']}")
         logger.info(f"   - Prefetch factor: {enhanced_data_config['prefetch_factor']}")
-        logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (optimized for speed)")
-        logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (much shorter for speed)")
+        logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (optimized for full dataset)")
+        logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (optimized for performance)")
         logger.info("   - GPU preprocessing enabled for maximum speed")
-        logger.info("� Configuration optimized for naturally fast 2-3 hour epochs")
+        logger.info("🎯 Configuration optimized for 10 epochs FULL DATASET training")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get(
@@ -1092,8 +1092,8 @@ class BitMarTrainer:
                     self.global_step += 1
                     continue
 
-                # 🚀 ULTRA-OPTIMIZED Backward pass with gradient accumulation for maximum GPU utilization
-                gradient_accumulation_steps = self.config.get('training', {}).get('gradient_accumulation_steps', 8)  # Larger effective batch size for speed
+                # 🚀 OPTIMIZED Backward pass with gradient accumulation for full dataset training
+                gradient_accumulation_steps = self.config.get('training', {}).get('gradient_accumulation_steps', 4)  # Optimized for full dataset
                 
                 try:
                     # Normalize loss by accumulation steps for correct scaling
@@ -1215,20 +1215,19 @@ class BitMarTrainer:
                         except Exception:
                             pass
                     
+                    # Add consolidation phase info
+                    essential_metrics['consolidation/phase'] = consolidation_phase
+                    essential_metrics['consolidation/phase_epoch'] = epoch
+                    
+                    # Add phase-specific metrics
+                    if consolidation_phase == "episodic_capture":
+                        essential_metrics['consolidation/capture_rate'] = 1.0  # Capturing at full rate
+                    elif consolidation_phase == "memory_consolidation":
+                        essential_metrics['consolidation/replay_frequency'] = 0.1  # Replay every 10 steps
+                    elif consolidation_phase == "semantic_integration":
+                        essential_metrics['consolidation/integration_strength'] = 0.8  # Lower LR for integration
+                    
                     self.wandb_logger.log_metrics(essential_metrics)
-                            f'consolidation/phase_epoch': epoch,
-                        }
-                        
-                        # Add phase-specific metrics
-                        if consolidation_phase == "episodic_capture":
-                            basic_metrics['consolidation/capture_rate'] = 1.0  # Capturing at full rate
-                        elif consolidation_phase == "memory_consolidation":
-                            basic_metrics['consolidation/replay_frequency'] = 0.1  # Replay every 10 steps
-                        elif consolidation_phase == "semantic_integration":
-                            basic_metrics['consolidation/integration_strength'] = 0.8  # Lower LR for integration
-                        
-                        # Log only basic metrics to reduce overhead
-                        wandb.log(basic_metrics, step=self.global_step)
 
                     except Exception as e:
                         logger.warning(

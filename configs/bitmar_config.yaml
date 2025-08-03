@@ -31,21 +31,26 @@ model:
   memory_alpha: 0.15  # Slightly higher for faster adaptation with fewer slots
   direct_writing: true
   
-  # Model configuration (Tiny Model Optimized)
-  max_seq_len: 64  # Reduced from 128 for edge efficiency
-  dropout: 0.15  # Slightly higher for regularization with smaller model
+  # Model configuration - Optimized for 10 epochs full dataset
+  max_seq_len: 128  # Increased for better performance
+  dropout: 0.1  # Lower dropout for better learning
 
 data:
-  # Dataset configuration (Tiny Model)
+  # Dataset configuration - FULL DATASET FOR BEST RESULTS
   dataset_dir: "../babylm_dataset"
   text_encoder_name: "gpt2"
-  max_seq_length: 64  # Reduced from 128 for edge efficiency
+  max_seq_length: 128  # Increased for better performance
   
-  # DataLoader settings (Edge optimized)
-  batch_size: 8  # Reduced from 32 for memory efficiency
-  num_workers: 4  # Reduced from 8
+  # DataLoader settings - Optimized for full dataset training
+  batch_size: 32  # Larger batch size for efficiency
+  num_workers: 8  # More workers for faster data loading
   pin_memory: true
   persistent_workers: true
+  prefetch_factor: 4  # Added for faster data loading
+  
+  # Full dataset training (no sample limits)
+  # max_samples: null  # Train on entire dataset for best results
+  text_ratio: 0.5  # Balanced text and multimodal training
   
   # HuggingFace configuration (use environment variables)
   hf_token: null  # Use HF_TOKEN environment variable
@@ -54,16 +59,20 @@ data:
     - "glue/sst2"  # Public dataset, no auth required
 
 training:
-  # Training configuration - OPTIMIZED FOR SPEED
+  # Training configuration - 10 EPOCHS FULL DATASET
   max_epochs: 10
-  accumulate_grad_batches: 1
+  accumulate_grad_batches: 4  # Larger effective batch size
   gradient_clip_val: 1.0
   val_check_interval: 1000
   scheduler: "cosine"
   min_lr: 0.00001
-  warmup_steps: 1000
-  learning_rate: 0.0001
+  warmup_steps: 500  # Reduced warmup for 10 epochs
+  learning_rate: 0.0002  # Slightly higher LR for faster learning
   weight_decay: 0.01
+  
+  # Full dataset settings
+  gradient_accumulation_steps: 4  # Effective batch size = 32 * 4 = 128
+  save_every_n_epochs: 2  # Save checkpoints every 2 epochs
 
 # Weights & Biases configuration - OPTIMIZED FOR SPEED
 # Enhanced wandb configuration with minimal logging for speed
