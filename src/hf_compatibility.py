@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
-from .model import BitMarModel
+from src.model import BitMarModel
 
 logger = logging.getLogger(__name__)
 
