@@ -149,11 +149,15 @@ def validate_model_components():
             'text_decoder_heads': 4,  # Missing key added
             'vision_encoder_dim': 768,
             'vision_latent_size': 128,
+            'vision_hidden_size': 128,  # Missing vision_hidden_size key added
             'fusion_hidden_size': 128,
             'fusion_num_layers': 1,
             'fusion_num_heads': 4,
+            'fusion_num_queries': 32,  # Adding missing fusion_num_queries
             'memory_size': 8,
             'episode_dim': 128,
+            'memory_alpha': 0.15,  # Adding missing memory_alpha
+            'direct_writing': True,  # Adding missing direct_writing
             'use_quadrangle_attention': True,
             'quadrangle_memory_size': 256,
             'max_seq_len': 64,
