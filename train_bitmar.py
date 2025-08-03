@@ -552,7 +552,7 @@ class BitMarTrainer:
                 # 🚀 OPTIMIZED Forward pass with mixed precision for GPU acceleration
                 try:
                     if self.use_amp:
-                        with torch.cuda.amp.autocast():
+                        with torch.amp.autocast('cuda'):
                             outputs = self.model(
                                 input_ids=batch['input_ids'],
                                 attention_mask=batch['attention_mask'],
@@ -577,7 +577,7 @@ class BitMarTrainer:
                         torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
                         if self.use_amp:
-                            with torch.cuda.amp.autocast():
+                            with torch.amp.autocast('cuda'):
                                 outputs = self.model(
                                     input_ids=batch['input_ids'],
                                     attention_mask=batch['attention_mask'],
@@ -1584,33 +1584,36 @@ class BitMarTrainer:
         try:
             if 'vision_features' in batch and batch['vision_features'] is not None:
                 vision_features = batch['vision_features']
-
-                # Get original shape for logging
                 original_shape = vision_features.shape
 
-                # Ensure minimum 3D: [batch, features, spatial]
-                if vision_features.dim() == 2:
-                    vision_features = vision_features.unsqueeze(-1)
-                elif vision_features.dim() > 3:
-                    # Flatten extra dimensions
-                    vision_features = vision_features.view(
-                        vision_features.size(0), vision_features.size(1), -1)
+                # Handle the specific shape mismatch: [batch, 2048, 1] -> [batch, 768]
+                if vision_features.dim() == 3 and vision_features.size(-1) == 1:
+                    # Remove the last dimension: [batch, features, 1] -> [batch, features]
+                    vision_features = vision_features.squeeze(-1)
+                    logger.debug(f"Squeezed last dimension: {original_shape} -> {vision_features.shape}")
 
-                # Limit maximum feature dimension for stability
-                max_features = 768  # Reasonable limit
-                if vision_features.size(1) > max_features:
-                    vision_features = vision_features[:, :max_features, :]
-                    logger.debug(
-                        f"Truncated vision features from {original_shape[1]} to {max_features}")
+                # Ensure we have 2D features: [batch, features]
+                if vision_features.dim() > 2:
+                    # Flatten all feature dimensions except batch
+                    vision_features = vision_features.view(vision_features.size(0), -1)
+                    logger.debug(f"Flattened to 2D: -> {vision_features.shape}")
 
-                # Limit spatial dimension for memory efficiency
-                max_spatial = 196  # 14x14 patches is reasonable
-                if vision_features.size(2) > max_spatial:
-                    # Use adaptive pooling to reduce spatial dimension
-                    vision_features = F.adaptive_avg_pool1d(
-                        vision_features.transpose(1, 2), max_spatial).transpose(1, 2)
-                    logger.debug(
-                        f"Compressed spatial dimension to {max_spatial}")
+                # Project to expected dimension (768) if needed
+                expected_dim = self.config.get('model', {}).get('vision_encoder_dim', 768)
+                current_dim = vision_features.size(-1)
+                
+                if current_dim != expected_dim:
+                    # Create a projection layer if it doesn't exist
+                    projection_key = f'vision_proj_{current_dim}_to_{expected_dim}'
+                    if not hasattr(self, projection_key):
+                        projection_layer = nn.Linear(current_dim, expected_dim).to(vision_features.device)
+                        setattr(self, projection_key, projection_layer)
+                        logger.info(f"Created vision projection: {current_dim} -> {expected_dim}")
+                    
+                    # Apply projection
+                    projection_layer = getattr(self, projection_key)
+                    vision_features = projection_layer(vision_features)
+                    logger.debug(f"Projected vision features: {current_dim} -> {expected_dim}")
 
                 batch['vision_features'] = vision_features
 
