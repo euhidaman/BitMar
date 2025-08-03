@@ -1484,6 +1484,15 @@ class BitMarTrainer:
         """Train for one epoch with Episodic Memory Consolidation optimized for 2-3 hour natural completion"""
         import time
         
+        # CRITICAL: Verify GPU setup at start of each epoch
+        logger.info(f"🎯 EPOCH {epoch} DEVICE CHECK:")
+        logger.info(f"   - Training device: {self.device}")
+        logger.info(f"   - Model device: {next(self.model.parameters()).device}")
+        logger.info(f"   - CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            logger.info(f"   - CUDA device count: {torch.cuda.device_count()}")
+            logger.info(f"   - Current CUDA device: {torch.cuda.current_device()}")
+        
         self.model.train()
         train_loader = self.data_module.train_dataloader()
 
@@ -1551,6 +1560,12 @@ class BitMarTrainer:
                     # CRITICAL: Ensure all inputs are on GPU with optimized transfers
                     for key in ['input_ids', 'attention_mask', 'vision_features', 'labels']:
                         if key in batch and batch[key] is not None:
+                            # Debug: Check current device
+                            if hasattr(batch[key], 'device'):
+                                current_device = batch[key].device
+                                if current_device != self.device:
+                                    logger.info(f"🔧 Moving {key} from {current_device} to {self.device}")
+                            
                             # Use non_blocking=True for maximum GPU transfer speed
                             batch[key] = batch[key].to(
                                 self.device, non_blocking=True)
@@ -1560,6 +1575,12 @@ class BitMarTrainer:
                                     f"NaN values detected in {key}, skipping batch")
                                 self.global_step += 1
                                 continue
+                    
+                    # CRITICAL: Verify model is on GPU
+                    model_device = next(self.model.parameters()).device
+                    if model_device != self.device:
+                        logger.warning(f"🚨 Model on wrong device! {model_device} != {self.device}")
+                        self.model.to(self.device)
 
                     # 🧠 ADVANCED 10-EPOCH CONSOLIDATION PHASE-SPECIFIC PROCESSING
                     if consolidation_phase == "episodic_capture":
@@ -1579,6 +1600,11 @@ class BitMarTrainer:
                         outputs = self._standard_forward(batch)
                     
                     loss = outputs['loss']
+                    
+                    # CRITICAL: Ensure loss is on GPU for proper computation
+                    if hasattr(loss, 'device') and loss.device != self.device:
+                        logger.warning(f"🚨 Loss on wrong device! {loss.device} -> {self.device}")
+                        loss = loss.to(self.device)
                 except RuntimeError as e:
                     if "out of memory" in str(e).lower() or "device" in str(e).lower():
                         logger.warning(
