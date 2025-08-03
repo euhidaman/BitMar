@@ -143,8 +143,10 @@ def validate_model_components():
             'vocab_size': 1000,
             'text_encoder_dim': 128,
             'text_encoder_layers': 2,
+            'text_encoder_heads': 4,  # Missing key added
             'text_decoder_dim': 128,
             'text_decoder_layers': 2,
+            'text_decoder_heads': 4,  # Missing key added
             'vision_encoder_dim': 768,
             'vision_latent_size': 128,
             'fusion_hidden_size': 128,
@@ -154,7 +156,8 @@ def validate_model_components():
             'episode_dim': 128,
             'use_quadrangle_attention': True,
             'quadrangle_memory_size': 256,
-            'max_seq_len': 64
+            'max_seq_len': 64,
+            'dropout': 0.1  # Also missing dropout key
         }
         
         # Test model creation

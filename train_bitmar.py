@@ -400,6 +400,9 @@ class BitMarTrainer:
         try:
             # Enhanced PyTorch optimizations for GPU acceleration
             if torch.cuda.is_available():
+                # Explicitly set CUDA device for all operations
+                torch.cuda.set_device(self.device)
+                
                 # Enable optimized CUDA backends
                 torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
                 torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
@@ -415,6 +418,7 @@ class BitMarTrainer:
 
                 logger.info(
                     "🔥 ENABLED AGGRESSIVE CUDA optimizations: cuDNN benchmark, TF32, FlashAttention, memory optimization")
+                logger.info(f"🎯 CUDA device explicitly set to: {self.device}")
                 print("⚡ GPU optimizations enabled")
                 sys.stdout.flush()
             else:

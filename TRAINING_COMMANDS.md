@@ -4,6 +4,9 @@
 ```bash
 # Run comprehensive validation (RECOMMENDED FIRST)
 python validate_comprehensive_setup.py
+
+# Quick GPU test
+python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'GPU Count: {torch.cuda.device_count()}'); print(f'GPU Name: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}')"
 ```
 
 ## 🚀 Main Training Commands
