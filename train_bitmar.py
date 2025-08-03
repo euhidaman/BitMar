@@ -390,6 +390,8 @@ class BitMarTrainer:
 
         # 🎯 SELECTIVE VISION PARAMETER FREEZING for faster training
         if self.selective_vision_training:
+            # First, let's debug the model structure
+            self._debug_model_structure()
             self._apply_selective_vision_freezing()
 
         # 🚀 ENHANCED GPU OPTIMIZATIONS FOR MAXIMUM PERFORMANCE
@@ -589,28 +591,28 @@ class BitMarTrainer:
         # Apply ULTRA-AGGRESSIVE GPU-optimized data loading for 2-3 hour epochs
         enhanced_data_config.update({
             # ULTRA-AGGRESSIVE GPU optimization settings for fast epochs
-            'num_workers': min(16, enhanced_data_config.get('num_workers', 12)),  # Maximum workers
+            'num_workers': 4,  # Reduced workers to prevent CPU bottleneck
             'pin_memory': True,  # Critical for GPU transfer speed
             'persistent_workers': True,  # Keep workers alive for efficiency
-            'prefetch_factor': enhanced_data_config.get('prefetch_factor', 24),  # Ultra-aggressive prefetching
+            'prefetch_factor': 2,  # Reduced prefetching to save memory
             'multiprocessing_context': None,  # Use default (spawn on Windows)
             'drop_last': True,  # Consistent batch sizes for GPU efficiency
             'non_blocking': True,  # Non-blocking GPU transfers for speed
             'shuffle': True,  # Ensure data shuffling for better GPU utilization
-            'timeout': 90,  # Longer timeout for aggressive data loading
-            # � SPEED-OPTIMIZED: Larger batches and shorter sequences for 2-3 hour epochs
-            'batch_size': min(enhanced_data_config.get('batch_size', 4), 8),  # Small batches for memory
-            'max_seq_length': min(enhanced_data_config.get('max_seq_length', 512), 96),  # Short sequences for memory
+            'timeout': 30,  # Faster timeout for data loading
+            # 🎯 MEMORY-OPTIMIZED: Small batches with higher gradient accumulation
+            'batch_size': 2,  # Very small batches for memory efficiency
+            'max_seq_length': 64,  # Shorter sequences for faster processing
             # Disable CPU memory optimizations that hurt GPU performance
             'memory_efficient_loading': False,
             'cpu_data_caching': False,
             # Enable GPU-optimized data preprocessing
-            'gpu_preprocessing': True,
+            'gpu_preprocessing': False,  # Disable to reduce GPU load
             'async_data_transfer': True,
-            # 🚀 SPEED OPTIMIZATIONS for 10 epochs full dataset
+            # 🚀 SPEED OPTIMIZATIONS for fast iterations
             'fast_tokenization': True,  # Use fast tokenizers
-            'precomputed_features': True,  # Use precomputed vision features when possible
-            'aggressive_caching': True,  # Cache frequently used data
+            'precomputed_features': False,  # Disable to reduce complexity
+            'aggressive_caching': False,  # Disable to save memory
             'reduced_validation_frequency': True,  # Validate less frequently for speed
             'skip_expensive_metrics': True,  # Skip computationally expensive metrics
             # � ULTRA-AGGRESSIVE SPEED OPTIMIZATIONS
@@ -622,16 +624,17 @@ class BitMarTrainer:
             'tensor_cores': True,  # Optimize for tensor cores
             # �📊 FULL DATASET TRAINING - NO SAMPLE LIMITS for best results
             # 'max_samples_per_epoch': None,  # REMOVED: Use full dataset for best results
-            'smart_sampling': True,  # Use intelligent sampling strategies
-            'gradient_accumulation_steps': 8,  # Higher accumulation for smaller batches
+            'smart_sampling': False,  # Disable complex sampling
+            'gradient_accumulation_steps': 16,  # Higher accumulation for smaller batches (effective batch = 2*16=32)
         })
-        logger.info("🚀 Applied 10-EPOCH STRATEGY GPU training for RTX A6000:")
-        logger.info(f"   - Workers: {enhanced_data_config['num_workers']}")
-        logger.info(f"   - Prefetch factor: {enhanced_data_config['prefetch_factor']}")
-        logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (optimized for RTX A6000)")
-        logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (optimized for memory)")
-        logger.info("   - Memory-efficient preprocessing enabled")
-        logger.info("🎯 Configuration optimized for 10-epoch advanced training strategy")
+        logger.info("🚀 Applied GPU-OPTIMIZED training for RTX A6000:")
+        logger.info(f"   - Workers: {enhanced_data_config['num_workers']} (reduced for efficiency)")
+        logger.info(f"   - Prefetch factor: {enhanced_data_config['prefetch_factor']} (reduced for memory)")
+        logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (small for fast iterations)")
+        logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (optimized for speed)")
+        logger.info(f"   - Gradient accumulation: {enhanced_data_config['gradient_accumulation_steps']} (effective batch = {enhanced_data_config['batch_size'] * enhanced_data_config['gradient_accumulation_steps']})")
+        logger.info("   - Memory-efficient preprocessing and reduced tracking overhead")
+        logger.info("🎯 Configuration optimized for fast GPU utilization and stable memory usage")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get(
@@ -1082,8 +1085,8 @@ class BitMarTrainer:
                 'epoch': epoch, 'step': step, 'param_change': fusion_param_change
             })
             
-            # Log every 10k steps for visibility
-            if step % 10000 == 0:
+            # Log every 50k steps for reduced overhead
+            if step % 50000 == 0:
                 logger.info(f"� Component Learning Progress (Step {step}):")
                 logger.info(f"   → Text: grad_norm={text_grad_norm:.4f}, param_change={text_param_change:.4f}")
                 logger.info(f"   → Vision: grad_norm={vision_grad_norm:.4f}, param_change={vision_param_change:.4f}")
@@ -1280,101 +1283,200 @@ class BitMarTrainer:
     def _apply_selective_vision_freezing(self):
         """Apply selective vision parameter freezing to focus on text-vision association"""
         try:
+            # 🔍 ENHANCED VISION PARAMETER DETECTION AND FREEZING
+            logger.info("🔍 Analyzing model structure for vision parameter freezing...")
+            
+            # First, let's analyze the entire model structure
+            total_model_params = 0
+            vision_params = 0
+            text_params = 0
+            fusion_params = 0
+            other_params = 0
+            
+            # Categorize ALL model parameters first
+            all_param_info = []
+            for name, param in self.model.named_parameters():
+                param_count = param.numel()
+                total_model_params += param_count
+                
+                # More comprehensive categorization
+                is_vision = any(keyword in name.lower() for keyword in [
+                    'vision', 'dinov2', 'visual', 'image', 'patch', 'embed', 
+                    'cls_token', 'pos_embed', 'encoder.layer', 'backbone'
+                ])
+                is_text = any(keyword in name.lower() for keyword in [
+                    'text_encoder', 'text_decoder', 'language', 'tokenizer',
+                    'transformer', 'gpt', 'bert', 'embedding', 'decoder'
+                ])
+                is_fusion = any(keyword in name.lower() for keyword in [
+                    'fusion', 'qformer', 'cross_attention', 'multimodal', 
+                    'cross_modal', 'query_tokens', 'projector'
+                ])
+                
+                component_type = "OTHER"
+                if is_vision:
+                    component_type = "VISION"
+                    vision_params += param_count
+                elif is_text:
+                    component_type = "TEXT"
+                    text_params += param_count
+                elif is_fusion:
+                    component_type = "FUSION"
+                    fusion_params += param_count
+                else:
+                    other_params += param_count
+                
+                all_param_info.append({
+                    'name': name,
+                    'param': param,
+                    'count': param_count,
+                    'type': component_type
+                })
+            
+            # Log parameter distribution
+            logger.info(f"📊 Model Parameter Distribution:")
+            logger.info(f"   → Total parameters: {total_model_params:,}")
+            logger.info(f"   → Vision parameters: {vision_params:,} ({vision_params/total_model_params*100:.1f}%)")
+            logger.info(f"   → Text parameters: {text_params:,} ({text_params/total_model_params*100:.1f}%)")
+            logger.info(f"   → Fusion parameters: {fusion_params:,} ({fusion_params/total_model_params*100:.1f}%)")
+            logger.info(f"   → Other parameters: {other_params:,} ({other_params/total_model_params*100:.1f}%)")
+            
+            # 🎯 STRATEGIC FREEZING: Freeze parameters to achieve ~60-70% frozen total
+            target_freeze_percentage = 0.65  # Target 65% frozen
+            target_frozen_params = int(total_model_params * target_freeze_percentage)
+            
             frozen_params = 0
             trainable_params = 0
-            quantized_params = 0
             
-            # 🎯 AGGRESSIVE VISION FREEZING: Freeze 70% of vision parameters for faster training
-            freeze_ratio = 0.7  # Freeze 70% instead of 30%
-            
-            # First, let's identify all vision-related modules in the model
-            vision_modules = []
-            
-            # Check for various vision encoder names
-            for attr_name in ['vision_encoder', 'dinov2', 'vision_backbone', 'visual_encoder']:
-                if hasattr(self.model, attr_name):
-                    vision_encoder = getattr(self.model, attr_name)
-                    if vision_encoder is not None:
-                        vision_modules.append((attr_name, vision_encoder))
-                        logger.info(f"Found vision module: {attr_name}")
-            
-            # Also check for nested vision modules
-            for name, module in self.model.named_modules():
-                if any(keyword in name.lower() for keyword in ['vision', 'dinov2', 'visual', 'image']):
-                    if hasattr(module, 'parameters') and any(p.requires_grad for p in module.parameters()):
-                        vision_modules.append((name, module))
-                        logger.info(f"Found nested vision module: {name}")
-            
-            # Freeze vision parameters
-            for module_name, vision_encoder in vision_modules:
-                if vision_encoder is not None:
-                    # Get all vision parameters
-                    vision_params = list(vision_encoder.named_parameters())
-                    num_to_freeze = int(len(vision_params) * freeze_ratio)
-                    
-                    logger.info(f"Processing {module_name}: {len(vision_params)} parameters, freezing {num_to_freeze}")
-                    
-                    # Freeze first 70% of vision parameters (earlier layers)
-                    for i, (name, param) in enumerate(vision_params):
-                        if i < num_to_freeze:
-                            param.requires_grad = False
-                            frozen_params += param.numel()
-                        else:
-                            param.requires_grad = True
-                            trainable_params += param.numel()
-                            
-                        # Quantization tracking
-                        if hasattr(param, 'quantization_info') or 'quantized' in str(type(param)):
-                            quantized_params += param.numel()
-            
-            # Keep vision projector trainable - this is crucial for text-vision association
-            if hasattr(self.model, 'vision_projector'):
-                for name, param in self.model.vision_projector.named_parameters():
-                    param.requires_grad = True
-                    trainable_params += param.numel()
-                logger.info("Vision projector kept trainable")
-            
-            # Keep QFormer vision-text fusion layers trainable - essential for cross-modal learning
-            fusion_modules = []
-            for attr_name in ['qformer', 'fusion_transformer', 'multimodal_fusion']:
-                if hasattr(self.model, attr_name):
-                    fusion_module = getattr(self.model, attr_name)
-                    if fusion_module is not None:
-                        fusion_modules.append((attr_name, fusion_module))
-                        
-            for module_name, fusion_module in fusion_modules:
-                for name, param in fusion_module.named_parameters():
-                    # Only keep cross-attention and fusion layers trainable
-                    if any(keyword in name.lower() for keyword in ['cross_attention', 'fusion', 'query', 'key', 'value']):
-                        param.requires_grad = True
-                        trainable_params += param.numel()
+            # Strategy: Freeze vision backbone (heavy), some fusion layers, keep text trainable
+            for param_info in all_param_info:
+                name = param_info['name']
+                param = param_info['param']
+                param_count = param_info['count']
+                component_type = param_info['type']
+                
+                should_freeze = False
+                
+                if component_type == "VISION":
+                    # Freeze most vision parameters except critical ones for text-vision association
+                    if any(keep_keyword in name.lower() for keep_keyword in [
+                        'projector', 'head', 'classifier', 'final'
+                    ]):
+                        should_freeze = False  # Keep critical vision-text bridge components
                     else:
-                        param.requires_grad = False
-                        frozen_params += param.numel()
-                logger.info(f"QFormer {module_name} fusion layers configured")
+                        should_freeze = True   # Freeze vision backbone
+                        
+                elif component_type == "FUSION":
+                    # Freeze some fusion layers but keep cross-attention trainable
+                    if any(keep_keyword in name.lower() for keep_keyword in [
+                        'cross_attention', 'query', 'key', 'value', 'attention.output'
+                    ]):
+                        should_freeze = False  # Keep attention mechanisms trainable
+                    else:
+                        should_freeze = True   # Freeze other fusion components
+                        
+                elif component_type == "TEXT":
+                    # Keep most text parameters trainable for language learning
+                    if 'embedding' in name.lower() or 'position' in name.lower():
+                        should_freeze = True   # Freeze embeddings to save parameters
+                    else:
+                        should_freeze = False  # Keep text processing trainable
+                        
+                else:  # OTHER
+                    # Freeze miscellaneous parameters
+                    should_freeze = True
+                
+                # Apply freezing decision
+                if should_freeze and frozen_params < target_frozen_params:
+                    param.requires_grad = False
+                    frozen_params += param_count
+                else:
+                    param.requires_grad = True
+                    trainable_params += param_count
             
-            # Keep all text components fully trainable
-            for attr_name in ['text_encoder', 'text_decoder', 'language_model']:
-                if hasattr(self.model, attr_name):
-                    text_module = getattr(self.model, attr_name)
-                    if text_module is not None:
-                        for name, param in text_module.named_parameters():
-                            param.requires_grad = True
-                            trainable_params += param.numel()
-                        logger.info(f"Text module {attr_name} kept trainable")
+            # Verify we didn't accidentally freeze critical components
+            critical_trainable = [
+                'text_decoder', 'language_model', 'cross_attention', 
+                'projector', 'qformer.query', 'fusion'
+            ]
             
+            for param_info in all_param_info:
+                name = param_info['name']
+                param = param_info['param']
+                
+                # Force critical components to be trainable
+                if any(critical in name.lower() for critical in critical_trainable):
+                    if not param.requires_grad:
+                        param.requires_grad = True
+                        frozen_params -= param_info['count']
+                        trainable_params += param_info['count']
+            
+            # Final statistics
             total_params = frozen_params + trainable_params
             frozen_percent = (frozen_params / total_params * 100) if total_params > 0 else 0
             trainable_percent = (trainable_params / total_params * 100) if total_params > 0 else 0
             
-            logger.info(f"🎯 AGGRESSIVE vision freezing applied (70% frozen):")
-            logger.info(f"   - Frozen parameters: {frozen_params:,} ({frozen_percent:.1f}%)")
-            logger.info(f"   - Trainable parameters: {trainable_params:,} ({trainable_percent:.1f}%)")
-            logger.info(f"🚀 Training will focus on text-vision association with 70% vision frozen")
+            logger.info(f"🎯 STRATEGIC PARAMETER FREEZING APPLIED:")
+            logger.info(f"   → Target freeze percentage: {target_freeze_percentage*100:.1f}%")
+            logger.info(f"   → Frozen parameters: {frozen_params:,} ({frozen_percent:.1f}%)")
+            logger.info(f"   → Trainable parameters: {trainable_params:,} ({trainable_percent:.1f}%)")
+            logger.info(f"   → Total parameters: {total_params:,}")
+            
+            if frozen_percent < 50:
+                logger.warning(f"⚠️ Freezing percentage ({frozen_percent:.1f}%) is lower than expected!")
+                logger.warning("This might indicate the model structure is different than anticipated.")
+            else:
+                logger.info(f"✅ Successfully froze {frozen_percent:.1f}% of parameters for efficient training")
             
         except Exception as e:
             logger.warning(f"Selective vision freezing failed: {e}")
             logger.info("Continuing with standard training...")
+            # Print stack trace for debugging
+            import traceback
+            logger.warning(f"Freezing error details: {traceback.format_exc()}")
+    
+    def _debug_model_structure(self):
+        """Debug method to understand the actual model structure"""
+        try:
+            logger.info("🔍 DEBUGGING MODEL STRUCTURE:")
+            
+            # Show top-level modules
+            logger.info("📋 Top-level model attributes:")
+            for attr_name in dir(self.model):
+                if not attr_name.startswith('_') and hasattr(self.model, attr_name):
+                    attr = getattr(self.model, attr_name)
+                    if hasattr(attr, 'parameters'):
+                        param_count = sum(p.numel() for p in attr.parameters())
+                        logger.info(f"   → {attr_name}: {param_count:,} parameters")
+            
+            # Show parameter name patterns
+            logger.info("📋 Parameter name patterns (first 20):")
+            param_names = list(self.model.named_parameters())
+            for i, (name, param) in enumerate(param_names[:20]):
+                logger.info(f"   → {name}: {param.shape} ({param.numel():,} params)")
+            
+            if len(param_names) > 20:
+                logger.info(f"   ... and {len(param_names) - 20} more parameters")
+            
+            # Check for specific component patterns
+            vision_names = [name for name, _ in param_names if any(kw in name.lower() for kw in ['vision', 'dinov2', 'visual', 'image'])]
+            text_names = [name for name, _ in param_names if any(kw in name.lower() for kw in ['text', 'language', 'transformer', 'gpt', 'bert'])]
+            fusion_names = [name for name, _ in param_names if any(kw in name.lower() for kw in ['fusion', 'qformer', 'cross', 'multimodal'])]
+            
+            logger.info(f"🔍 Component name analysis:")
+            logger.info(f"   → Vision-related parameters: {len(vision_names)}")
+            logger.info(f"   → Text-related parameters: {len(text_names)}")
+            logger.info(f"   → Fusion-related parameters: {len(fusion_names)}")
+            
+            if vision_names:
+                logger.info(f"   → Sample vision names: {vision_names[:5]}")
+            if text_names:
+                logger.info(f"   → Sample text names: {text_names[:5]}")
+            if fusion_names:
+                logger.info(f"   → Sample fusion names: {fusion_names[:5]}")
+                
+        except Exception as e:
+            logger.warning(f"Model structure debugging failed: {e}")
 
     # END EPISODIC MEMORY CONSOLIDATION METHODS
 
@@ -1410,8 +1512,8 @@ class BitMarTrainer:
 
         for batch_idx, batch in enumerate(progress_bar):
             try:
-                # IMMEDIATE OOM Protection - check memory before processing
-                if torch.cuda.is_available():
+                # OPTIMIZED OOM Protection - check memory less frequently for speed
+                if self.global_step % 100 == 0 and torch.cuda.is_available():  # Check every 100 steps
                     memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
                     total_memory = torch.cuda.get_device_properties(self.device).total_memory / 1024**3  # GB
                     memory_usage_percent = (memory_allocated / total_memory) * 100
@@ -1420,21 +1522,13 @@ class BitMarTrainer:
                         logger.warning(f"High memory usage detected: {memory_usage_percent:.1f}% - clearing cache")
                         torch.cuda.empty_cache()
                         gc.collect()
-                        
-                        # Check again after cleanup
-                        memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3
-                        memory_usage_percent = (memory_allocated / total_memory) * 100
-                        if memory_usage_percent > 85:  # Still too high
-                            logger.error(f"Memory usage still high after cleanup: {memory_usage_percent:.1f}% - skipping batch")
-                            self.global_step += 1
-                            continue
                 
                 # Pass global step to model for consolidation logic
                 if hasattr(self.model, 'global_step'):
                     self.model.global_step = self.global_step
                 
                 # MINIMAL device checks - only when absolutely necessary
-                if self.global_step % 5000 == 0:  # Much less frequent checks
+                if self.global_step % 25000 == 0:  # Much less frequent checks for speed
                     self._silent_device_check()
 
                 # Use efficient batch transfer method
@@ -1532,8 +1626,8 @@ class BitMarTrainer:
 
                 # � COMPREHENSIVE TRACKING: Track component learning and cross-modal similarity
                 try:
-                    # Track cross-modal similarity at significant intervals
-                    if self.global_step % self.tracking_interval == 0:
+                    # Track cross-modal similarity less frequently for speed
+                    if self.global_step % (self.tracking_interval * 4) == 0:  # Every 200k steps instead of 50k
                         cross_modal_sim = self._compute_cross_modal_similarity(batch, outputs)
                         self.component_metrics['cross_modal_similarity'].append({
                             'epoch': epoch,
@@ -1543,19 +1637,19 @@ class BitMarTrainer:
                         })
                         logger.info(f"📊 Cross-Modal Similarity (Step {self.global_step}): {cross_modal_sim:.4f}")
                     
-                    # Track component learning progress
-                    if self.global_step % 10000 == 0:  # Every 10k steps
+                    # Track component learning less frequently
+                    if self.global_step % 50000 == 0:  # Every 50k steps instead of 10k
                         self._track_component_learning(epoch, self.global_step)
                     
-                    # Track quadrangle attention weights
-                    if self.global_step % 25000 == 0:  # Every 25k steps
+                    # Track quadrangle attention less frequently
+                    if self.global_step % 100000 == 0:  # Every 100k steps instead of 25k
                         self._track_quadrangle_attention_weights(outputs, epoch, self.global_step)
                         
                 except Exception as e:
                     logger.warning(f"Tracking failed at step {self.global_step}: {e}")
 
                 # �🚀 OPTIMIZED Backward pass with gradient accumulation for full dataset training
-                gradient_accumulation_steps = self.config.get('training', {}).get('gradient_accumulation_steps', 4)  # Optimized for full dataset
+                gradient_accumulation_steps = self.config.get('training', {}).get('gradient_accumulation_steps', 16)  # Use higher accumulation for small batches
                 
                 try:
                     # Normalize loss by accumulation steps for correct scaling
