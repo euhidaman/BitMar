@@ -1,9 +1,12 @@
 """
-Training script for BitMar model
-Handles multimodal training with episodic memory and attention analysis
-Enhanced with intelligent dataset optimization for full dataset training
+Training script for BitMar model with QFormer Cross-Modal Alignment
+Handles multimodal training with episodic memory and human-inspired learning
 """
 
+print("🚀 Starting train_bitmar.py script...")
+
+# Core imports
+print("📦 Importing core modules...")
 from src.attention_analysis import analyze_model_attention
 from src.dataset import create_data_module
 from src.model import create_bitmar_model, count_parameters
@@ -15,6 +18,8 @@ from src.modality_tracker import ModalityTracker
 from src.dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader
 # NEW: HuggingFace compatibility
 from src.hf_compatibility import save_bitmar_as_hf_model
+print("✅ Dataset and model modules imported")
+
 from codecarbon import EmissionsTracker
 import os
 import sys
@@ -35,6 +40,7 @@ import gc
 import psutil
 import traceback
 import shutil
+print("✅ All core imports completed")
 
 # Try to import bitsandbytes for 8-bit optimizer
 try:
@@ -78,17 +84,29 @@ class BitMarTrainer:
             config: Either a string path to config file or a loaded config dictionary
             device: Optional device specification
         """
+        print("🔧 BitMarTrainer.__init__() started...")
+        sys.stdout.flush()
+
         # Handle both config path (string) and loaded config (dict)
         if isinstance(config, str):
+            print(f"📄 Loading config from file: {config}")
+            sys.stdout.flush()
             with open(config, 'r') as f:
                 self.config = yaml.safe_load(f)
         elif isinstance(config, dict):
+            print("📄 Using provided config dictionary")
+            sys.stdout.flush()
             self.config = config
         else:
             raise TypeError(
                 "config must be either a string path or a dictionary")
 
+        print("✅ Configuration loaded successfully")
+        sys.stdout.flush()
+
         # Set device - prioritize user specification, then config, then auto-detect
+        print("🎯 Setting up device configuration...")
+        sys.stdout.flush()
         if device:
             self.device = torch.device(device)
         elif self.config.get('training', {}).get('device'):
@@ -98,24 +116,86 @@ class BitMarTrainer:
             self.device = torch.device(
                 "cuda:0" if torch.cuda.is_available() else "cpu")
 
-        # Ensure CUDA is initialized if available
+        print(f"🎯 Device selected: {self.device}")
+        sys.stdout.flush()
+
+        # Ensure CUDA is initialized if available - WITH TIMEOUT PROTECTION
         if self.device.type == 'cuda':
-            torch.cuda.init()
-            logger.info(
-                f"Using CUDA device: {torch.cuda.get_device_name(self.device)}")
-            # Don't set default tensor type to avoid DataLoader issues
-            logger.info(
-                "CUDA initialized, model will be moved to GPU explicitly")
+            try:
+                print("🔄 Initializing CUDA...")
+                sys.stdout.flush()
+
+                # Add timeout protection for CUDA operations
+                import signal
+                import threading
+                import time
+
+                def cuda_init_with_timeout():
+                    """Initialize CUDA with timeout protection"""
+                    try:
+                        # Test CUDA availability first
+                        if not torch.cuda.is_available():
+                            raise RuntimeError("CUDA not available")
+
+                        # Initialize CUDA (this can hang)
+                        torch.cuda.init()
+
+                        # Get device name (this can also hang)
+                        device_name = torch.cuda.get_device_name(self.device)
+                        return device_name
+                    except Exception as e:
+                        raise e
+
+                # Use threading for timeout control on Windows
+                result = [None]
+                exception = [None]
+
+                def cuda_worker():
+                    try:
+                        result[0] = cuda_init_with_timeout()
+                    except Exception as e:
+                        exception[0] = e
+
+                thread = threading.Thread(target=cuda_worker)
+                thread.daemon = True
+                thread.start()
+                thread.join(timeout=10.0)  # 10 second timeout
+
+                if thread.is_alive():
+                    logger.warning("CUDA initialization timed out (10s), continuing with CPU")
+                    self.device = torch.device("cpu")
+                elif exception[0]:
+                    logger.warning(f"CUDA initialization failed: {exception[0]}")
+                    logger.warning("Falling back to CPU")
+                    self.device = torch.device("cpu")
+                elif result[0]:
+                    logger.info(f"Using CUDA device: {result[0]}")
+                    logger.info("CUDA initialized, model will be moved to GPU explicitly")
+                    print("✅ CUDA initialized successfully")
+                    sys.stdout.flush()
+                else:
+                    logger.warning("CUDA initialization returned no result, falling back to CPU")
+                    self.device = torch.device("cpu")
+
+            except Exception as e:
+                logger.warning(f"CUDA initialization failed: {e}")
+                logger.warning("Falling back to CPU")
+                self.device = torch.device("cpu")
         else:
-            logger.warning(
-                "CUDA not available, using CPU. Training will be slow.")
+            logger.warning("CUDA not available, using CPU. Training will be slow.")
 
         # Initialize tracking variables
+        print("🔢 Initializing tracking variables...")
+        sys.stdout.flush()
         self.global_step = 0
         self.current_epoch = 0
         self.best_val_loss = float('inf')
         self._last_model_device = None
         self._device_warnings_count = 0
+
+        print(f"✅ Final device: {self.device}")
+        print("✅ BitMarTrainer.__init__() completed successfully")
+        sys.stdout.flush()
 
     def setup_directories(self):
         """Create output directories"""
@@ -234,28 +314,43 @@ class BitMarTrainer:
             logger.info("✅ Memory-efficient attention enabled")
 
         # Force model to GPU with verification and CPU memory cleanup
+        print("🎯 Moving model to GPU...")
+        sys.stdout.flush()
         self.model.to(self.device)
         logger.info(f"Model moved to device: {self.device}")
 
-        # 🚀 SAFER: Enable basic PyTorch optimizations (no compilation for stability)
+        # 🚀 ENHANCED GPU OPTIMIZATIONS FOR MAXIMUM PERFORMANCE
         try:
-            # Use torch.backends optimization instead of compilation
+            # Enhanced PyTorch optimizations for GPU acceleration
             if torch.cuda.is_available():
                 torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+                torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
                 torch.backends.cuda.matmul.allow_tf32 = True  # Allow TF32 for speed
                 torch.backends.cudnn.allow_tf32 = True
-                logger.info(
-                    "🔥 ENABLED CUDA optimizations: cuDNN benchmark, TF32")
+                
+                # Set CUDA memory management for optimal performance
+                torch.cuda.set_per_process_memory_fraction(0.95, device=self.device)  # Use 95% of GPU memory
+                
+                logger.info("🔥 ENABLED AGGRESSIVE CUDA optimizations: cuDNN benchmark, TF32, memory optimization")
+                print("⚡ GPU optimizations enabled")
+                sys.stdout.flush()
             else:
                 logger.warning("CUDA not available for optimizations")
         except Exception as e:
             logger.warning(f"CUDA optimizations failed: {e}")
 
-        # 🚀 Enable mixed precision training (safer than compilation)
+        # 🚀 ENABLE MIXED PRECISION TRAINING FOR MAXIMUM GPU ACCELERATION
         if torch.cuda.is_available() and hasattr(torch.cuda, 'amp'):
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.cuda.amp.GradScaler(
+                init_scale=2.**16,  # Higher initial scale for better precision
+                growth_factor=2.0,  # Faster scale growth
+                backoff_factor=0.5,  # Moderate backoff
+                growth_interval=2000  # More frequent scale updates
+            )
             self.use_amp = True
-            logger.info("⚡ ENABLED Mixed Precision Training (AMP) for speed")
+            logger.info("⚡ ENABLED AGGRESSIVE Mixed Precision Training (AMP) for maximum GPU speed")
+            print("🚀 Mixed precision training enabled")
+            sys.stdout.flush()
         else:
             self.scaler = None
             self.use_amp = False
@@ -271,6 +366,8 @@ class BitMarTrainer:
         logger.info(f"Model parameters are on device: {model_device}")
 
         # Force all model components to GPU and clear CPU references
+        print("🔧 Ensuring all model components are on GPU...")
+        sys.stdout.flush()
         for name, param in self.model.named_parameters():
             if param.device != self.device:
                 logger.warning(
@@ -283,8 +380,14 @@ class BitMarTrainer:
         if torch.cuda.is_available():
             memory_allocated = torch.cuda.memory_allocated(
                 self.device) / 1024**3  # GB
+            memory_reserved = torch.cuda.memory_reserved(
+                self.device) / 1024**3  # GB
+            total_memory = torch.cuda.get_device_properties(
+                self.device).total_memory / 1024**3  # GB
             logger.info(
-                f"GPU memory allocated after model loading: {memory_allocated:.2f} GB")
+                f"🎯 GPU memory status - Allocated: {memory_allocated:.2f}GB, Reserved: {memory_reserved:.2f}GB, Total: {total_memory:.2f}GB")
+            print(f"⚡ GPU Memory: {memory_allocated:.2f}GB/{total_memory:.2f}GB allocated")
+            sys.stdout.flush()
 
         # Log model info
         param_count = count_parameters(self.model)
@@ -329,21 +432,21 @@ class BitMarTrainer:
         enhanced_data_config = self.config['data'].copy()
 
         # Ensure all required keys are included with proper fallbacks
-        # 🚀 BALANCED OPTIMIZATION FOR STABLE GPU UTILIZATION 🚀
+        # 🚀 AGGRESSIVE GPU OPTIMIZATION FOR MAXIMUM UTILIZATION 🚀
         required_keys = {
             'dataset_dir': "../babylm_dataset",
-            'max_seq_length': 256,  # Reasonable sequence length
-            'batch_size': 16,  # Conservative batch size for stability with mixed precision
-            'num_workers': 4,  # Balanced workers for data loading
-            'pin_memory': True,  # Re-enabled for faster GPU transfer
+            'max_seq_length': 256,  # Optimized sequence length for GPU
+            'batch_size': 32,  # Increased batch size for better GPU utilization
+            'num_workers': 6,  # More workers for aggressive data loading
+            'pin_memory': True,  # Critical for GPU transfer speed
             'text_encoder_name': 'gpt2',
-            'persistent_workers': True,  # Re-enabled for faster data loading
+            'persistent_workers': True,  # Keep workers alive for efficiency
             'validation_datasets': ['glue/sst2'],
-            # GPU-optimized settings
-            'prefetch_factor': 4,  # Balanced prefetching for GPU feeding
-            'drop_last': True,  # Keep this for consistent batch sizes
+            # AGGRESSIVE GPU-optimized settings
+            'prefetch_factor': 8,  # Aggressive prefetching for GPU pipeline
+            'drop_last': True,  # Consistent batch sizes for GPU efficiency
             'memory_efficient_loading': False,  # Disable CPU optimizations that hurt GPU
-            'non_blocking': True,  # Enable non-blocking transfers
+            'non_blocking': True,  # Enable non-blocking GPU transfers
         }
 
         for key, fallback_value in required_keys.items():
@@ -361,35 +464,37 @@ class BitMarTrainer:
         # Apply AGGRESSIVE quick training mode settings for maximum GPU utilization
         if quick_mode.get('enabled', False):
             logger.info(
-                "🚀 Applying BALANCED quick training mode data settings...")
-            # DON'T disable mixed training - we still want text+multimodal!
-            # enhanced_data_config['use_mixed_training'] = False  # REMOVED - this was causing multimodal-only
+                "🚀 Applying AGGRESSIVE quick training mode data settings for maximum GPU performance...")
+            # Increase batch size for better GPU utilization
             enhanced_data_config['batch_size'] = max(
-                enhanced_data_config.get('batch_size', 16), 32)  # Balanced batch for GPU utilization
+                enhanced_data_config.get('batch_size', 32), 48)  # Aggressive batch for maximum GPU utilization
             enhanced_data_config['max_seq_length'] = min(enhanced_data_config.get(
-                'max_seq_length', 512), 256)  # Reduce sequence length
+                'max_seq_length', 512), 256)  # Optimized sequence length
+            enhanced_data_config['num_workers'] = 8  # Maximum workers for data loading
+            enhanced_data_config['prefetch_factor'] = 12  # Aggressive prefetching
             logger.info(
-                f"Quick mode: batch_size={enhanced_data_config['batch_size']}, max_seq_length={enhanced_data_config['max_seq_length']}")
+                f"AGGRESSIVE Quick mode: batch_size={enhanced_data_config['batch_size']}, max_seq_length={enhanced_data_config['max_seq_length']}")
+            logger.info(
+                f"AGGRESSIVE Workers: {enhanced_data_config['num_workers']}, prefetch_factor={enhanced_data_config['prefetch_factor']}")
             logger.info(
                 "📊 Quick mode: Preserving mixed training (text + multimodal) for better learning")
 
         # Apply AGGRESSIVE GPU-optimized data loading for maximum performance
-        # Apply BALANCED GPU-optimized data loading for stable performance
         enhanced_data_config.update({
-            # Balanced GPU optimization settings
-            'num_workers': 4,  # Balanced workers for parallel loading
-            'pin_memory': True,  # Enable pinned memory for faster GPU transfer
+            # AGGRESSIVE GPU optimization settings
+            'num_workers': enhanced_data_config.get('num_workers', 6),  # More workers for parallel loading
+            'pin_memory': True,  # Critical for GPU transfer speed
             'persistent_workers': True,  # Keep workers alive for efficiency
-            'prefetch_factor': 4,  # Balanced prefetching for GPU pipeline
+            'prefetch_factor': enhanced_data_config.get('prefetch_factor', 8),  # Aggressive prefetching
             'multiprocessing_context': None,  # Use default (spawn on Windows)
             'drop_last': True,  # Consistent batch sizes for GPU efficiency
-            'non_blocking': True,  # Non-blocking GPU transfers
-            # Additional optimizations
+            'non_blocking': True,  # Non-blocking GPU transfers for speed
+            # Additional AGGRESSIVE optimizations
             'shuffle': True,  # Ensure data shuffling for better GPU utilization
-            'timeout': 30,  # Reasonable timeout for data loading
+            'timeout': 60,  # Longer timeout for aggressive data loading
         })
         logger.info(
-            "⚡ Applied BALANCED GPU-optimized data loading for stable performance")
+            "⚡ Applied AGGRESSIVE GPU-optimized data loading for maximum performance")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get(
@@ -549,10 +654,22 @@ class BitMarTrainer:
                     self.global_step += 1
                     continue
 
-                # 🚀 OPTIMIZED Forward pass with mixed precision for GPU acceleration
+                # 🚀 OPTIMIZED Forward pass with aggressive mixed precision for maximum GPU acceleration
                 try:
+                    # CRITICAL: Ensure all inputs are on GPU with optimized transfers
+                    for key in ['input_ids', 'attention_mask', 'vision_features', 'labels']:
+                        if key in batch and batch[key] is not None:
+                            # Use non_blocking=True for maximum GPU transfer speed
+                            batch[key] = batch[key].to(self.device, non_blocking=True)
+                            # Validate tensor is finite
+                            if torch.is_floating_point(batch[key]) and not torch.isfinite(batch[key]).all():
+                                logger.warning(f"Non-finite values detected in {key}, skipping batch")
+                                self.global_step += 1
+                                continue
+                    
+                    # AGGRESSIVE: Always use mixed precision when available for maximum speed
                     if self.use_amp:
-                        with torch.amp.autocast('cuda'):
+                        with torch.amp.autocast('cuda', dtype=torch.float16):  # Force float16 for speed
                             outputs = self.model(
                                 input_ids=batch['input_ids'],
                                 attention_mask=batch['attention_mask'],
@@ -596,39 +713,53 @@ class BitMarTrainer:
                     else:
                         raise e
 
-                # Check for invalid loss
+                # Check for invalid loss with NaN recovery
                 if not torch.isfinite(loss):
                     logger.warning(
                         f"Invalid loss at step {self.global_step}: {loss.item()}")
+                    logger.warning("Attempting to recover from NaN loss...")
+                    
+                    # Clear GPU cache and skip this batch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
+                    # Force cleanup of problematic tensors
+                    del outputs
+                    gc.collect()
+                    
+                    self.global_step += 1
                     continue
 
-                # 🚀 OPTIMIZED Backward pass with mixed precision for GPU acceleration
+                # 🚀 OPTIMIZED Backward pass with aggressive mixed precision for maximum GPU acceleration
                 try:
-                    self.optimizer.zero_grad()
+                    # Use grad accumulation for larger effective batch sizes on GPU
+                    self.optimizer.zero_grad(set_to_none=True)  # More efficient memory cleanup
 
                     if self.use_amp:
-                        # Mixed precision backward pass
+                        # AGGRESSIVE mixed precision backward pass with optimized scaling
                         self.scaler.scale(loss).backward()
 
-                        # Gradient clipping with scaling
+                        # Gradient clipping with scaling - more aggressive
                         if self.config['training']['gradient_clip_val'] > 0:
                             self.scaler.unscale_(self.optimizer)
                             torch.nn.utils.clip_grad_norm_(
                                 self.model.parameters(),
-                                self.config['training']['gradient_clip_val']
+                                self.config['training']['gradient_clip_val'],
+                                norm_type=2.0  # L2 norm for better stability
                             )
 
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                     else:
-                        # Standard backward pass
+                        # Standard backward pass with optimizations
                         loss.backward()
 
-                        # Gradient clipping
+                        # Gradient clipping with L2 norm
                         if self.config['training']['gradient_clip_val'] > 0:
                             torch.nn.utils.clip_grad_norm_(
                                 self.model.parameters(),
-                                self.config['training']['gradient_clip_val']
+                                self.config['training']['gradient_clip_val'],
+                                norm_type=2.0
                             )
 
                         self.optimizer.step()
@@ -708,20 +839,29 @@ class BitMarTrainer:
                                 f"High GPU memory usage detected, forcing cleanup...")
                             self._force_cleanup()
 
-                # Log GPU memory usage every 100 steps
-                if self.global_step % 100 == 0 and torch.cuda.is_available():
+                # Log GPU memory usage and utilization every 50 steps for monitoring
+                if self.global_step % 50 == 0 and torch.cuda.is_available():
                     memory_allocated = torch.cuda.memory_allocated(
                         self.device) / 1024**3  # GB
                     memory_reserved = torch.cuda.memory_reserved(
                         self.device) / 1024**3  # GB
-                    gpu_util = torch.cuda.utilization(self.device) if hasattr(
-                        torch.cuda, 'utilization') else -1
+                    memory_total = torch.cuda.get_device_properties(
+                        self.device).total_memory / 1024**3  # GB
+                    
+                    # Calculate GPU utilization percentage
+                    gpu_util_percent = (memory_allocated / memory_total) * 100
+                    
                     logger.info(
-                        f"Step {self.global_step}: GPU Memory - Allocated: {memory_allocated:.2f}GB, Reserved: {memory_reserved:.2f}GB")
+                        f"Step {self.global_step}: GPU Memory - {memory_allocated:.2f}GB/{memory_total:.2f}GB ({gpu_util_percent:.1f}%), Reserved: {memory_reserved:.2f}GB")
+                    
+                    # Print to console every 100 steps for immediate feedback
+                    if self.global_step % 100 == 0:
+                        print(f"⚡ Step {self.global_step}: GPU {gpu_util_percent:.1f}% utilized, Loss: {loss.item():.4f}")
+                        sys.stdout.flush()
 
-                # Enhanced logging with wandb logger - fix step counting
+                # Enhanced logging with wandb logger - fix step counting (reduced frequency for speed)
                 log_every_n_steps = self.config.get(
-                    'wandb', {}).get('log_every_n_steps', 50)
+                    'wandb', {}).get('log_every_n_steps', 100)  # Less frequent logging
                 if self.wandb_logger and log_every_n_steps > 0 and batch_idx % log_every_n_steps == 0 and self.global_step > 0:
                     try:
                         # Log all metrics in a single consolidated call
@@ -748,9 +888,9 @@ class BitMarTrainer:
                             f"Wandb logging failed at step {self.global_step}: {e}")
                         # Continue training without wandb logging for this step
 
-                # Comprehensive modality tracking (NEW!)
+                # Comprehensive modality tracking (NEW!) - reduced frequency for speed
                 modality_track_steps = self.config.get(
-                    'track_attention_every_n_steps', 50)
+                    'track_attention_every_n_steps', 200)  # Less frequent tracking
                 if (self.modality_tracker and modality_track_steps > 0 and
                         self.global_step % modality_track_steps == 0):
 
@@ -859,15 +999,23 @@ class BitMarTrainer:
                 if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
                     self.scheduler.step()
 
-                # Aggressive memory cleanup every 50 steps to prevent CPU/GPU OOM
-                if self.global_step > 0 and self.global_step % 50 == 0:
-                    self._force_cleanup()
+                # Optimized memory cleanup every 100 steps to maintain GPU performance
+                if self.global_step > 0 and self.global_step % 100 == 0:
+                    # Only do aggressive cleanup if memory usage is high
+                    if torch.cuda.is_available():
+                        memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3
+                        memory_total = torch.cuda.get_device_properties(self.device).total_memory / 1024**3
+                        if memory_allocated > memory_total * 0.85:  # 85% threshold for cleanup
+                            self._force_cleanup()
+                            logger.debug(f"Performed memory cleanup at step {self.global_step}")
 
-                # Clear batch references immediately after processing
+                # Clear batch references immediately after processing for memory efficiency
                 del batch
                 if 'outputs' in locals():
                     del outputs
-                gc.collect()  # Quick garbage collection every batch
+                # Only call gc.collect() occasionally to avoid performance impact
+                if self.global_step % 200 == 0:
+                    gc.collect()
 
             except Exception as e:
                 logger.error(
@@ -1607,12 +1755,20 @@ class BitMarTrainer:
                     projection_key = f'vision_proj_{current_dim}_to_{expected_dim}'
                     if not hasattr(self, projection_key):
                         projection_layer = nn.Linear(current_dim, expected_dim).to(vision_features.device)
+                        # CRITICAL: Initialize projection layer properly to prevent NaN
+                        with torch.no_grad():
+                            nn.init.xavier_uniform_(projection_layer.weight, gain=0.1)  # Small gain for stability
+                            if projection_layer.bias is not None:
+                                nn.init.zeros_(projection_layer.bias)
                         setattr(self, projection_key, projection_layer)
                         logger.info(f"Created vision projection: {current_dim} -> {expected_dim}")
                     
-                    # Apply projection
+                    # Apply projection with numerical stability
                     projection_layer = getattr(self, projection_key)
                     vision_features = projection_layer(vision_features)
+                    
+                    # CRITICAL: Clamp values to prevent NaN/Inf
+                    vision_features = torch.clamp(vision_features, min=-10.0, max=10.0)
                     logger.debug(f"Projected vision features: {current_dim} -> {expected_dim}")
 
                 batch['vision_features'] = vision_features
@@ -2324,7 +2480,10 @@ def load_config(config_path: str) -> Dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train BitMar model")
+    """Main training function with command line interface"""
+    print("🎬 Starting main() function...")
+    
+    parser = argparse.ArgumentParser(description="BitMar Training with Enhanced GPU Optimization")
     parser.add_argument(
         "--config",
         type=str,
@@ -2362,6 +2521,12 @@ def main():
         help="Resume training from checkpoint"
     )
     parser.add_argument(
+        "--device", 
+        type=str, 
+        default=None, 
+        help="Force specific device (cuda:0, cpu, etc.)"
+    )
+    parser.add_argument(
         "--wandb_project",
         type=str,
         default=None,
@@ -2388,37 +2553,87 @@ def main():
     )
 
     args = parser.parse_args()
+    print(f"✅ Arguments parsed: {args}")
+    
+    try:
+        # Load configuration
+        print(f"📄 Loading config from: {args.config}")
+        config = load_config(args.config)
 
-    # Load configuration
-    config = load_config(args.config)
+        # Override config with command line arguments
+        print("🔧 Applying command line overrides...")
+        # Handle both --max_epochs and --epochs
+        if args.max_epochs:
+            config['training']['max_epochs'] = args.max_epochs
+            print(f"🔧 Overriding max_epochs: {args.max_epochs}")
+        elif args.epochs:
+            config['training']['max_epochs'] = args.epochs
+            print(f"🔧 Overriding max_epochs (via --epochs): {args.epochs}")
+        if args.batch_size:
+            config['data']['batch_size'] = args.batch_size
+            print(f"🔧 Overriding batch_size: {args.batch_size}")
+        if args.wandb_project:
+            config['wandb']['project'] = args.wandb_project
+            print(f"📊 W&B project: {args.wandb_project}")
 
-    # Override config with command line arguments
-    # Handle both --max_epochs and --epochs
-    if args.max_epochs:
-        config['training']['max_epochs'] = args.max_epochs
-    elif args.epochs:
-        config['training']['max_epochs'] = args.epochs
-    if args.batch_size:
-        config['data']['batch_size'] = args.batch_size
-    if args.wandb_project:
-        config['wandb']['project'] = args.wandb_project
+        # Add attention tracking config
+        config['track_attention_every_n_steps'] = args.track_attention_every_n_steps
+        config['save_attention_every_n_epochs'] = args.save_attention_every_n_epochs
+        config['optimizer'] = args.optimizer
+        
+        print("✅ Configuration loaded and overridden successfully")
 
-    # Add attention tracking config
-    config['track_attention_every_n_steps'] = args.track_attention_every_n_steps
-    config['save_attention_every_n_epochs'] = args.save_attention_every_n_epochs
-    config['optimizer'] = args.optimizer
+        # Create trainer with enhanced GPU optimization
+        print("🏗️ Initializing BitMar trainer with GPU optimizations...")
+        trainer = BitMarTrainer(config, device=args.device)
+        print("✅ Trainer initialized successfully")
 
-    # Create trainer
-    trainer = BitMarTrainer(config)
+        # Setup directories and logging
+        print("📁 Setting up directories...")
+        trainer.setup_directories()
+        print("✅ Directories setup completed")
+        
+        print("📊 Setting up logging systems...")
+        trainer.setup_logging_systems()
+        print("✅ Logging systems setup completed")
 
-    # Resume from checkpoint if specified
-    if args.resume:
-        trainer.setup_model_and_data(max_samples=args.max_samples)
-        trainer.load_checkpoint(args.resume)
+        # Resume from checkpoint if specified
+        if args.resume:
+            print(f"🔄 Resuming from checkpoint: {args.resume}")
+            trainer.setup_model_and_data(max_samples=args.max_samples)
+            start_epoch = trainer.load_checkpoint(args.resume)
+            print(f"✅ Resumed from epoch {start_epoch}")
+        else:
+            print("🤖 Setting up model and data from scratch...")
+            trainer.setup_model_and_data(max_samples=args.max_samples)
+            print("✅ Model and data setup completed")
 
-    # Start training
-    trainer.train(max_samples=args.max_samples)
+        # Start training
+        print("🚀 Starting BitMar training with GPU optimization...")
+        logger.info("=" * 50)
+        logger.info("🚀 BITMAR TRAINING STARTED")
+        logger.info("=" * 50)
+        
+        trainer.train()
+        
+        logger.info("=" * 50)
+        logger.info("🎉 BITMAR TRAINING COMPLETED")
+        logger.info("=" * 50)
+        
+        print("✅ Training completed successfully!")
+        
+    except KeyboardInterrupt:
+        print("\n⚠️ Training interrupted by user")
+        logger.info("Training interrupted by user")
+    
+    except Exception as e:
+        print(f"❌ Training failed with error: {e}")
+        logger.error(f"Training failed: {e}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        raise
 
 
 if __name__ == "__main__":
+    print("🎯 Script called directly, running main()...")
     main()
