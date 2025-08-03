@@ -14,7 +14,7 @@ import math
 import logging
 
 # Import our new Quadrangle Attention implementation
-from .quadrangle_attention import QuadrangleAttention, QuadrangleTransformerBlock, EpisodicQuadrangleProcessor
+from quadrangle_attention import QuadrangleAttention, QuadrangleTransformerBlock, EpisodicQuadrangleProcessor
 
 logger = logging.getLogger(__name__)
 

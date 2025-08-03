@@ -402,7 +402,7 @@ class BitMarWandbLogger:
         
     def log_model_size_metrics(self, model: nn.Module):
         """Log model size and parameter statistics"""
-        from model import count_parameters
+        from src.model import count_parameters
         
         param_stats = count_parameters(model)
         
