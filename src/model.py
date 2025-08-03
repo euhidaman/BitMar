@@ -312,8 +312,7 @@ class BitNetTextEncoder(nn.Module):
             self.position_embedding(positions)
         x = self.dropout(x)
 
-        # Transform through BitNet layers
-        attention_patterns = []
+        # Transform through BitNet layers - attention tracking removed for performance
         for layer in self.layers:
             # Convert attention mask to the right format for the layer
             layer_mask = None
@@ -322,11 +321,10 @@ class BitNetTextEncoder(nn.Module):
                 layer_mask = attention_mask.unsqueeze(
                     1).unsqueeze(2)  # [batch_size, 1, 1, seq_len]
 
-            x, attn_weights = layer(x, layer_mask)
-            attention_patterns.append(attn_weights)
+            x, _ = layer(x, layer_mask)  # Ignore attention weights for performance
 
         x = self.norm(x)
-        return x, attention_patterns
+        return x, []  # Return empty list instead of attention patterns
 
 
 class BitNetTextDecoder(nn.Module):
@@ -405,11 +403,9 @@ class BitNetTextDecoder(nn.Module):
         else:
             mask = causal_mask
 
-        # Transform through BitNet layers
-        attention_patterns = []
+        # Transform through BitNet layers - attention tracking removed for performance
         for layer in self.layers:
-            x, attn_weights = layer(x, mask)
-            attention_patterns.append(attn_weights)
+            x, _ = layer(x, mask)  # Ignore attention weights for performance
 
         x = self.norm(x)
         logits = self.lm_head(x)
@@ -428,7 +424,7 @@ class BitNetTextDecoder(nn.Module):
         return {
             'logits': logits,
             'loss': loss,
-            'attention_patterns': attention_patterns
+            'attention_patterns': []  # Empty list for performance
         }
 
 
@@ -661,36 +657,33 @@ class LearnableQueryFusion(nn.Module):
             batch_size, -1, -1)  # [B, num_queries, hidden_dim]
         queries = queries + self.query_pos_embed  # Add positional encoding
 
-        attention_weights = {}
-
+        # Attention tracking removed for performance
+        
         # Phase 1: Query learning - queries extract information from both modalities
         for i, layer in enumerate(self.query_layers):
             # Query-to-Text: queries attend to text tokens
-            q2t_out, q2t_weights = layer['q2t_attention'](
+            q2t_out, _ = layer['q2t_attention'](
                 query=queries,
                 key=text_proj,
                 value=text_proj
             )
             queries = layer['q2t_norm'](queries + q2t_out)
-            attention_weights[f'q2t_layer_{i}'] = q2t_weights
 
             # Query-to-Vision: queries attend to vision features
-            q2v_out, q2v_weights = layer['q2v_attention'](
+            q2v_out, _ = layer['q2v_attention'](
                 query=queries,
                 key=vision_proj,
                 value=vision_proj
             )
             queries = layer['q2v_norm'](queries + q2v_out)
-            attention_weights[f'q2v_layer_{i}'] = q2v_weights
 
             # Query self-attention: queries refine themselves
-            self_out, self_weights = layer['self_attention'](
+            self_out, _ = layer['self_attention'](
                 query=queries,
                 key=queries,
                 value=queries
             )
             queries = layer['self_norm'](queries + self_out)
-            attention_weights[f'query_self_layer_{i}'] = self_weights
 
             # MLP refinement
             mlp_out = layer['mlp'](queries)
@@ -700,13 +693,12 @@ class LearnableQueryFusion(nn.Module):
         enhanced_text = text_proj
         for i, layer in enumerate(self.text2query_layers):
             # Text-to-Query: text tokens attend to learned queries
-            t2q_out, t2q_weights = layer['attention'](
+            t2q_out, _ = layer['attention'](
                 query=enhanced_text,
                 key=queries,
                 value=queries
             )
             enhanced_text = layer['norm'](enhanced_text + t2q_out)
-            attention_weights[f't2q_layer_{i}'] = t2q_weights
 
             # MLP refinement
             mlp_out = layer['mlp'](enhanced_text)
@@ -715,7 +707,7 @@ class LearnableQueryFusion(nn.Module):
         # Final output projection
         output = self.output_proj(enhanced_text)
 
-        return output, attention_weights
+        return output, {}  # Return empty dict instead of attention weights
 
 
 # Keep the old CrossModalFusion for backward compatibility, but replace it

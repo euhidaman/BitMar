@@ -34,11 +34,9 @@ from codecarbon import EmissionsTracker
 from src.hf_compatibility import save_bitmar_as_hf_model
 from src.dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader
 from src.modality_tracker import ModalityTracker
-from src.attention_visualizer import AttentionHeadAnalyzer
 from src.wandb_logger import BitMarWandbLogger
 from src.model import create_bitmar_model, count_parameters
 from src.dataset import create_data_module
-from src.attention_analysis import analyze_model_attention
 print("🚀 Starting train_bitmar.py script...")
 
 # Core imports
@@ -62,12 +60,7 @@ except ImportError:
 sys.path.append(str(Path(__file__).parent / "src"))
 
 # Import attention evolution tracker
-try:
-    from attention_evolution_tracker import AttentionEvolutionTracker
-    ATTENTION_TRACKING_AVAILABLE = True
-except ImportError:
-    ATTENTION_TRACKING_AVAILABLE = False
-    print("Warning: attention_evolution_tracker not available")
+# Attention tracking completely removed for performance
 
 
 # Setup logging
@@ -212,7 +205,7 @@ class BitMarTrainer:
 
     def setup_directories(self):
         """Create output directories"""
-        for dir_name in ['checkpoint_dir', 'log_dir', 'attention_dir', 'memory_dir', 'results_dir']:
+        for dir_name in ['checkpoint_dir', 'log_dir', 'results_dir']:
             dir_path = Path(self.config['output'][dir_name])
             dir_path.mkdir(parents=True, exist_ok=True)
             setattr(self, dir_name, dir_path)
@@ -467,19 +460,9 @@ class BitMarTrainer:
         if self.wandb_logger:
             self.wandb_logger.log_model_size_metrics(self.model)
 
-        # Initialize minimal attention analyzer for speed
-        # Drastically reduce tracking frequency to improve training speed
-        attention_config = self.config.get('attention_analysis', {})
-        track_heads = min(attention_config.get('track_top_k', 3), 3)  # Max 3 heads
-        
-        logger.info(f"⚡ Minimal attention tracking: {track_heads} heads, very infrequent logging")
-        self.attention_analyzer = AttentionHeadAnalyzer(
-            model=self.model,
-            tokenizer=self.model.tokenizer,
-            save_dir=str(self.attention_dir),
-            wandb_logger=self.wandb_logger,
-            track_top_k=track_heads  # Much smaller for speed
-        )
+        # All attention tracking completely removed for performance
+        logger.info("⚡ All attention tracking completely disabled for maximum training speed")
+        self.attention_analyzer = None
 
         # Disable comprehensive modality tracker for speed
         # This tracker adds significant overhead during training
@@ -1609,29 +1592,9 @@ class BitMarTrainer:
         analysis_config['batch_size'] = min(4, analysis_config['batch_size'])
 
         analysis_data_module = create_data_module(analysis_config)
-        # Limit samples for analysis
-        analysis_data_module.setup(max_samples=1000)
-
-        # Run analysis
-        analyzer = analyze_model_attention(
-            model=self.model,
-            dataloader=analysis_data_module.val_dataloader(),
-            tokenizer=self.model.tokenizer,
-            config=self.config['output'],
-            num_analysis_batches=50
-        )
-
-        # Log analysis results to wandb
-        if self.use_wandb:
-            report = analyzer.generate_report()
-            wandb.log({
-                f"analysis/{key}": value
-                for key, value in report.items()
-                if isinstance(value, (int, float))
-            })
-
-        logger.info("Attention analysis completed")
-        return analyzer
+        # Attention analysis completely removed for performance
+        logger.info("⚡ Attention analysis completely disabled for maximum training speed")
+        return None
 
     def safe_gpu_operation(self, operation_name: str, operation_func):
         """Safely execute GPU operations with fallback handling"""
@@ -2170,97 +2133,9 @@ class BitMarTrainer:
                 logger.info(
                     f"Cross-Modal Similarity: {train_metrics['cross_modal_similarity']:.4f}")
 
-                # Create attention visualizations (every few epochs to avoid overhead)
-                if (self.attention_analyzer and
-                        (epoch + 1) % self.config.get('attention_analysis', {}).get('viz_every_n_epochs', 2) == 0):
+                # All attention tracking and visualization completely removed for performance
 
-                    logger.info("Creating attention visualizations...")
 
-                    try:
-                        # Create attention head heatmaps
-                        for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                            self.attention_analyzer.create_attention_head_heatmap(
-                                self.global_step, attention_type
-                            )
-
-                        # Create timeline plots
-                        self.attention_analyzer.create_attention_timeline_plot(
-                            self.global_step)
-
-                        # Save top attention heads
-                        for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                            self.attention_analyzer.save_top_heads(
-                                self.global_step, attention_type)
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Attention visualization creation failed: {e}")
-
-                # Generate attention evolution visualizations (NEW!)
-                if (self.attention_evolution_tracker and
-                        (epoch + 1) % self.config.get('save_attention_every_n_epochs', 1) == 0):
-
-                    logger.info(
-                        "🎨 Generating attention evolution visualizations...")
-
-                    try:
-                        # Create epoch comparison grids
-                        if epoch > 0:  # Need at least 2 epochs
-                            # Get sample IDs from this epoch
-                            if epoch in self.attention_evolution_tracker.attention_history:
-                                sample_ids = list(
-                                    self.attention_evolution_tracker.attention_history[epoch].keys())
-                                if sample_ids:
-                                    self.attention_evolution_tracker.create_epoch_comparison_grid(
-                                        sample_id=sample_ids[0],
-                                        epochs=[epoch-1, epoch]
-                                    )
-
-                        # Generate learning summary
-                        if epoch >= 2:  # Need at least 3 epochs
-                            self.attention_evolution_tracker.create_attention_learning_summary(
-                                max_epochs=epoch)
-
-                        # Create token evolution plots for common tokens
-                        if epoch >= 3:  # Need several epochs for meaningful evolution
-                            common_tokens = ['the', 'a',
-                                             'dog', 'cat', 'person']
-                            for token_text in common_tokens:
-                                try:
-                                    token_ids = self.attention_evolution_tracker.tokenizer.encode(
-                                        token_text)
-                                    if token_ids:
-                                        self.attention_evolution_tracker.create_token_evolution_plot(
-                                            token_text=token_text,
-                                            token_id=token_ids[0]
-                                        )
-                                except Exception as e:
-                                    continue  # Skip if token not found
-
-                        logger.info(
-                            f"✅ Attention evolution visualizations complete for epoch {epoch}")
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Attention evolution visualization failed: {e}")
-
-                    # Create visualizations with wandb logger
-                    if self.wandb_logger and hasattr(self.model, 'memory'):
-                        try:
-                            # Memory heatmaps
-                            self.wandb_logger.create_memory_heatmap(
-                                self.model.memory.memory_usage,
-                                self.model.memory.memory_age,
-                                self.global_step
-                            )
-
-                            # Quantization plots
-                            self.wandb_logger.create_quantization_plot(
-                                self.model, self.global_step)
-
-                        except Exception as e:
-                            logger.warning(
-                                f"Wandb visualization creation failed: {e}")
 
                 if self.use_wandb:
                     wandb.log(all_metrics)
@@ -2328,16 +2203,7 @@ class BitMarTrainer:
         # Final analysis and cleanup
         logger.info("Training completed! Running final analysis...")
 
-        if self.attention_analyzer:
-            # Generate final attention report
-            final_report = self.attention_analyzer.generate_attention_report(
-                self.global_step)
-            logger.info(f"Final attention analysis: {final_report}")
-
-            # Save final top heads
-            for attention_type in ['encoder', 'decoder', 'cross_modal']:
-                self.attention_analyzer.save_top_heads(
-                    self.global_step, attention_type, k=20)
+        # All attention analysis completely removed for performance
 
         # Close wandb logger
         if self.wandb_logger:
@@ -2845,18 +2711,6 @@ def main():
         help="Override W&B project name"
     )
     parser.add_argument(
-        "--track_attention_every_n_steps",
-        type=int,
-        default=50,
-        help="Save attention evolution data every N steps"
-    )
-    parser.add_argument(
-        "--save_attention_every_n_epochs",
-        type=int,
-        default=1,
-        help="Generate attention visualizations every N epochs"
-    )
-    parser.add_argument(
         "--optimizer",
         type=str,
         default="adamw",
@@ -2888,9 +2742,7 @@ def main():
             config['wandb']['project'] = args.wandb_project
             print(f"📊 W&B project: {args.wandb_project}")
 
-        # Add attention tracking config
-        config['track_attention_every_n_steps'] = args.track_attention_every_n_steps
-        config['save_attention_every_n_epochs'] = args.save_attention_every_n_epochs
+        # Add optimizer config
         config['optimizer'] = args.optimizer
 
         print("✅ Configuration loaded and overridden successfully")

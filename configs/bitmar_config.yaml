@@ -49,16 +49,6 @@ data:
     - "squad"  # Public dataset, no auth required
     - "glue/sst2"  # Public dataset, no auth required
 
-# Enhanced attention analysis configuration - OPTIMIZED FOR SPEED
-attention_analysis:
-  # Minimal attention tracking for maximum training speed
-  track_top_k: 3  # Track only 3 most important heads (reduced from 20)
-  log_every_n_steps: 50000  # Very infrequent analysis (reduced from 100)
-  viz_every_n_epochs: 10  # Only create visualizations at the very end (reduced from 2)
-  save_head_patterns: false  # Disable file I/O for speed (was true)
-  analyze_memory_attention: false  # Disable expensive memory analysis (was true)
-  analyze_cross_modal: false  # Disable expensive cross-modal analysis (was true)
-
 training:
   # Training configuration - OPTIMIZED FOR SPEED
   max_epochs: 10
@@ -70,7 +60,6 @@ training:
   warmup_steps: 1000
   learning_rate: 0.0001
   weight_decay: 0.01
-  track_attention: false  # DISABLED for speed (was true)
 
 # Weights & Biases configuration - OPTIMIZED FOR SPEED
 # Enhanced wandb configuration with minimal logging for speed
@@ -79,18 +68,7 @@ wandb:
   entity: "babylm-ntust"  # Use babylm-ntust team
   api_key: null  # Use WANDB_API_KEY environment variable
   log_every_n_steps: 500  # Much less frequent logging (was 50)
-  # Minimal logging categories for speed
-  log_attention: false  # DISABLED for speed (was true)
-  log_memory: false  # DISABLED for speed (was true)
-  log_gradients: false  # DISABLED for speed (was true)
-  log_quantization: false  # DISABLED for speed (was true)
-  log_features: false  # DISABLED for speed (was true)
   save_code: true
-  # Visualization settings - DISABLED for speed
-  create_plots: false  # DISABLED for speed (was true)
-  plot_attention_heatmaps: false  # DISABLED for speed (was true)
-  plot_memory_usage: false  # DISABLED for speed (was true)
-  plot_quantization_dist: false  # DISABLED for speed (was true)
 
 # Evaluation settings
 evaluation:
@@ -101,15 +79,10 @@ evaluation:
   temperature: 0.7
   top_p: 0.9
 
-# Output directories (including attention analysis)
+# Output directories
 output:
   checkpoint_dir: "checkpoints"
   log_dir: "logs"
-  attention_dir: "attention_analysis"
-  memory_dir: "memory_analysis"
-  results_dir: "results"
-  attention_dir: "attention_analysis"
-  memory_dir: "memory_analysis"
   results_dir: "results"
 
 # CPU testing configuration (Tiny Model)
