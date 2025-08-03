@@ -426,9 +426,11 @@ class EpisodicQuadrangleProcessor(nn.Module):
         # Find least recently used memory slots for new episodes
         _, lru_indices = torch.topk(self.memory_age, batch_size, largest=False)
         
-        # Store new episodes
+        # Store new episodes - fix dtype mismatch
         with torch.no_grad():
-            self.memory[lru_indices] = episode.detach()
+            # Ensure dtype compatibility for mixed precision training
+            episode_to_store = episode.detach().to(self.memory.dtype)
+            self.memory[lru_indices] = episode_to_store
             self.memory_age[lru_indices] = self.global_step.float()
             self.memory_usage[lru_indices] += 1
         
