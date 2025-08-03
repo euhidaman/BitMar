@@ -876,6 +876,9 @@ class BitMarModel(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained('gpt2')
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        
+        # Track training steps for consolidation logic
+        self.global_step = 0
 
     def encode_text(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         """Encode text using BitNet encoder"""
@@ -933,6 +936,66 @@ class BitMarModel(nn.Module):
 
         return episode
 
+    def _consolidation_fusion(
+        self,
+        text_features: torch.Tensor,
+        vision_latent: torch.Tensor,
+        mode: str
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        🧠 EPISODIC MEMORY CONSOLIDATION: Enhanced QFormer-based fusion
+        
+        Different processing strategies for each consolidation phase:
+        - episodic_capture: Fast, high-capacity QFormer processing
+        - consolidation: Pattern extraction and replay-aware fusion
+        - integration: Semantic integration with refined attention
+        """
+        
+        if mode == "episodic_capture":
+            # Phase 1: Fast episodic capture with enhanced QFormer attention
+            # Use full QFormer capacity for rich multimodal encoding
+            fused_features, attention_weights = self.fusion(text_features, vision_latent)
+            
+            # Enhance attention patterns for better episodic encoding
+            for key, attn in attention_weights.items():
+                if 'q2v' in key or 'q2t' in key:
+                    # Sharpen cross-modal attention for clearer episodic traces
+                    attention_weights[key] = torch.softmax(attn * 1.5, dim=-1)
+            
+        elif mode == "consolidation":
+            # Phase 2: Pattern extraction and memory replay-aware fusion
+            fused_features, attention_weights = self.fusion(text_features, vision_latent)
+            
+            # Add consolidation-specific processing
+            # Encourage pattern extraction by emphasizing consistent attention patterns
+            batch_size = text_features.size(0)
+            
+            # Pattern consistency regularization (encourage stable patterns)
+            for key, attn in attention_weights.items():
+                if 'query_self' in key:
+                    # Encourage self-consistency in query patterns
+                    attention_weights[key] = torch.softmax(attn * 1.2, dim=-1)
+            
+        elif mode == "integration":
+            # Phase 3: Semantic integration with refined processing
+            fused_features, attention_weights = self.fusion(text_features, vision_latent)
+            
+            # Integration-specific refinement
+            # Emphasize semantic coherence by smoothing attention patterns
+            for key, attn in attention_weights.items():
+                if 't2q' in key:
+                    # Smoother text-to-query attention for semantic integration
+                    attention_weights[key] = torch.softmax(attn * 0.8, dim=-1)
+        
+        else:
+            # Fallback to standard fusion
+            fused_features, attention_weights = self.fusion(text_features, vision_latent)
+        
+        # Add consolidation mode information to attention weights
+        attention_weights['consolidation_mode'] = mode
+        
+        return fused_features, attention_weights
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -942,14 +1005,14 @@ class BitMarModel(nn.Module):
         mode: str = "train"
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass through BitMar model
+        Forward pass with episodic memory consolidation support
 
         Args:
             input_ids: [batch_size, seq_len]
             attention_mask: [batch_size, seq_len]
             vision_features: [batch_size, vision_dim]
             labels: [batch_size, seq_len] - for training
-            mode: "train" or "inference"
+            mode: "train", "inference", "episodic_capture", "consolidation", "integration"
 
         Returns:
             Dictionary containing outputs and analysis
@@ -961,23 +1024,45 @@ class BitMarModel(nn.Module):
             input_ids, attention_mask)
         vision_latent = self.encode_vision(vision_features)
 
-        # Cross-modal fusion
-        fused_features, cross_attention = self.fusion(
-            text_features, vision_latent)
+        # 🧠 EPISODIC MEMORY CONSOLIDATION: QFormer-based multimodal fusion
+        if mode in ["episodic_capture", "consolidation", "integration"]:
+            # Enhanced QFormer processing for consolidation training
+            fused_features, cross_attention = self._consolidation_fusion(
+                text_features, vision_latent, mode)
+        else:
+            # Standard fusion for regular training
+            fused_features, cross_attention = self.fusion(
+                text_features, vision_latent)
 
         # Create multimodal episode
         episode = self.create_episode(
             text_features, vision_latent, cross_attention)
 
-        # Episodic memory interaction
-        if mode == "train":
-            # Write and read from memory
-            retrieved_memory, memory_attention = self.memory(
-                episode, mode="read_write")
+        # 🧠 CONSOLIDATION-AWARE MEMORY INTERACTION
+        if mode == "episodic_capture":
+            # Rapid episodic storage - prioritize writing
+            self.memory.write_memory(episode)
+            retrieved_memory, memory_attention = self.memory.read_memory(episode)
+        elif mode == "consolidation":
+            # Balanced read/write with replay emphasis
+            retrieved_memory, memory_attention = self.memory(episode, mode="read_write")
+            # Additional replay mechanism handled in trainer
+        elif mode == "integration":
+            # Enhanced retrieval for semantic integration
+            retrieved_memory, memory_attention = self.memory.read_memory(episode)
+            # Write less frequently during integration
+            if hasattr(self, 'global_step') and self.global_step % 5 == 0:  # Write every 5 steps
+                self.memory.write_memory(episode)
         else:
-            # Only read from memory during inference
-            retrieved_memory, memory_attention = self.memory(
-                episode, mode="read")
+            # Standard memory interaction
+            if mode == "train":
+                # Write and read from memory
+                retrieved_memory, memory_attention = self.memory(
+                    episode, mode="read_write")
+            else:
+                # Only read from memory during inference
+                retrieved_memory, memory_attention = self.memory(
+                    episode, mode="read")
 
         # Prepare decoder input
         memory_context = self.memory_to_decoder(
@@ -1013,6 +1098,7 @@ class BitMarModel(nn.Module):
             'text_attention': text_attention,
             'decoder_attention': decoder_outputs['attention_patterns'],
             'memory_usage': self.memory.memory_usage.clone(),
+            'consolidation_mode': mode
         }
 
     def generate(

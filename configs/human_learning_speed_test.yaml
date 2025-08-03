@@ -1,0 +1,102 @@
+# Ultra-Fast Human Learning Configuration
+# Designed to test the 160+ hour per epoch issue and fix it
+# Implements human-like learning: Vision → Vision+Text → Text
+
+model:
+  # Optimized model size for speed testing
+  vocab_size: 50257
+  text_encoder_dim: 256 # Smaller for speed
+  text_encoder_layers: 3 # Fewer layers for speed
+  text_encoder_heads: 4
+
+  text_decoder_dim: 256 # Smaller for speed
+  text_decoder_layers: 3 # Fewer layers for speed
+  text_decoder_heads: 4
+
+  # Efficient vision processing
+  vision_encoder_dim: 768
+  vision_hidden_size: 128 # Smaller for speed
+  vision_latent_size: 64 # Smaller for speed
+
+  # Minimal fusion for speed
+  fusion_hidden_size: 128 # Smaller for speed
+  fusion_num_queries: 16 # Fewer queries for speed
+  fusion_num_heads: 4
+  fusion_num_layers: 1 # Single layer for speed
+
+  # Minimal memory for speed
+  memory_size: 64 # Much smaller for speed
+  episode_dim: 64 # Much smaller for speed
+  memory_alpha: 0.1
+  direct_writing: true
+
+  max_seq_len: 64 # Very short for speed
+  dropout: 0.1
+  text_encoder_name: "gpt2"
+
+training:
+  max_epochs: 10 # Human learning progression
+  learning_rate: 3e-4 # Higher LR for faster convergence
+  weight_decay: 0.01
+  gradient_clip_val: 1.0
+  device: "cuda:0"
+
+data:
+  dataset_dir: "../babylm_dataset"
+
+  # ULTRA-OPTIMIZED for speed
+  batch_size: 512 # Very large batch for maximum GPU utilization
+  max_seq_length: 64 # Very short sequences for speed
+
+  # Maximum data loading efficiency
+  num_workers: 16 # Maximum workers for speed
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 64 # Extreme prefetching
+  drop_last: true
+  non_blocking: true
+  timeout: 300
+
+  # Disable ALL expensive preprocessing
+  cache_preprocessed: false
+  use_memory_mapping: false
+  memory_efficient_loading: false
+  use_compressed_cache: false
+  precompute_features: false
+
+  text_encoder_name: "gpt2"
+  validation_datasets: ["glue/sst2"]
+
+  # Starting ratios (will be adjusted per phase)
+  text_ratio: 0.5
+  vision_ratio: 0.5
+
+output:
+  checkpoint_dir: "checkpoints_speed_test"
+  log_dir: "logs_speed_test"
+  attention_dir: "attention_speed_test"
+  memory_dir: "memory_speed_test"
+  results_dir: "results_speed_test"
+
+wandb:
+  project: "bitmar-speed-test"
+  log_every_n_steps: 1000 # Very infrequent logging
+
+quick_training_mode:
+  enabled: true
+  optimizations:
+    aggressive_image_compression: true
+    mixed_precision_training: true
+    compiled_model: false # Skip compilation for speed
+    cached_vision_features: false # Disable caching
+
+# Disable ALL expensive analytics
+track_attention_every_n_steps: 0
+attention_analysis:
+  log_every_n_steps: 0
+
+# Human Learning Schedule (handled by the script)
+human_learning:
+  phase_1_epochs: [0, 1, 2] # Vision only
+  phase_2_epochs: [3, 4, 5, 6, 7] # Vision + Text
+  phase_3_epochs: [8, 9] # Text only
