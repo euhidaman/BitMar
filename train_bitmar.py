@@ -236,6 +236,16 @@ class BitMarTrainer:
         self.model.to(self.device)
         logger.info(f"Model moved to device: {self.device}")
 
+        # 🚀 CRITICAL: Enable PyTorch 2.0 compilation for maximum speed
+        try:
+            if hasattr(torch, 'compile') and torch.cuda.is_available():
+                self.model = torch.compile(self.model, mode='max-autotune')
+                logger.info("🔥 ENABLED PyTorch 2.0 compilation with max-autotune for maximum speed")
+            else:
+                logger.warning("PyTorch compilation not available or not on CUDA")
+        except Exception as e:
+            logger.warning(f"PyTorch compilation failed: {e}")
+
         # Immediate cleanup after model transfer
         gc.collect()
         if torch.cuda.is_available():
@@ -264,6 +274,16 @@ class BitMarTrainer:
         # Log model info
         param_count = count_parameters(self.model)
         logger.info(f"Model parameters: {param_count}")
+
+        # 🚀 CRITICAL: Enable mixed precision training for GPU acceleration
+        if torch.cuda.is_available() and hasattr(torch.cuda, 'amp'):
+            self.scaler = torch.cuda.amp.GradScaler()
+            self.use_amp = True
+            logger.info("🚀 ENABLED Mixed Precision Training (AMP) for GPU acceleration")
+        else:
+            self.scaler = None
+            self.use_amp = False
+            logger.warning("Mixed precision training not available")
 
         # Log model size with enhanced wandb logger
         if self.wandb_logger:
@@ -304,18 +324,18 @@ class BitMarTrainer:
         enhanced_data_config = self.config['data'].copy()
 
         # Ensure all required keys are included with proper fallbacks
-        # ⚡ OPTIMIZED FOR MAXIMUM GPU UTILIZATION ⚡
+        # 🚀 AGGRESSIVELY OPTIMIZED FOR MAXIMUM GPU UTILIZATION 🚀
         required_keys = {
             'dataset_dir': "../babylm_dataset",
             'max_seq_length': 256,
-            'batch_size': 32,  # Increased for better GPU utilization
-            'num_workers': 4,  # Restored for parallel data loading
+            'batch_size': 64,  # DOUBLED for maximum GPU utilization with mixed precision
+            'num_workers': 8,  # Increased for parallel data loading
             'pin_memory': True,  # Re-enabled for faster GPU transfer
             'text_encoder_name': 'gpt2',
             'persistent_workers': True,  # Re-enabled for faster data loading
             'validation_datasets': ['glue/sst2'],
             # GPU-optimized settings
-            'prefetch_factor': 4,  # Increased prefetching for GPU feeding
+            'prefetch_factor': 8,  # DOUBLED prefetching for GPU feeding
             'drop_last': True,  # Keep this for consistent batch sizes
             'memory_efficient_loading': False,  # Disable CPU optimizations that hurt GPU
             'non_blocking': True,  # Enable non-blocking transfers
@@ -333,13 +353,13 @@ class BitMarTrainer:
         logger.info(
             f"Using max sequence length: {enhanced_data_config['max_seq_length']}")
 
-        # Apply quick training mode settings
+        # Apply AGGRESSIVE quick training mode settings for maximum GPU utilization
         if quick_mode.get('enabled', False):
-            logger.info("🚀 Applying quick training mode data settings...")
+            logger.info("🚀 Applying AGGRESSIVE quick training mode data settings...")
             # DON'T disable mixed training - we still want text+multimodal!
             # enhanced_data_config['use_mixed_training'] = False  # REMOVED - this was causing multimodal-only
             enhanced_data_config['batch_size'] = max(
-                enhanced_data_config.get('batch_size', 16), 32)  # Force larger batch
+                enhanced_data_config.get('batch_size', 64), 128)  # MASSIVE batch for GPU utilization
             enhanced_data_config['max_seq_length'] = min(enhanced_data_config.get(
                 'max_seq_length', 512), 256)  # Reduce sequence length
             logger.info(
@@ -347,17 +367,22 @@ class BitMarTrainer:
             logger.info(
                 "📊 Quick mode: Preserving mixed training (text + multimodal) for better learning")
 
-        # Apply GPU-optimized data loading for maximum performance
+        # Apply AGGRESSIVE GPU-optimized data loading for maximum performance
         enhanced_data_config.update({
-            # Optimize for GPU utilization
-            'num_workers': min(enhanced_data_config.get('num_workers', 4), 8),
+            # AGGRESSIVE GPU optimization settings
+            'num_workers': 8,  # Maximum workers for parallel loading
             'pin_memory': True,  # Enable pinned memory for faster GPU transfer
             'persistent_workers': True,  # Keep workers alive for efficiency
-            'prefetch_factor': 4,  # Increased prefetching for GPU pipeline
+            'prefetch_factor': 8,  # DOUBLED prefetching for GPU pipeline
             'multiprocessing_context': None,  # Use default (spawn on Windows)
+            'drop_last': True,  # Consistent batch sizes for GPU efficiency
+            'non_blocking': True,  # Non-blocking GPU transfers
+            # Additional GPU optimizations
+            'shuffle': True,  # Ensure data shuffling for better GPU utilization
+            'timeout': 60,  # Increase timeout for data loading
         })
         logger.info(
-            "⚡ Applied GPU-optimized data loading for maximum performance")
+            "🚀 Applied AGGRESSIVE GPU-optimized data loading for maximum performance")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get(
@@ -505,15 +530,25 @@ class BitMarTrainer:
                 # Use efficient batch transfer method to minimize CPU memory usage
                 batch = self._efficient_batch_transfer(batch)
 
-                # Forward pass with device-aware error handling
+                # 🚀 OPTIMIZED Forward pass with mixed precision for GPU acceleration
                 try:
-                    outputs = self.model(
-                        input_ids=batch['input_ids'],
-                        attention_mask=batch['attention_mask'],
-                        vision_features=batch['vision_features'],
-                        labels=batch['labels']
-                    )
-                    loss = outputs['loss']
+                    if self.use_amp:
+                        with torch.cuda.amp.autocast():
+                            outputs = self.model(
+                                input_ids=batch['input_ids'],
+                                attention_mask=batch['attention_mask'],
+                                vision_features=batch['vision_features'],
+                                labels=batch['labels']
+                            )
+                            loss = outputs['loss']
+                    else:
+                        outputs = self.model(
+                            input_ids=batch['input_ids'],
+                            attention_mask=batch['attention_mask'],
+                            vision_features=batch['vision_features'],
+                            labels=batch['labels']
+                        )
+                        loss = outputs['loss']
                 except RuntimeError as e:
                     if "out of memory" in str(e).lower() or "device" in str(e).lower():
                         logger.warning(
@@ -522,13 +557,23 @@ class BitMarTrainer:
                         self._force_model_device_consistency()
                         torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-                        outputs = self.model(
-                            input_ids=batch['input_ids'],
-                            attention_mask=batch['attention_mask'],
-                            vision_features=batch['vision_features'],
-                            labels=batch['labels']
-                        )
-                        loss = outputs['loss']
+                        if self.use_amp:
+                            with torch.cuda.amp.autocast():
+                                outputs = self.model(
+                                    input_ids=batch['input_ids'],
+                                    attention_mask=batch['attention_mask'],
+                                    vision_features=batch['vision_features'],
+                                    labels=batch['labels']
+                                )
+                                loss = outputs['loss']
+                        else:
+                            outputs = self.model(
+                                input_ids=batch['input_ids'],
+                                attention_mask=batch['attention_mask'],
+                                vision_features=batch['vision_features'],
+                                labels=batch['labels']
+                            )
+                            loss = outputs['loss']
                     else:
                         raise e
 
@@ -538,19 +583,36 @@ class BitMarTrainer:
                         f"Invalid loss at step {self.global_step}: {loss.item()}")
                     continue
 
-                # Backward pass with device-aware error handling
+                # 🚀 OPTIMIZED Backward pass with mixed precision for GPU acceleration
                 try:
                     self.optimizer.zero_grad()
-                    loss.backward()
-
-                    # Gradient clipping
-                    if self.config['training']['gradient_clip_val'] > 0:
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(),
-                            self.config['training']['gradient_clip_val']
-                        )
-
-                    self.optimizer.step()
+                    
+                    if self.use_amp:
+                        # Mixed precision backward pass
+                        self.scaler.scale(loss).backward()
+                        
+                        # Gradient clipping with scaling
+                        if self.config['training']['gradient_clip_val'] > 0:
+                            self.scaler.unscale_(self.optimizer)
+                            torch.nn.utils.clip_grad_norm_(
+                                self.model.parameters(),
+                                self.config['training']['gradient_clip_val']
+                            )
+                        
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        # Standard backward pass
+                        loss.backward()
+                        
+                        # Gradient clipping
+                        if self.config['training']['gradient_clip_val'] > 0:
+                            torch.nn.utils.clip_grad_norm_(
+                                self.model.parameters(),
+                                self.config['training']['gradient_clip_val']
+                            )
+                        
+                        self.optimizer.step()
 
                 except RuntimeError as e:
                     if "device" in str(e).lower():
@@ -559,15 +621,25 @@ class BitMarTrainer:
                         self._create_device_pinned_optimizer()
 
                         self.optimizer.zero_grad()
-                        loss.backward()
-
-                        if self.config['training']['gradient_clip_val'] > 0:
-                            torch.nn.utils.clip_grad_norm_(
-                                self.model.parameters(),
-                                self.config['training']['gradient_clip_val']
-                            )
-
-                        self.optimizer.step()
+                        
+                        if self.use_amp:
+                            self.scaler.scale(loss).backward()
+                            if self.config['training']['gradient_clip_val'] > 0:
+                                self.scaler.unscale_(self.optimizer)
+                                torch.nn.utils.clip_grad_norm_(
+                                    self.model.parameters(),
+                                    self.config['training']['gradient_clip_val']
+                                )
+                            self.scaler.step(self.optimizer)
+                            self.scaler.update()
+                        else:
+                            loss.backward()
+                            if self.config['training']['gradient_clip_val'] > 0:
+                                torch.nn.utils.clip_grad_norm_(
+                                    self.model.parameters(),
+                                    self.config['training']['gradient_clip_val']
+                                )
+                            self.optimizer.step()
                     else:
                         raise e
 
