@@ -23,6 +23,7 @@ import logging
 import yaml
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import wandb
@@ -236,15 +237,29 @@ class BitMarTrainer:
         self.model.to(self.device)
         logger.info(f"Model moved to device: {self.device}")
 
-        # 🚀 CRITICAL: Enable PyTorch 2.0 compilation for maximum speed
+        # 🚀 SAFER: Enable basic PyTorch optimizations (no compilation for stability)
         try:
-            if hasattr(torch, 'compile') and torch.cuda.is_available():
-                self.model = torch.compile(self.model, mode='max-autotune')
-                logger.info("🔥 ENABLED PyTorch 2.0 compilation with max-autotune for maximum speed")
+            # Use torch.backends optimization instead of compilation
+            if torch.cuda.is_available():
+                torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+                torch.backends.cuda.matmul.allow_tf32 = True  # Allow TF32 for speed
+                torch.backends.cudnn.allow_tf32 = True
+                logger.info(
+                    "🔥 ENABLED CUDA optimizations: cuDNN benchmark, TF32")
             else:
-                logger.warning("PyTorch compilation not available or not on CUDA")
+                logger.warning("CUDA not available for optimizations")
         except Exception as e:
-            logger.warning(f"PyTorch compilation failed: {e}")
+            logger.warning(f"CUDA optimizations failed: {e}")
+
+        # 🚀 Enable mixed precision training (safer than compilation)
+        if torch.cuda.is_available() and hasattr(torch.cuda, 'amp'):
+            self.scaler = torch.cuda.amp.GradScaler()
+            self.use_amp = True
+            logger.info("⚡ ENABLED Mixed Precision Training (AMP) for speed")
+        else:
+            self.scaler = None
+            self.use_amp = False
+            logger.warning("Mixed precision training not available")
 
         # Immediate cleanup after model transfer
         gc.collect()
@@ -274,16 +289,6 @@ class BitMarTrainer:
         # Log model info
         param_count = count_parameters(self.model)
         logger.info(f"Model parameters: {param_count}")
-
-        # 🚀 CRITICAL: Enable mixed precision training for GPU acceleration
-        if torch.cuda.is_available() and hasattr(torch.cuda, 'amp'):
-            self.scaler = torch.cuda.amp.GradScaler()
-            self.use_amp = True
-            logger.info("🚀 ENABLED Mixed Precision Training (AMP) for GPU acceleration")
-        else:
-            self.scaler = None
-            self.use_amp = False
-            logger.warning("Mixed precision training not available")
 
         # Log model size with enhanced wandb logger
         if self.wandb_logger:
@@ -324,18 +329,18 @@ class BitMarTrainer:
         enhanced_data_config = self.config['data'].copy()
 
         # Ensure all required keys are included with proper fallbacks
-        # 🚀 AGGRESSIVELY OPTIMIZED FOR MAXIMUM GPU UTILIZATION 🚀
+        # 🚀 BALANCED OPTIMIZATION FOR STABLE GPU UTILIZATION 🚀
         required_keys = {
             'dataset_dir': "../babylm_dataset",
-            'max_seq_length': 256,
-            'batch_size': 64,  # DOUBLED for maximum GPU utilization with mixed precision
-            'num_workers': 8,  # Increased for parallel data loading
+            'max_seq_length': 256,  # Reasonable sequence length
+            'batch_size': 16,  # Conservative batch size for stability with mixed precision
+            'num_workers': 4,  # Balanced workers for data loading
             'pin_memory': True,  # Re-enabled for faster GPU transfer
             'text_encoder_name': 'gpt2',
             'persistent_workers': True,  # Re-enabled for faster data loading
             'validation_datasets': ['glue/sst2'],
             # GPU-optimized settings
-            'prefetch_factor': 8,  # DOUBLED prefetching for GPU feeding
+            'prefetch_factor': 4,  # Balanced prefetching for GPU feeding
             'drop_last': True,  # Keep this for consistent batch sizes
             'memory_efficient_loading': False,  # Disable CPU optimizations that hurt GPU
             'non_blocking': True,  # Enable non-blocking transfers
@@ -355,11 +360,12 @@ class BitMarTrainer:
 
         # Apply AGGRESSIVE quick training mode settings for maximum GPU utilization
         if quick_mode.get('enabled', False):
-            logger.info("🚀 Applying AGGRESSIVE quick training mode data settings...")
+            logger.info(
+                "🚀 Applying BALANCED quick training mode data settings...")
             # DON'T disable mixed training - we still want text+multimodal!
             # enhanced_data_config['use_mixed_training'] = False  # REMOVED - this was causing multimodal-only
             enhanced_data_config['batch_size'] = max(
-                enhanced_data_config.get('batch_size', 64), 128)  # MASSIVE batch for GPU utilization
+                enhanced_data_config.get('batch_size', 16), 32)  # Balanced batch for GPU utilization
             enhanced_data_config['max_seq_length'] = min(enhanced_data_config.get(
                 'max_seq_length', 512), 256)  # Reduce sequence length
             logger.info(
@@ -368,21 +374,22 @@ class BitMarTrainer:
                 "📊 Quick mode: Preserving mixed training (text + multimodal) for better learning")
 
         # Apply AGGRESSIVE GPU-optimized data loading for maximum performance
+        # Apply BALANCED GPU-optimized data loading for stable performance
         enhanced_data_config.update({
-            # AGGRESSIVE GPU optimization settings
-            'num_workers': 8,  # Maximum workers for parallel loading
+            # Balanced GPU optimization settings
+            'num_workers': 4,  # Balanced workers for parallel loading
             'pin_memory': True,  # Enable pinned memory for faster GPU transfer
             'persistent_workers': True,  # Keep workers alive for efficiency
-            'prefetch_factor': 8,  # DOUBLED prefetching for GPU pipeline
+            'prefetch_factor': 4,  # Balanced prefetching for GPU pipeline
             'multiprocessing_context': None,  # Use default (spawn on Windows)
             'drop_last': True,  # Consistent batch sizes for GPU efficiency
             'non_blocking': True,  # Non-blocking GPU transfers
-            # Additional GPU optimizations
+            # Additional optimizations
             'shuffle': True,  # Ensure data shuffling for better GPU utilization
-            'timeout': 60,  # Increase timeout for data loading
+            'timeout': 30,  # Reasonable timeout for data loading
         })
         logger.info(
-            "🚀 Applied AGGRESSIVE GPU-optimized data loading for maximum performance")
+            "⚡ Applied BALANCED GPU-optimized data loading for stable performance")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get(
@@ -530,6 +537,18 @@ class BitMarTrainer:
                 # Use efficient batch transfer method to minimize CPU memory usage
                 batch = self._efficient_batch_transfer(batch)
 
+                # 🚀 CRITICAL: Validate and fix batch dimensions before forward pass
+                try:
+                    batch = self._validate_and_fix_batch_dimensions(batch)
+                    # CRITICAL: Compress vision features for stability
+                    batch = self._compress_vision_features(batch)
+                except Exception as e:
+                    logger.warning(
+                        f"Batch validation failed at step {self.global_step}: {e}")
+                    logger.info("Skipping problematic batch...")
+                    self.global_step += 1
+                    continue
+
                 # 🚀 OPTIMIZED Forward pass with mixed precision for GPU acceleration
                 try:
                     if self.use_amp:
@@ -586,11 +605,11 @@ class BitMarTrainer:
                 # 🚀 OPTIMIZED Backward pass with mixed precision for GPU acceleration
                 try:
                     self.optimizer.zero_grad()
-                    
+
                     if self.use_amp:
                         # Mixed precision backward pass
                         self.scaler.scale(loss).backward()
-                        
+
                         # Gradient clipping with scaling
                         if self.config['training']['gradient_clip_val'] > 0:
                             self.scaler.unscale_(self.optimizer)
@@ -598,20 +617,20 @@ class BitMarTrainer:
                                 self.model.parameters(),
                                 self.config['training']['gradient_clip_val']
                             )
-                        
+
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                     else:
                         # Standard backward pass
                         loss.backward()
-                        
+
                         # Gradient clipping
                         if self.config['training']['gradient_clip_val'] > 0:
                             torch.nn.utils.clip_grad_norm_(
                                 self.model.parameters(),
                                 self.config['training']['gradient_clip_val']
                             )
-                        
+
                         self.optimizer.step()
 
                 except RuntimeError as e:
@@ -621,7 +640,7 @@ class BitMarTrainer:
                         self._create_device_pinned_optimizer()
 
                         self.optimizer.zero_grad()
-                        
+
                         if self.use_amp:
                             self.scaler.scale(loss).backward()
                             if self.config['training']['gradient_clip_val'] > 0:
@@ -1442,6 +1461,168 @@ class BitMarTrainer:
         except Exception as e:
             # Don't log device check failures - they create noise
             pass
+
+    def _validate_and_fix_batch_dimensions(self, batch):
+        """Validate and fix batch dimensions to prevent model errors"""
+        try:
+            # Check required keys
+            required_keys = ['input_ids', 'attention_mask',
+                             'vision_features', 'labels']
+            for key in required_keys:
+                if key not in batch:
+                    raise ValueError(f"Missing required key: {key}")
+
+            # Validate input_ids dimensions
+            if batch['input_ids'].dim() != 2:
+                logger.warning(
+                    f"Invalid input_ids dimensions: {batch['input_ids'].shape}")
+                batch['input_ids'] = batch['input_ids'].squeeze()
+                if batch['input_ids'].dim() != 2:
+                    raise ValueError(
+                        f"Cannot fix input_ids dimensions: {batch['input_ids'].shape}")
+
+            # Validate attention_mask dimensions
+            if batch['attention_mask'].dim() != 2:
+                logger.warning(
+                    f"Invalid attention_mask dimensions: {batch['attention_mask'].shape}")
+                batch['attention_mask'] = batch['attention_mask'].squeeze()
+                if batch['attention_mask'].dim() != 2:
+                    raise ValueError(
+                        f"Cannot fix attention_mask dimensions: {batch['attention_mask'].shape}")
+
+            # Validate vision_features dimensions
+            if batch['vision_features'].dim() < 2:
+                logger.warning(
+                    f"Invalid vision_features dimensions: {batch['vision_features'].shape}")
+                # Try to add missing dimensions
+                while batch['vision_features'].dim() < 3:
+                    batch['vision_features'] = batch['vision_features'].unsqueeze(
+                        -1)
+                logger.info(
+                    f"Fixed vision_features dimensions: {batch['vision_features'].shape}")
+
+            # Validate labels dimensions
+            if batch['labels'].dim() != 2:
+                logger.warning(
+                    f"Invalid labels dimensions: {batch['labels'].shape}")
+                batch['labels'] = batch['labels'].squeeze()
+                if batch['labels'].dim() != 2:
+                    raise ValueError(
+                        f"Cannot fix labels dimensions: {batch['labels'].shape}")
+
+            # Ensure all tensors have the same batch size
+            batch_size = batch['input_ids'].size(0)
+            for key, tensor in batch.items():
+                if isinstance(tensor, torch.Tensor) and tensor.size(0) != batch_size:
+                    logger.warning(
+                        f"Batch size mismatch for {key}: {tensor.size(0)} vs {batch_size}")
+                    # Try to fix by taking first batch_size elements
+                    batch[key] = tensor[:batch_size]
+
+            return batch
+
+        except Exception as e:
+            logger.error(f"Batch validation failed: {e}")
+            raise e
+
+    def _validate_and_fix_batch_dimensions(self, batch):
+        """Validate and fix batch dimensions to prevent dimension errors"""
+        try:
+            # Validate required keys
+            required_keys = ['input_ids', 'attention_mask',
+                             'vision_features', 'labels']
+            for key in required_keys:
+                if key not in batch:
+                    logger.warning(f"Missing required key '{key}' in batch")
+                    # Create dummy tensors for missing keys
+                    if key == 'input_ids':
+                        batch[key] = torch.zeros(
+                            (1, 64), dtype=torch.long, device=self.device)
+                    elif key == 'attention_mask':
+                        batch[key] = torch.ones(
+                            (1, 64), dtype=torch.long, device=self.device)
+                    elif key == 'vision_features':
+                        batch[key] = torch.zeros(
+                            (1, 768, 196), dtype=torch.float32, device=self.device)
+                    elif key == 'labels':
+                        batch[key] = torch.zeros(
+                            (1, 64), dtype=torch.long, device=self.device)
+
+            # Validate tensor dimensions and fix if needed
+            batch_size = None
+            for key, tensor in batch.items():
+                if torch.is_tensor(tensor):
+                    if batch_size is None:
+                        batch_size = tensor.size(0)
+                    elif tensor.size(0) != batch_size:
+                        logger.warning(
+                            f"Inconsistent batch size for {key}: expected {batch_size}, got {tensor.size(0)}")
+                        # Truncate or pad to match batch size
+                        if tensor.size(0) > batch_size:
+                            tensor = tensor[:batch_size]
+                        else:
+                            # Pad with zeros
+                            pad_size = batch_size - tensor.size(0)
+                            pad_shape = (pad_size,) + tensor.shape[1:]
+                            pad_tensor = torch.zeros(
+                                pad_shape, dtype=tensor.dtype, device=tensor.device)
+                            tensor = torch.cat([tensor, pad_tensor], dim=0)
+                        batch[key] = tensor
+
+            # Ensure minimum batch size
+            if batch_size is None or batch_size == 0:
+                raise ValueError("Invalid batch: no valid tensors found")
+
+            return batch
+
+        except Exception as e:
+            logger.error(f"Batch validation failed: {e}")
+            raise e
+
+    def _compress_vision_features(self, batch):
+        """Compress vision features to reduce memory and improve stability"""
+        try:
+            if 'vision_features' in batch and batch['vision_features'] is not None:
+                vision_features = batch['vision_features']
+
+                # Get original shape for logging
+                original_shape = vision_features.shape
+
+                # Ensure minimum 3D: [batch, features, spatial]
+                if vision_features.dim() == 2:
+                    vision_features = vision_features.unsqueeze(-1)
+                elif vision_features.dim() > 3:
+                    # Flatten extra dimensions
+                    vision_features = vision_features.view(
+                        vision_features.size(0), vision_features.size(1), -1)
+
+                # Limit maximum feature dimension for stability
+                max_features = 768  # Reasonable limit
+                if vision_features.size(1) > max_features:
+                    vision_features = vision_features[:, :max_features, :]
+                    logger.debug(
+                        f"Truncated vision features from {original_shape[1]} to {max_features}")
+
+                # Limit spatial dimension for memory efficiency
+                max_spatial = 196  # 14x14 patches is reasonable
+                if vision_features.size(2) > max_spatial:
+                    # Use adaptive pooling to reduce spatial dimension
+                    vision_features = F.adaptive_avg_pool1d(
+                        vision_features.transpose(1, 2), max_spatial).transpose(1, 2)
+                    logger.debug(
+                        f"Compressed spatial dimension to {max_spatial}")
+
+                batch['vision_features'] = vision_features
+
+                if original_shape != vision_features.shape:
+                    logger.debug(
+                        f"Compressed vision features: {original_shape} -> {vision_features.shape}")
+
+            return batch
+
+        except Exception as e:
+            logger.warning(f"Vision feature compression failed: {e}")
+            return batch
 
     def train(self, max_samples: Optional[int] = None):
         """Main training loop"""

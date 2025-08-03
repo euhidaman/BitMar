@@ -97,14 +97,14 @@ data:
   train_data_path: "../babylm_dataset/train_50M"
   vision_data_path: "../babylm_dataset"
 
-  # CRITICAL: Small batch size to prevent OOM
-  batch_size: 8 # Much smaller than your 32
+  # CRITICAL: Optimized batch size for GPU efficiency
+  batch_size: 16 # Balanced for memory and performance
   max_seq_length: 256 # Reduced sequence length
 
-  # Memory-efficient data loading
-  num_workers: 2 # Reduced workers
-  pin_memory: false # CRITICAL: Disable pin memory
-  prefetch_factor: 1 # Minimal prefetching
+  # GPU-optimized data loading
+  num_workers: 4 # Balanced workers for GPU
+  pin_memory: true # Enable for GPU efficiency
+  prefetch_factor: 4 # Moderate prefetching for GPU
 
   # Conservative data mixing
   text_ratio: 0.6 # Higher text ratio (cheaper than vision)
