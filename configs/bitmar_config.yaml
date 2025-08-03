@@ -1,86 +1,86 @@
 model:
   # BitNet Text Encoder (Tiny Model - Quantized)
-  vocab_size: 50257  # GPT-2 vocabulary
-  text_encoder_dim: 256  # Reduced from 512 for edge efficiency
-  text_encoder_layers: 4  # Reduced from 6 layers
-  text_encoder_heads: 4  # Reduced from 8 heads
-  
+  vocab_size: 50257 # GPT-2 vocabulary
+  text_encoder_dim: 256 # Reduced from 512 for edge efficiency
+  text_encoder_layers: 4 # Reduced from 6 layers
+  text_encoder_heads: 4 # Reduced from 8 heads
+
   # BitNet Text Decoder (Tiny Model - Quantized)
-  text_decoder_dim: 256  # Reduced from 512 for edge efficiency
-  text_decoder_layers: 4  # Reduced from 6 layers
-  text_decoder_heads: 4  # Reduced from 8 heads
-  
+  text_decoder_dim: 256 # Reduced from 512 for edge efficiency
+  text_decoder_layers: 4 # Reduced from 6 layers
+  text_decoder_heads: 4 # Reduced from 8 heads
+
   # Vision processing (DiNOv2 features - Efficient)
-  vision_encoder_dim: 768  # DiNOv2 feature dimension (fixed)
-  vision_latent_size: 256  # Reduced from 512 to match episode_dim
-  vision_hidden_size: 128  # Reduced from 256
-  
+  vision_encoder_dim: 768 # DiNOv2 feature dimension (fixed)
+  vision_latent_size: 256 # Reduced from 512 to match episode_dim
+  vision_hidden_size: 128 # Reduced from 256
+
   # QFormer-inspired Cross-modal fusion with Quadrangle Attention
-  fusion_hidden_size: 256  # Reduced from 512
-  fusion_num_heads: 4  # Reduced from 8
-  fusion_num_layers: 2  # Keep at 2 for cross-modal capability
-  fusion_num_queries: 32  # NEW: Number of learnable query tokens for QFormer fusion
-  
+  fusion_hidden_size: 256 # Reduced from 512
+  fusion_num_heads: 4 # Reduced from 8
+  fusion_num_layers: 2 # Keep at 2 for cross-modal capability
+  fusion_num_queries: 32 # NEW: Number of learnable query tokens for QFormer fusion
+
   # Quadrangle Attention Configuration (NEW)
-  use_quadrangle_attention: true  # Enable QFormer's Quadrangle Attention mechanism
-  quadrangle_memory_size: 1024  # Dedicated memory for quadrangle attention episodic processing
+  use_quadrangle_attention: true # Enable QFormer's Quadrangle Attention mechanism
+  quadrangle_memory_size: 1024 # Dedicated memory for quadrangle attention episodic processing
 
   # Episodic Memory (Tiny Model - Edge Optimized)
-  memory_size: 16  # Ultra-compact: 16 memory slots for edge deployment
-  episode_dim: 256  # Reduced episode dimension for efficiency
-  memory_alpha: 0.15  # Slightly higher for faster adaptation with fewer slots
+  memory_size: 16 # Ultra-compact: 16 memory slots for edge deployment
+  episode_dim: 256 # Reduced episode dimension for efficiency
+  memory_alpha: 0.15 # Slightly higher for faster adaptation with fewer slots
   direct_writing: true
-  
+
   # Model configuration - Optimized for 10 epochs full dataset
-  max_seq_len: 128  # Increased for better performance
-  dropout: 0.1  # Lower dropout for better learning
+  max_seq_len: 128 # Increased for better performance
+  dropout: 0.1 # Lower dropout for better learning
 
 data:
   # Dataset configuration - FULL DATASET FOR BEST RESULTS
   dataset_dir: "../babylm_dataset"
   text_encoder_name: "gpt2"
-  max_seq_length: 128  # Increased for better performance
-  
+  max_seq_length: 128 # Increased for better performance
+
   # DataLoader settings - Optimized for full dataset training
-  batch_size: 32  # Larger batch size for efficiency
-  num_workers: 8  # More workers for faster data loading
+  batch_size: 32 # Larger batch size for efficiency
+  num_workers: 8 # More workers for faster data loading
   pin_memory: true
   persistent_workers: true
-  prefetch_factor: 4  # Added for faster data loading
-  
+  prefetch_factor: 4 # Added for faster data loading
+
   # Full dataset training (no sample limits)
   # max_samples: null  # Train on entire dataset for best results
-  text_ratio: 0.5  # Balanced text and multimodal training
-  
+  text_ratio: 0.5 # Balanced text and multimodal training
+
   # HuggingFace configuration (use environment variables)
-  hf_token: null  # Use HF_TOKEN environment variable
-  validation_datasets: 
-    - "squad"  # Public dataset, no auth required
-    - "glue/sst2"  # Public dataset, no auth required
+  hf_token: null # Use HF_TOKEN environment variable
+  validation_datasets:
+    - "squad" # Public dataset, no auth required
+    - "glue/sst2" # Public dataset, no auth required
 
 training:
   # Training configuration - 10 EPOCHS FULL DATASET
   max_epochs: 10
-  accumulate_grad_batches: 4  # Larger effective batch size
+  accumulate_grad_batches: 4 # Larger effective batch size
   gradient_clip_val: 1.0
   val_check_interval: 1000
   scheduler: "cosine"
   min_lr: 0.00001
-  warmup_steps: 500  # Reduced warmup for 10 epochs
-  learning_rate: 0.0002  # Slightly higher LR for faster learning
+  warmup_steps: 500 # Reduced warmup for 10 epochs
+  learning_rate: 0.0002 # Slightly higher LR for faster learning
   weight_decay: 0.01
-  
+
   # Full dataset settings
-  gradient_accumulation_steps: 4  # Effective batch size = 32 * 4 = 128
-  save_every_n_epochs: 2  # Save checkpoints every 2 epochs
+  gradient_accumulation_steps: 4 # Effective batch size = 32 * 4 = 128
+  save_every_n_epochs: 2 # Save checkpoints every 2 epochs
 
 # Weights & Biases configuration - OPTIMIZED FOR SPEED
 # Enhanced wandb configuration with minimal logging for speed
 wandb:
   project: "bitmar-babylm-edge"
-  entity: "babylm-ntust"  # Use babylm-ntust team
-  api_key: null  # Use WANDB_API_KEY environment variable
-  log_every_n_steps: 500  # Much less frequent logging (was 50)
+  entity: "babylm-ntust" # Use babylm-ntust team
+  api_key: null # Use WANDB_API_KEY environment variable
+  log_every_n_steps: 500 # Much less frequent logging (was 50)
   save_code: true
 
 # Evaluation settings
@@ -103,4 +103,4 @@ cpu_test:
   batch_size: 2
   max_samples: 100
   reduced_model_size: true
-  memory_size: 8  # Ultra-tiny: 8 slots for CPU testing
+  memory_size: 8 # Ultra-tiny: 8 slots for CPU testing

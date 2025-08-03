@@ -4,25 +4,21 @@ Implements cognitively-inspired training: Episodic Capture → Memory Consolidat
 Uses QFormer Quadrangle Attention for enhanced cross-modal understanding and text grounding
 """
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import yaml
 import logging
 import time
 import gc
 import threading
 import numpy as np
-
 import shutil
 import traceback
 import psutil
-import gc
 import sys
 import os
-import logging
-import threading
-import yaml
-import torch
+import argparse
 from tqdm import tqdm
-import numpy as np
 from typing import Dict, Optional
 from pathlib import Path
 import wandb
@@ -30,13 +26,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim import AdamW
 import torch.nn.functional as F
 import torch.nn as nn
-import torch
-import yaml
-import logging
-import argparse
-import threading
-import sys
-import os
+
 # Remove unnecessary imports for speed optimization
 # from codecarbon import EmissionsTracker  # REMOVED: Carbon tracking adds overhead
 # from src.dataset_optimizer import IntelligentDatasetOptimizer, OptimizedDataLoader  # REMOVED: Extra optimization overhead
@@ -371,23 +361,28 @@ class BitMarTrainer:
         try:
             # Enhanced PyTorch optimizations for GPU acceleration
             if torch.cuda.is_available():
+                # Enable optimized CUDA backends
                 torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
                 torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
                 torch.backends.cuda.matmul.allow_tf32 = True  # Allow TF32 for speed
                 torch.backends.cudnn.allow_tf32 = True
-
+                
+                # Enable optimized attention
+                torch.backends.cuda.enable_flash_sdp(True)
+                
                 # Set CUDA memory management for optimal performance
                 torch.cuda.set_per_process_memory_fraction(
                     0.95, device=self.device)  # Use 95% of GPU memory
 
                 logger.info(
-                    "🔥 ENABLED AGGRESSIVE CUDA optimizations: cuDNN benchmark, TF32, memory optimization")
+                    "🔥 ENABLED AGGRESSIVE CUDA optimizations: cuDNN benchmark, TF32, FlashAttention, memory optimization")
                 print("⚡ GPU optimizations enabled")
                 sys.stdout.flush()
             else:
                 logger.warning("CUDA not available for optimizations")
         except Exception as e:
             logger.warning(f"CUDA optimizations failed: {e}")
+            logger.info("Continuing with basic optimizations")
 
         # 🚀 ENABLE MIXED PRECISION TRAINING FOR MAXIMUM GPU ACCELERATION
         if torch.cuda.is_available() and hasattr(torch.cuda, 'amp'):
@@ -575,7 +570,14 @@ class BitMarTrainer:
             'aggressive_caching': True,  # Cache frequently used data
             'reduced_validation_frequency': True,  # Validate less frequently for speed
             'skip_expensive_metrics': True,  # Skip computationally expensive metrics
-            # 📊 FULL DATASET TRAINING - NO SAMPLE LIMITS for best results
+            # � ULTRA-AGGRESSIVE SPEED OPTIMIZATIONS
+            'compile_dataloader': True,  # Compile data loading for speed
+            'mixed_precision_data': True,  # Use mixed precision in data loading
+            'zero_copy_tensors': True,  # Enable zero-copy tensor operations
+            'optimized_collate': True,  # Use optimized batch collation
+            'lazy_loading': True,  # Lazy load data when possible
+            'tensor_cores': True,  # Optimize for tensor cores
+            # �📊 FULL DATASET TRAINING - NO SAMPLE LIMITS for best results
             # 'max_samples_per_epoch': None,  # REMOVED: Use full dataset for best results
             'smart_sampling': True,  # Use intelligent sampling strategies
             'gradient_accumulation_steps': 4,  # Optimized effective batch size
@@ -1183,51 +1185,52 @@ class BitMarTrainer:
 
                 # 🚀 ULTRA-OPTIMIZED: Essential WandB logging with cross-modal similarity
                 if self.wandb_logger and self.global_step % 1000 == 0 and self.global_step > 0:
-                    essential_metrics = {
-                        'train_loss': loss.item(),
-                        'learning_rate': self.optimizer.param_groups[0]['lr'],
-                        'epoch': epoch,
-                        'step': self.global_step,
-                        'consolidation_phase': consolidation_phase,
-                    }
-                    
-                    # Compute cross-modal similarity efficiently (user requested)
-                    if hasattr(self.model, 'fusion_transformer') and 'vision_features' in batch and 'input_ids' in batch:
-                        try:
-                            with torch.no_grad():
-                                # Quick similarity computation using first sample only
-                                vision_emb = self.model.vision_projector(batch['vision_features'][:1])
-                                text_emb = self.model.text_encoder.embeddings.word_embeddings(batch['input_ids'][:1, :10])
-                                similarity = torch.cosine_similarity(
-                                    vision_emb.mean(dim=1), 
-                                    text_emb.mean(dim=1), 
-                                    dim=-1
-                                ).mean().item()
-                                essential_metrics['cross_modal_similarity'] = similarity
-                        except Exception:
-                            essential_metrics['cross_modal_similarity'] = 0.0
-                    
-                    # Log quantization metrics (user requested)
-                    if hasattr(self.model, 'get_quantization_stats'):
-                        try:
-                            quant_stats = self.model.get_quantization_stats()
-                            essential_metrics.update(quant_stats)
-                        except Exception:
-                            pass
-                    
-                    # Add consolidation phase info
-                    essential_metrics['consolidation/phase'] = consolidation_phase
-                    essential_metrics['consolidation/phase_epoch'] = epoch
-                    
-                    # Add phase-specific metrics
-                    if consolidation_phase == "episodic_capture":
-                        essential_metrics['consolidation/capture_rate'] = 1.0  # Capturing at full rate
-                    elif consolidation_phase == "memory_consolidation":
-                        essential_metrics['consolidation/replay_frequency'] = 0.1  # Replay every 10 steps
-                    elif consolidation_phase == "semantic_integration":
-                        essential_metrics['consolidation/integration_strength'] = 0.8  # Lower LR for integration
-                    
-                    self.wandb_logger.log_metrics(essential_metrics)
+                    try:
+                        essential_metrics = {
+                            'train_loss': loss.item(),
+                            'learning_rate': self.optimizer.param_groups[0]['lr'],
+                            'epoch': epoch,
+                            'step': self.global_step,
+                            'consolidation_phase': consolidation_phase,
+                        }
+                        
+                        # Compute cross-modal similarity efficiently (user requested)
+                        if hasattr(self.model, 'fusion_transformer') and 'vision_features' in batch and 'input_ids' in batch:
+                            try:
+                                with torch.no_grad():
+                                    # Quick similarity computation using first sample only
+                                    vision_emb = self.model.vision_projector(batch['vision_features'][:1])
+                                    text_emb = self.model.text_encoder.embeddings.word_embeddings(batch['input_ids'][:1, :10])
+                                    similarity = torch.cosine_similarity(
+                                        vision_emb.mean(dim=1), 
+                                        text_emb.mean(dim=1), 
+                                        dim=-1
+                                    ).mean().item()
+                                    essential_metrics['cross_modal_similarity'] = similarity
+                            except Exception:
+                                essential_metrics['cross_modal_similarity'] = 0.0
+                        
+                        # Log quantization metrics (user requested)
+                        if hasattr(self.model, 'get_quantization_stats'):
+                            try:
+                                quant_stats = self.model.get_quantization_stats()
+                                essential_metrics.update(quant_stats)
+                            except Exception:
+                                pass
+                        
+                        # Add consolidation phase info
+                        essential_metrics['consolidation/phase'] = consolidation_phase
+                        essential_metrics['consolidation/phase_epoch'] = epoch
+                        
+                        # Add phase-specific metrics
+                        if consolidation_phase == "episodic_capture":
+                            essential_metrics['consolidation/capture_rate'] = 1.0  # Capturing at full rate
+                        elif consolidation_phase == "memory_consolidation":
+                            essential_metrics['consolidation/replay_frequency'] = 0.1  # Replay every 10 steps
+                        elif consolidation_phase == "semantic_integration":
+                            essential_metrics['consolidation/integration_strength'] = 0.8  # Lower LR for integration
+                        
+                        self.wandb_logger.log_metrics(essential_metrics)
 
                     except Exception as e:
                         logger.warning(
@@ -1291,15 +1294,42 @@ class BitMarTrainer:
             except Exception as e:
                 logger.error(
                     f"Training batch {batch_idx} failed at step {self.global_step}: {e}")
-                logger.error(f"Skipping batch and continuing training...")
+                logger.error(f"Attempting recovery and continuing training...")
+
+                # Comprehensive error recovery for maximum stability
+                try:
+                    # Clear any corrupted data
+                    if 'batch' in locals():
+                        del batch
+                    if 'outputs' in locals():
+                        del outputs
+                    if 'loss' in locals():
+                        del loss
+                    
+                    # Force GPU memory cleanup
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()  # Ensure all operations complete
+                        
+                    # Reset optimizer state if needed
+                    if hasattr(self, 'optimizer'):
+                        self.optimizer.zero_grad(set_to_none=True)
+                    
+                    # Reset model to training mode
+                    self.model.train()
+                    
+                    # Force garbage collection
+                    gc.collect()
+                    
+                    logger.info("✅ Recovery completed, continuing training...")
+                    
+                except Exception as recovery_error:
+                    logger.error(f"Recovery failed: {recovery_error}")
+                    # Continue anyway to avoid stopping training
 
                 # Add detailed traceback for debugging
                 import traceback
                 logger.error(f"Full traceback: {traceback.format_exc()}")
-
-                # Clear GPU cache after error
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
 
                 self.global_step += 1
                 batches_processed += 1
@@ -1951,60 +1981,6 @@ class BitMarTrainer:
                         f"Batch size mismatch for {key}: {tensor.size(0)} vs {batch_size}")
                     # Try to fix by taking first batch_size elements
                     batch[key] = tensor[:batch_size]
-
-            return batch
-
-        except Exception as e:
-            logger.error(f"Batch validation failed: {e}")
-            raise e
-
-    def _validate_and_fix_batch_dimensions(self, batch):
-        """Validate and fix batch dimensions to prevent dimension errors"""
-        try:
-            # Validate required keys
-            required_keys = ['input_ids', 'attention_mask',
-                             'vision_features', 'labels']
-            for key in required_keys:
-                if key not in batch:
-                    logger.warning(f"Missing required key '{key}' in batch")
-                    # Create dummy tensors for missing keys
-                    if key == 'input_ids':
-                        batch[key] = torch.zeros(
-                            (1, 64), dtype=torch.long, device=self.device)
-                    elif key == 'attention_mask':
-                        batch[key] = torch.ones(
-                            (1, 64), dtype=torch.long, device=self.device)
-                    elif key == 'vision_features':
-                        batch[key] = torch.zeros(
-                            (1, 768, 196), dtype=torch.float32, device=self.device)
-                    elif key == 'labels':
-                        batch[key] = torch.zeros(
-                            (1, 64), dtype=torch.long, device=self.device)
-
-            # Validate tensor dimensions and fix if needed
-            batch_size = None
-            for key, tensor in batch.items():
-                if torch.is_tensor(tensor):
-                    if batch_size is None:
-                        batch_size = tensor.size(0)
-                    elif tensor.size(0) != batch_size:
-                        logger.warning(
-                            f"Inconsistent batch size for {key}: expected {batch_size}, got {tensor.size(0)}")
-                        # Truncate or pad to match batch size
-                        if tensor.size(0) > batch_size:
-                            tensor = tensor[:batch_size]
-                        else:
-                            # Pad with zeros
-                            pad_size = batch_size - tensor.size(0)
-                            pad_shape = (pad_size,) + tensor.shape[1:]
-                            pad_tensor = torch.zeros(
-                                pad_shape, dtype=tensor.dtype, device=tensor.device)
-                            tensor = torch.cat([tensor, pad_tensor], dim=0)
-                        batch[key] = tensor
-
-            # Ensure minimum batch size
-            if batch_size is None or batch_size == 0:
-                raise ValueError("Invalid batch: no valid tensors found")
 
             return batch
 

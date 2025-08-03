@@ -33,7 +33,8 @@ class BitNetLinear(nn.Module):
 
         # Initialize weights with Xavier uniform for stability
         with torch.no_grad():
-            nn.init.xavier_uniform_(self.weight, gain=0.1)  # Small gain to prevent saturation
+            # Small gain to prevent saturation
+            nn.init.xavier_uniform_(self.weight, gain=0.1)
             self.weight.clamp_(-1.0, 1.0)  # Clamp to prevent extreme values
             if self.bias is not None:
                 self.bias.zero_()
@@ -46,7 +47,7 @@ class BitNetLinear(nn.Module):
         """BitNet b1.58 weight quantization: {-1, 0, +1} with numerical stability"""
         # Clamp input weights to prevent extreme values
         weight_clamped = torch.clamp(weight, min=-5.0, max=5.0)
-        
+
         # Compute scaling factor with numerical stability
         scale = weight_clamped.abs().mean()
         scale = scale.clamp(min=1e-8, max=10.0)  # Prevent extreme scales
@@ -71,10 +72,11 @@ class BitNetLinear(nn.Module):
         """8-bit activation quantization with enhanced numerical stability"""
         # Clamp extreme values to prevent overflow
         x_clamped = torch.clamp(x, min=-100.0, max=100.0)
-        
+
         # Simplified finite check that's torch.compile friendly
         if torch.any(torch.isnan(x_clamped)):
-            logger.warning("NaN values in activation quantization, using fallback")
+            logger.warning(
+                "NaN values in activation quantization, using fallback")
             return torch.clamp(x, min=-1.0, max=1.0)
 
         # Compute quantization parameters with stability checks
@@ -96,7 +98,7 @@ class BitNetLinear(nn.Module):
         # Dequantize with final stability check
         dequantized = scale * (quantized - zero_point)
         dequantized = torch.clamp(dequantized, min=-100.0, max=100.0)
-        
+
         return dequantized
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -106,7 +108,7 @@ class BitNetLinear(nn.Module):
             logger.warning("NaN detected in BitNetLinear input, clamping...")
             x = torch.where(torch.isnan(x), torch.zeros_like(x), x)
             x = torch.clamp(x, min=-10.0, max=10.0)
-        
+
         if self.training:
             # Full precision training with straight-through estimator
             # Forward pass with quantized weights but gradients flow through original weights
@@ -119,9 +121,9 @@ class BitNetLinear(nn.Module):
 
             # Clamp weights to prevent extreme outputs
             weight_forward = torch.clamp(weight_forward, min=-5.0, max=5.0)
-            
+
             output = F.linear(x, weight_forward, self.bias)
-            
+
             # Final output clamping for stability
             output = torch.clamp(output, min=-50.0, max=50.0)
             return output
@@ -130,7 +132,7 @@ class BitNetLinear(nn.Module):
             weight_q = self.quantize_weights_1_58_bit(
                 self.weight) * self.weight_scale
             x_q = self.quantize_activations_8bit(x)
-            
+
             output = F.linear(x_q, weight_q, self.bias)
             output = torch.clamp(output, min=-50.0, max=50.0)
             return output
@@ -324,7 +326,8 @@ class BitNetTextEncoder(nn.Module):
                 layer_mask = attention_mask.unsqueeze(
                     1).unsqueeze(2)  # [batch_size, 1, 1, seq_len]
 
-            x, _ = layer(x, layer_mask)  # Ignore attention weights for performance
+            # Ignore attention weights for performance
+            x, _ = layer(x, layer_mask)
 
         x = self.norm(x)
         return x, []  # Return empty list instead of attention patterns
@@ -591,7 +594,7 @@ class LearnableQueryFusion(nn.Module):
                 episode_dim=hidden_dim // 2,
                 memory_alpha=0.1
             )
-            
+
             # Query integration layers for quadrangle output
             self.query_integration = nn.ModuleList([
                 nn.Sequential(
@@ -601,12 +604,11 @@ class LearnableQueryFusion(nn.Module):
                     nn.Linear(hidden_dim, hidden_dim)
                 ) for _ in range(num_layers)
             ])
-            
+
         else:
             # Fallback to original query-based attention layers
             self._init_original_attention_layers(dropout)
 
-        
         # Query-based output projection
         self.output_proj = BitNetLinear(hidden_dim, hidden_dim)
 
@@ -687,9 +689,10 @@ class LearnableQueryFusion(nn.Module):
         # Project to common dimension
         text_proj = self.text_proj(text_features)  # [B, seq_len, hidden_dim]
         vision_proj = self.vision_proj(vision_features)  # [B, hidden_dim]
-        
+
         # Expand vision features to match text sequence length
-        vision_expanded = vision_proj.unsqueeze(1).expand(-1, seq_len, -1)  # [B, seq_len, hidden_dim]
+        vision_expanded = vision_proj.unsqueeze(
+            1).expand(-1, seq_len, -1)  # [B, seq_len, hidden_dim]
 
         if self.use_quadrangle:
             # Use Quadrangle Attention for enhanced multimodal understanding
@@ -698,53 +701,58 @@ class LearnableQueryFusion(nn.Module):
                 image_features=vision_expanded,
                 mode=mode
             )
-            
+
             enhanced_text = result['text_features']
             enhanced_image = result['image_features']
             attention_maps = result['attention_maps']
-            
+
             # Initialize learnable queries
             queries = self.query_tokens.expand(batch_size, -1, -1)
             queries = queries + self.query_pos_embed
-            
+
             # Integrate queries with enhanced features through attention
             for i, integration_layer in enumerate(self.query_integration):
                 # Attend to enhanced text and image features
                 query_context = torch.cat([
-                    enhanced_text.mean(dim=1, keepdim=True),  # Global text context
-                    enhanced_image.mean(dim=1, keepdim=True)  # Global image context
+                    # Global text context
+                    enhanced_text.mean(dim=1, keepdim=True),
+                    # Global image context
+                    enhanced_image.mean(dim=1, keepdim=True)
                 ], dim=1)  # [B, 2, hidden_dim]
-                
+
                 # Apply integration layer
                 integrated_queries = integration_layer(queries)
-                
+
                 # Query attention to multimodal context
                 query_attn_weights = F.softmax(
-                    torch.matmul(integrated_queries, query_context.transpose(1, 2)) / math.sqrt(self.hidden_dim),
+                    torch.matmul(integrated_queries, query_context.transpose(
+                        1, 2)) / math.sqrt(self.hidden_dim),
                     dim=-1
                 )
-                attended_context = torch.matmul(query_attn_weights, query_context)
+                attended_context = torch.matmul(
+                    query_attn_weights, query_context)
                 queries = queries + attended_context
-            
+
             # Project queries back to text sequence
-            output = self.output_proj(enhanced_text + queries.mean(dim=1, keepdim=True))
-            
+            output = self.output_proj(
+                enhanced_text + queries.mean(dim=1, keepdim=True))
+
             # Add episodic information to attention maps
             attention_maps.update({
                 'episodic_episode': result.get('episode'),
                 'memory_usage': result.get('memory_usage'),
                 'memory_age': result.get('memory_age')
             })
-            
+
             return output, attention_maps
-            
+
         else:
             # Fallback to original query-based attention
             return self._forward_original(text_proj, vision_proj)
 
     def _forward_original(
-        self, 
-        text_proj: torch.Tensor, 
+        self,
+        text_proj: torch.Tensor,
         vision_proj: torch.Tensor
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Original forward implementation for fallback"""
@@ -909,7 +917,8 @@ class BitMarModel(nn.Module):
             num_layers=config['fusion_num_layers'],
             # Enable Quadrangle Attention with episodic memory
             use_quadrangle=config.get('use_quadrangle_attention', True),
-            episodic_memory_size=config.get('quadrangle_memory_size', config['memory_size'])
+            episodic_memory_size=config.get(
+                'quadrangle_memory_size', config['memory_size'])
         )
 
         # Episodic memory with BitNet quantization
@@ -939,26 +948,27 @@ class BitMarModel(nn.Module):
 
         # CRITICAL FIX: Pre-initialize dynamic projection layers to prevent NaN
         # These layers were previously created on-the-fly during forward pass
-        
+
         # Vision projection for compressed features (64 -> vision_encoder_dim)
         self.compressed_vision_proj = BitNetLinear(
             64, config['vision_encoder_dim']
         )
-        
+
         # Vision to episode projection (vision_latent_size -> episode_dim)
         self.vision_to_episode = BitNetLinear(
-            config['vision_latent_size'], 
+            config['vision_latent_size'],
             config['episode_dim']
         )
-        
+
         # Enhanced initialization for numerical stability
         with torch.no_grad():
             # Initialize compressed vision projection
-            nn.init.xavier_uniform_(self.compressed_vision_proj.weight, gain=0.1)
+            nn.init.xavier_uniform_(
+                self.compressed_vision_proj.weight, gain=0.1)
             if self.compressed_vision_proj.bias is not None:
                 self.compressed_vision_proj.bias.zero_()
             self.compressed_vision_proj.weight.clamp_(-1.0, 1.0)
-            
+
             # Initialize vision to episode projection
             nn.init.xavier_uniform_(self.vision_to_episode.weight, gain=0.1)
             if self.vision_to_episode.bias is not None:
@@ -969,7 +979,7 @@ class BitMarModel(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained('gpt2')
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        
+
         # Track training steps for consolidation logic
         self.global_step = 0
 
@@ -985,7 +995,8 @@ class BitMarModel(nn.Module):
         if vision_features.shape[-1] == 64:
             # We're using compressed features - use pre-initialized projection layer
             vision_features = self.compressed_vision_proj(vision_features)
-            logger.debug(f"Using compressed vision projection: 64 → {self.config['vision_encoder_dim']}")
+            logger.debug(
+                f"Using compressed vision projection: 64 → {self.config['vision_encoder_dim']}")
 
         # Now process with normal vision encoder
         vision_latent = self.vision_encoder(
@@ -1015,8 +1026,10 @@ class BitMarModel(nn.Module):
                 vision_projected = self.vision_to_episode(vision_latent)
                 # Simplified finite check that's torch.compile friendly
                 if torch.any(torch.isnan(vision_projected)):
-                    logger.warning("NaN values in vision projection, clamping...")
-                    vision_projected = torch.clamp(vision_projected, -10.0, 10.0)
+                    logger.warning(
+                        "NaN values in vision projection, clamping...")
+                    vision_projected = torch.clamp(
+                        vision_projected, -10.0, 10.0)
             except Exception as e:
                 logger.error(f"Vision projection failed: {e}")
                 # Fallback: use zero projection
@@ -1037,56 +1050,60 @@ class BitMarModel(nn.Module):
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         🧠 EPISODIC MEMORY CONSOLIDATION: Enhanced QFormer-based fusion
-        
+
         Different processing strategies for each consolidation phase:
         - episodic_capture: Fast, high-capacity QFormer processing
         - consolidation: Pattern extraction and replay-aware fusion
         - integration: Semantic integration with refined attention
         """
-        
+
         if mode == "episodic_capture":
             # Phase 1: Fast episodic capture with enhanced QFormer attention
             # Use full QFormer capacity for rich multimodal encoding
-            fused_features, attention_weights = self.fusion(text_features, vision_latent, mode)
-            
+            fused_features, attention_weights = self.fusion(
+                text_features, vision_latent, mode)
+
             # Enhance attention patterns for better episodic encoding
             for key, attn in attention_weights.items():
                 if isinstance(attn, torch.Tensor) and 'q2v' in key or 'q2t' in key:
                     # Sharpen cross-modal attention for clearer episodic traces
                     attention_weights[key] = torch.softmax(attn * 1.5, dim=-1)
-            
+
         elif mode == "consolidation":
             # Phase 2: Pattern extraction and memory replay-aware fusion
-            fused_features, attention_weights = self.fusion(text_features, vision_latent, mode)
-            
+            fused_features, attention_weights = self.fusion(
+                text_features, vision_latent, mode)
+
             # Add consolidation-specific processing
             # Encourage pattern extraction by emphasizing consistent attention patterns
             batch_size = text_features.size(0)
-            
+
             # Pattern consistency regularization (encourage stable patterns)
             for key, attn in attention_weights.items():
                 if isinstance(attn, torch.Tensor) and 'query_self' in key:
                     # Encourage self-consistency in query patterns
                     attention_weights[key] = torch.softmax(attn * 1.2, dim=-1)
-            
+
         elif mode == "integration":
             # Phase 3: Semantic integration with refined processing
-            fused_features, attention_weights = self.fusion(text_features, vision_latent, mode)
-            
+            fused_features, attention_weights = self.fusion(
+                text_features, vision_latent, mode)
+
             # Integration-specific refinement
             # Emphasize semantic coherence by smoothing attention patterns
             for key, attn in attention_weights.items():
                 if isinstance(attn, torch.Tensor) and 't2q' in key:
                     # Smoother text-to-query attention for semantic integration
                     attention_weights[key] = torch.softmax(attn * 0.8, dim=-1)
-        
+
         else:
             # Fallback to standard fusion
-            fused_features, attention_weights = self.fusion(text_features, vision_latent, mode)
-        
+            fused_features, attention_weights = self.fusion(
+                text_features, vision_latent, mode)
+
         # Add consolidation mode information to attention weights
         attention_weights['consolidation_mode'] = mode
-        
+
         return fused_features, attention_weights
 
     def forward(
@@ -1135,14 +1152,17 @@ class BitMarModel(nn.Module):
         if mode == "episodic_capture":
             # Rapid episodic storage - prioritize writing
             self.memory.write_memory(episode)
-            retrieved_memory, memory_attention = self.memory.read_memory(episode)
+            retrieved_memory, memory_attention = self.memory.read_memory(
+                episode)
         elif mode == "consolidation":
             # Balanced read/write with replay emphasis
-            retrieved_memory, memory_attention = self.memory(episode, mode="read_write")
+            retrieved_memory, memory_attention = self.memory(
+                episode, mode="read_write")
             # Additional replay mechanism handled in trainer
         elif mode == "integration":
             # Enhanced retrieval for semantic integration
-            retrieved_memory, memory_attention = self.memory.read_memory(episode)
+            retrieved_memory, memory_attention = self.memory.read_memory(
+                episode)
             # Write less frequently during integration
             if hasattr(self, 'global_step') and self.global_step % 5 == 0:  # Write every 5 steps
                 self.memory.write_memory(episode)
