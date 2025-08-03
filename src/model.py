@@ -443,14 +443,22 @@ class EpisodicMemory(nn.Module):
                     # Get LRU indices for this chunk
                     _, chunk_lru_indices = self.memory_age.topk(chunk_size, largest=False)
 
-                    # Update memory slots
-                    self.memory[chunk_lru_indices] = episode[i:end_idx].detach()
+                    # Update memory slots with proper dtype conversion
+                    episode_chunk = episode[i:end_idx].detach()
+                    # Ensure dtype compatibility for mixed precision training
+                    if episode_chunk.dtype != self.memory.dtype:
+                        episode_chunk = episode_chunk.to(self.memory.dtype)
+                    self.memory[chunk_lru_indices] = episode_chunk
                     self.memory_age[chunk_lru_indices] = self.memory_age.max() + 1 + i
                     self.memory_usage[chunk_lru_indices] += 1
             else:
                 # Normal case: batch_size <= memory_size
-                # Update memory slots
-                self.memory[lru_indices] = episode[:k].detach()
+                # Update memory slots with proper dtype conversion
+                episode_to_store = episode[:k].detach()
+                # Ensure dtype compatibility for mixed precision training
+                if episode_to_store.dtype != self.memory.dtype:
+                    episode_to_store = episode_to_store.to(self.memory.dtype)
+                self.memory[lru_indices] = episode_to_store
                 self.memory_age[lru_indices] = self.memory_age.max() + 1
                 self.memory_usage[lru_indices] += 1
 
@@ -475,9 +483,12 @@ class EpisodicMemory(nn.Module):
         # [batch_size, episode_dim]
         retrieved = torch.matmul(attention_weights, v)
 
-        # Update memory access statistics
-        access_counts = attention_weights.sum(0)
-        self.memory_usage += access_counts.detach()
+        # Update memory access statistics with dtype safety
+        access_counts = attention_weights.sum(0).detach()
+        # Ensure dtype compatibility for mixed precision training
+        if access_counts.dtype != self.memory_usage.dtype:
+            access_counts = access_counts.to(self.memory_usage.dtype)
+        self.memory_usage += access_counts
 
         return retrieved, attention_weights
 
