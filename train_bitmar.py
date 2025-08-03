@@ -8,6 +8,12 @@ import shutil
 import traceback
 import psutil
 import gc
+import sys
+import os
+import logging
+import threading
+import yaml
+import torch
 from tqdm import tqdm
 import numpy as np
 from typing import Dict, Optional
@@ -378,13 +384,28 @@ class BitMarTrainer:
         # Force all model components to GPU and clear CPU references
         print("🔧 Ensuring all model components are on GPU...")
         sys.stdout.flush()
+        
+        # Fix device comparison logic to avoid false warnings
+        target_device_type = self.device.type
+        target_device_index = self.device.index if self.device.index is not None else 0
+        
+        parameters_moved = 0
         for name, param in self.model.named_parameters():
-            if param.device != self.device:
-                logger.warning(
-                    f"Parameter {name} on wrong device {param.device}, moving to {self.device}")
+            param_device_type = param.device.type
+            param_device_index = param.device.index if param.device.index is not None else 0
+            
+            # Only move if actually on different device type or index
+            if param_device_type != target_device_type or param_device_index != target_device_index:
+                logger.info(f"Moving parameter {name} from {param.device} to {self.device}")
                 param.data = param.data.to(self.device)
-                # Clear any lingering CPU references
-                gc.collect()
+                parameters_moved += 1
+        
+        if parameters_moved > 0:
+            logger.info(f"✅ Moved {parameters_moved} parameters to {self.device}")
+            # Clear any lingering CPU references only if we moved parameters
+            gc.collect()
+        else:
+            logger.info(f"✅ All model parameters already on {self.device}")
 
         # Check GPU memory usage after model loading
         if torch.cuda.is_available():
