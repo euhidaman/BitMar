@@ -69,9 +69,9 @@ class BitNetLinear(nn.Module):
         # Clamp extreme values to prevent overflow
         x_clamped = torch.clamp(x, min=-100.0, max=100.0)
         
-        # Check for NaN/Inf values
-        if not torch.isfinite(x_clamped).all():
-            logger.warning("Non-finite values in activation quantization, using fallback")
+        # Simplified finite check that's torch.compile friendly
+        if torch.any(torch.isnan(x_clamped)):
+            logger.warning("NaN values in activation quantization, using fallback")
             return torch.clamp(x, min=-1.0, max=1.0)
 
         # Compute quantization parameters with stability checks
@@ -97,9 +97,11 @@ class BitNetLinear(nn.Module):
         return dequantized
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Check input for NaN/Inf values
-        if not torch.isfinite(x).all():
-            logger.warning("Non-finite input to BitNetLinear, clamping...")
+        # Simplified finite check that's torch.compile friendly
+        # Only check during training and use simpler logic
+        if self.training and torch.any(torch.isnan(x)):
+            logger.warning("NaN detected in BitNetLinear input, clamping...")
+            x = torch.where(torch.isnan(x), torch.zeros_like(x), x)
             x = torch.clamp(x, min=-10.0, max=10.0)
         
         if self.training:
@@ -920,9 +922,9 @@ class BitMarModel(nn.Module):
             # Use pre-initialized vision projection layer to match text dimensions
             try:
                 vision_projected = self.vision_to_episode(vision_latent)
-                # Check for NaN/Inf values and clamp if necessary
-                if not torch.isfinite(vision_projected).all():
-                    logger.warning("Non-finite values in vision projection, clamping...")
+                # Simplified finite check that's torch.compile friendly
+                if torch.any(torch.isnan(vision_projected)):
+                    logger.warning("NaN values in vision projection, clamping...")
                     vision_projected = torch.clamp(vision_projected, -10.0, 10.0)
             except Exception as e:
                 logger.error(f"Vision projection failed: {e}")

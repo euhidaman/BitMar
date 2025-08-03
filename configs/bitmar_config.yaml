@@ -49,18 +49,18 @@ data:
     - "squad"  # Public dataset, no auth required
     - "glue/sst2"  # Public dataset, no auth required
 
-# Enhanced attention analysis configuration
+# Enhanced attention analysis configuration - OPTIMIZED FOR SPEED
 attention_analysis:
-  # Enable attention head tracking and visualization
-  track_top_k: 20  # Track top 20 most important heads
-  log_every_n_steps: 100  # Analyze attention every 100 steps
-  viz_every_n_epochs: 2  # Create visualizations every 2 epochs
-  save_head_patterns: true  # Save attention patterns to files
-  analyze_memory_attention: true  # Analyze episodic memory attention
-  analyze_cross_modal: true  # Analyze cross-modal attention fusion
+  # Minimal attention tracking for maximum training speed
+  track_top_k: 3  # Track only 3 most important heads (reduced from 20)
+  log_every_n_steps: 50000  # Very infrequent analysis (reduced from 100)
+  viz_every_n_epochs: 10  # Only create visualizations at the very end (reduced from 2)
+  save_head_patterns: false  # Disable file I/O for speed (was true)
+  analyze_memory_attention: false  # Disable expensive memory analysis (was true)
+  analyze_cross_modal: false  # Disable expensive cross-modal analysis (was true)
 
 training:
-  # Training configuration
+  # Training configuration - OPTIMIZED FOR SPEED
   max_epochs: 10
   accumulate_grad_batches: 1
   gradient_clip_val: 1.0
@@ -70,27 +70,27 @@ training:
   warmup_steps: 1000
   learning_rate: 0.0001
   weight_decay: 0.01
-  track_attention: true
+  track_attention: false  # DISABLED for speed (was true)
 
-# Weights & Biases configuration (optional)
-# Enhanced wandb configuration with comprehensive logging
+# Weights & Biases configuration - OPTIMIZED FOR SPEED
+# Enhanced wandb configuration with minimal logging for speed
 wandb:
   project: "bitmar-babylm-edge"
   entity: "babylm-ntust"  # Use babylm-ntust team
   api_key: null  # Use WANDB_API_KEY environment variable
-  log_every_n_steps: 50
-  # Detailed logging categories with proper axis labels
-  log_attention: true
-  log_memory: true
-  log_gradients: true
-  log_quantization: true
-  log_features: true
+  log_every_n_steps: 500  # Much less frequent logging (was 50)
+  # Minimal logging categories for speed
+  log_attention: false  # DISABLED for speed (was true)
+  log_memory: false  # DISABLED for speed (was true)
+  log_gradients: false  # DISABLED for speed (was true)
+  log_quantization: false  # DISABLED for speed (was true)
+  log_features: false  # DISABLED for speed (was true)
   save_code: true
-  # Visualization settings
-  create_plots: true
-  plot_attention_heatmaps: true
-  plot_memory_usage: true
-  plot_quantization_dist: true
+  # Visualization settings - DISABLED for speed
+  create_plots: false  # DISABLED for speed (was true)
+  plot_attention_heatmaps: false  # DISABLED for speed (was true)
+  plot_memory_usage: false  # DISABLED for speed (was true)
+  plot_quantization_dist: false  # DISABLED for speed (was true)
 
 # Evaluation settings
 evaluation:

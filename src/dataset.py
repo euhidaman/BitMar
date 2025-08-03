@@ -658,7 +658,7 @@ class BabyLMDataModule:
 
 
 def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
-    """Custom collate function for batching"""
+    """Custom collate function for batching with shape consistency for torch.compile"""
     keys = batch[0].keys()
     collated = {}
 
@@ -666,7 +666,21 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         if key == 'caption':
             collated[key] = [item[key] for item in batch]
         else:
-            collated[key] = torch.stack([item[key] for item in batch])
+            # Ensure all tensors have exactly the same shape to prevent dimension errors
+            tensors = [item[key] for item in batch]
+            # Validate tensor shapes before stacking to prevent assertion errors
+            if tensors:
+                expected_shape = tensors[0].shape
+                for i, tensor in enumerate(tensors[1:], 1):
+                    if tensor.shape != expected_shape:
+                        logger.warning(f"Shape mismatch in {key} at batch item {i}: expected {expected_shape}, got {tensor.shape}")
+                        # Force reshape to expected shape if possible
+                        if tensor.numel() == tensors[0].numel():
+                            tensors[i] = tensor.view(expected_shape)
+                        else:
+                            raise ValueError(f"Cannot fix shape mismatch in {key}: {tensor.shape} vs {expected_shape}")
+            
+            collated[key] = torch.stack(tensors)
 
     return collated
 

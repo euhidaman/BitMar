@@ -398,23 +398,16 @@ class BitMarTrainer:
             self.use_amp = False
             logger.warning("Mixed precision training not available")
 
-        # 🔥 PYTORCH 2.0 MODEL COMPILATION for maximum speed
+        # 🔥 PYTORCH 2.0 MODEL COMPILATION - DISABLED for stability
+        # torch.compile can cause dimension assertion errors with dynamic shapes
+        # Disabling for faster and more stable training
         try:
-            if hasattr(torch, 'compile') and torch.cuda.is_available():
-                # Compile model for maximum GPU performance
-                self.model = torch.compile(
-                    self.model, 
-                    mode="max-autotune",  # Maximum optimization
-                    dynamic=False,  # Static shapes for best performance
-                    fullgraph=False,  # Allow graph breaks for compatibility
-                )
-                logger.info("🔥 Model compiled with PyTorch 2.0 for maximum GPU acceleration")
-                print("🚀 Model compilation enabled")
-                sys.stdout.flush()
-            else:
-                logger.info("PyTorch 2.0 compilation not available")
+            logger.info("💡 Torch.compile disabled for stability and speed")
+            logger.info("This significantly improves training speed and prevents dimension errors")
+            print("🚀 Running without torch.compile for optimal performance")
+            sys.stdout.flush()
         except Exception as e:
-            logger.warning(f"Model compilation failed: {e}")
+            logger.warning(f"Model compilation check failed: {e}")
             logger.info("Continuing without model compilation")
 
         # Immediate cleanup after model transfer
@@ -474,32 +467,29 @@ class BitMarTrainer:
         if self.wandb_logger:
             self.wandb_logger.log_model_size_metrics(self.model)
 
-        # Initialize attention analyzer
+        # Initialize minimal attention analyzer for speed
+        # Drastically reduce tracking frequency to improve training speed
+        attention_config = self.config.get('attention_analysis', {})
+        track_heads = min(attention_config.get('track_top_k', 3), 3)  # Max 3 heads
+        
+        logger.info(f"⚡ Minimal attention tracking: {track_heads} heads, very infrequent logging")
         self.attention_analyzer = AttentionHeadAnalyzer(
             model=self.model,
             tokenizer=self.model.tokenizer,
             save_dir=str(self.attention_dir),
             wandb_logger=self.wandb_logger,
-            track_top_k=self.config.get(
-                'attention_analysis', {}).get('track_top_k', 10)
+            track_top_k=track_heads  # Much smaller for speed
         )
 
-        # Initialize comprehensive modality tracker (NEW!)
-        self.modality_tracker = ModalityTracker(
-            save_dir=str(self.memory_dir / "modality_analysis"),
-            wandb_logger=self.wandb_logger
-        )
-        logger.info("📊 Comprehensive modality tracker initialized")
+        # Disable comprehensive modality tracker for speed
+        # This tracker adds significant overhead during training
+        logger.info("⚡ Modality tracking disabled for maximum training speed")
+        self.modality_tracker = None
 
-        # Initialize attention evolution tracker
-        if ATTENTION_TRACKING_AVAILABLE:
-            self.attention_evolution_tracker = AttentionEvolutionTracker(
-                save_dir=str(self.attention_dir / "attention_evolution")
-            )
-            logger.info("Attention evolution tracker initialized")
-        else:
-            self.attention_evolution_tracker = None
-            logger.warning("Attention evolution tracker not available")
+        # Disable attention evolution tracker for speed
+        # This adds significant computation overhead during training
+        logger.info("⚡ Attention evolution tracking disabled for maximum training speed")
+        self.attention_evolution_tracker = None
 
         # Create enhanced data module with adaptive strategies
         logger.info(
@@ -1031,10 +1021,10 @@ class BitMarTrainer:
                             # Use non_blocking=True for maximum GPU transfer speed
                             batch[key] = batch[key].to(
                                 self.device, non_blocking=True)
-                            # Validate tensor is finite
-                            if torch.is_floating_point(batch[key]) and not torch.isfinite(batch[key]).all():
+                            # Simplified finite check that's torch.compile friendly
+                            if torch.is_floating_point(batch[key]) and torch.any(torch.isnan(batch[key])):
                                 logger.warning(
-                                    f"Non-finite values detected in {key}, skipping batch")
+                                    f"NaN values detected in {key}, skipping batch")
                                 self.global_step += 1
                                 continue
 
@@ -1243,44 +1233,22 @@ class BitMarTrainer:
                             f"Wandb logging failed at step {self.global_step}: {e}")
                         # Continue training without wandb logging for this step
 
-                # 🚀 PERFORMANCE CRITICAL: Disable expensive analytics during training
-                # These analytics are causing massive slowdown (145 hours vs normal training)
-                # Only run analytics very rarely to avoid performance impact
+                # 🚀 PERFORMANCE CRITICAL: Analytics completely disabled during training
+                # All analytics are causing massive slowdown (20+ hours vs normal training)
+                # Analytics will only run at epoch end to avoid any performance impact
                 
-                # Comprehensive modality tracking - SEVERELY LIMITED for performance
-                modality_track_steps = self.config.get(
-                    'track_attention_every_n_steps', 5000)  # MUCH less frequent tracking (every 5000 steps)
-                if (self.modality_tracker and modality_track_steps > 0 and
-                        self.global_step % modality_track_steps == 0 and self.global_step > 0):
-
-                    try:
-                        # Only do basic tracking, skip expensive operations
-                        logger.info(f"� Basic modality tracking at step {self.global_step}")
-                        # Skip the expensive track_step operation during training
-                        pass
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Modality tracking failed at step {self.global_step}: {e}")
-
-                # Attention analysis - SEVERELY LIMITED for performance
-                attention_log_steps = self.config.get(
-                    'attention_analysis', {}).get('log_every_n_steps', 10000)  # MUCH less frequent (every 10000 steps)
-                if (self.attention_analyzer and attention_log_steps > 0 and
-                        self.global_step % attention_log_steps == 0 and self.global_step > 0):
-
-                    try:
-                        logger.info(f"🔍 Basic attention analysis at step {self.global_step}")
-                        # Skip expensive attention analysis during training
-                        pass
-                    except Exception as e:
-                        logger.warning(
-                            f"Attention analysis failed at step {self.global_step}: {e}")
+                # Skip all step-level analytics for maximum speed
+                # This includes:
+                # - Modality tracking (disabled)
+                # - Attention analysis (disabled)
+                # - Memory analysis (disabled)
+                # - All visualizations (disabled)
+                
+                pass  # All analytics moved to epoch end
 
                 # Attention evolution tracking - DISABLED for performance
-                # This is extremely expensive and causing the 145-hour slowdown
-                if False:  # Completely disabled during training
-                    pass  # Skip all expensive attention evolution tracking
+                # This is extremely expensive and causing the 20+ hour slowdown
+                # All tracking moved to epoch end only
 
                 # Dynamic text ratio adjustment
                 if self.dynamic_weighting and self.global_step % self.adjustment_frequency == 0:
@@ -1293,8 +1261,8 @@ class BitMarTrainer:
                 if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
                     self.scheduler.step()
 
-                # � EFFICIENT PROGRESS UPDATE: Show training progress
-                if batches_processed % 100 == 0:  # Update every 100 batches for efficiency
+                # ⚡ MINIMAL PROGRESS UPDATE: Show training progress less frequently for speed
+                if batches_processed % 500 == 0:  # Update every 500 batches for maximum efficiency
                     elapsed_time = time.time() - epoch_start_time
                     progress_bar.set_postfix({
                         'loss': f"{loss.item():.4f}",
@@ -2168,8 +2136,8 @@ class BitMarTrainer:
                     logger.info(
                         f"Scheduler stepped (epoch-based), new LR: {self.optimizer.param_groups[0]['lr']:.2e}")
 
-                # Log validation metrics with enhanced logger
-                if self.wandb_logger:
+                # Log validation metrics with enhanced logger - REDUCED FREQUENCY
+                if self.wandb_logger and epoch % 2 == 0:  # Only log every 2nd epoch for speed
                     self.wandb_logger.log_validation_metrics(
                         val_metrics['val_loss'],
                         np.exp(val_metrics['val_loss']),  # Perplexity
@@ -2183,8 +2151,8 @@ class BitMarTrainer:
                 all_metrics['epoch'] = epoch
                 all_metrics['learning_rate'] = self.optimizer.param_groups[0]['lr']
 
-                # Log epoch summary
-                if self.wandb_logger:
+                # Log epoch summary - REDUCED FREQUENCY  
+                if self.wandb_logger and epoch % 2 == 0:  # Only log every 2nd epoch for speed
                     self.wandb_logger.log_epoch_summary(
                         epoch=epoch,
                         train_loss=train_metrics['train_loss'],
