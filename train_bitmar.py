@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import yaml
+import json
 import logging
 import time
 import gc
@@ -24,8 +25,6 @@ from pathlib import Path
 import wandb
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim import AdamW
-import torch.nn.functional as F
-import torch.nn as nn
 
 # Remove unnecessary imports for speed optimization
 # from codecarbon import EmissionsTracker  # REMOVED: Carbon tracking adds overhead
@@ -33,6 +32,7 @@ import torch.nn as nn
 # from src.modality_tracker import ModalityTracker  # REMOVED: Already disabled in code
 from src.wandb_logger import BitMarWandbLogger
 from src.model import create_bitmar_model, count_parameters
+from src.dataset import create_data_module
 from src.dataset import create_data_module
 print("🚀 Starting train_bitmar.py script...")
 
@@ -2563,9 +2563,20 @@ class BitMarTrainer:
 
 
 def load_config(config_path: str) -> Dict:
-    """Load configuration from YAML file"""
+    """Load configuration from JSON or YAML file"""
     with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
+        if config_path.endswith('.json'):
+            config = json.load(f)
+        elif config_path.endswith(('.yaml', '.yml')):
+            config = yaml.safe_load(f)
+        else:
+            # Try YAML first, then JSON
+            try:
+                f.seek(0)
+                config = yaml.safe_load(f)
+            except yaml.YAMLError:
+                f.seek(0)
+                config = json.load(f)
     return config
 
 
@@ -2578,8 +2589,8 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/bitmar_ultra_tiny.yaml",
-        help="Path to configuration file"
+        default="configs/bitmar_config.yaml",
+        help="Path to configuration file (JSON or YAML)"
     )
     parser.add_argument(
         "--max_epochs",
@@ -2630,6 +2641,74 @@ def main():
         choices=["adamw", "adamw8bit", "adam", "sgd", "rmsprop"],
         help="Optimizer to use for training"
     )
+    
+    # Enhanced optimization arguments
+    parser.add_argument(
+        "--max_steps",
+        type=int,
+        default=None,
+        help="Maximum number of training steps (overrides epochs)"
+    )
+    parser.add_argument(
+        "--save_every",
+        type=int,
+        default=1000,
+        help="Save checkpoint every N steps"
+    )
+    parser.add_argument(
+        "--use_mixed_precision",
+        action="store_true",
+        help="Enable mixed precision training (AMP)"
+    )
+    parser.add_argument(
+        "--enable_flash_attention",
+        action="store_true",
+        help="Enable FlashAttention for faster training"
+    )
+    parser.add_argument(
+        "--use_gradient_checkpointing",
+        action="store_true",
+        help="Enable gradient checkpointing to save memory"
+    )
+    parser.add_argument(
+        "--dataloader_num_workers",
+        type=int,
+        default=None,
+        help="Number of dataloader workers"
+    )
+    parser.add_argument(
+        "--pin_memory",
+        action="store_true",
+        help="Pin memory for faster GPU transfers"
+    )
+    parser.add_argument(
+        "--persistent_workers",
+        action="store_true",
+        help="Keep dataloader workers persistent"
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=None,
+        help="Number of gradient accumulation steps"
+    )
+    parser.add_argument(
+        "--compile_model",
+        action="store_true",
+        help="Enable PyTorch 2.0 model compilation"
+    )
+    parser.add_argument(
+        "--eval_every",
+        type=int,
+        default=None,
+        help="Evaluate every N steps"
+    )
+    parser.add_argument(
+        "--log_every",
+        type=int,
+        default=100,
+        help="Log metrics every N steps"
+    )
 
     args = parser.parse_args()
     print(f"✅ Arguments parsed: {args}")
@@ -2657,6 +2736,44 @@ def main():
 
         # Add optimizer config
         config['optimizer'] = args.optimizer
+
+        # Apply optimization arguments
+        if args.max_steps:
+            config['training']['max_steps'] = args.max_steps
+            print(f"🔧 Overriding max_steps: {args.max_steps}")
+        if args.save_every:
+            config['training']['save_every'] = args.save_every
+            print(f"🔧 Save every: {args.save_every} steps")
+        if args.use_mixed_precision:
+            config['training']['use_mixed_precision'] = True
+            print("⚡ Mixed precision training enabled")
+        if args.enable_flash_attention:
+            config['training']['enable_flash_attention'] = True
+            print("🔥 FlashAttention enabled")
+        if args.use_gradient_checkpointing:
+            config['training']['use_gradient_checkpointing'] = True
+            print("💾 Gradient checkpointing enabled")
+        if args.dataloader_num_workers:
+            config['data']['num_workers'] = args.dataloader_num_workers
+            print(f"🔧 Dataloader workers: {args.dataloader_num_workers}")
+        if args.pin_memory:
+            config['data']['pin_memory'] = True
+            print("📌 Pin memory enabled")
+        if args.persistent_workers:
+            config['data']['persistent_workers'] = True
+            print("🔄 Persistent workers enabled")
+        if args.gradient_accumulation_steps:
+            config['training']['gradient_accumulation_steps'] = args.gradient_accumulation_steps
+            print(f"📈 Gradient accumulation steps: {args.gradient_accumulation_steps}")
+        if args.compile_model:
+            config['training']['compile_model'] = True
+            print("🔥 Model compilation enabled")
+        if args.eval_every:
+            config['training']['eval_every'] = args.eval_every
+            print(f"📊 Evaluate every: {args.eval_every} steps")
+        if args.log_every:
+            config['training']['log_every'] = args.log_every
+            print(f"📝 Log every: {args.log_every} steps")
 
         print("✅ Configuration loaded and overridden successfully")
 
