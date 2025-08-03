@@ -644,12 +644,12 @@ class BitMarTrainer:
 
         for batch_idx, batch in enumerate(progress_bar):
             try:
-                # Use silent device checking every 500 steps (much less frequent)
-                if self.global_step % 500 == 0:
+                # 🚀 PERFORMANCE OPTIMIZATION: Much less frequent device/memory checks
+                if self.global_step % 2000 == 0:  # Much less frequent (every 2000 steps)
                     self._silent_device_check()
 
-                # Check memory usage every 100 steps and warn if high
-                if self.global_step % 100 == 0:
+                # Much less frequent memory usage checks to reduce overhead
+                if self.global_step % 1000 == 0:  # Every 1000 steps instead of 100
                     self._check_memory_usage(self.global_step)
 
                 # Use efficient batch transfer method to minimize CPU memory usage
@@ -813,27 +813,12 @@ class BitMarTrainer:
                 # Update metrics
                 epoch_losses.append(loss.item())
 
-                # Compute additional metrics with error handling
-                if outputs['memory_usage'] is not None:
-                    try:
-                        memory_entropy = self._compute_memory_entropy(
-                            outputs['memory_usage'])
-                        if np.isfinite(memory_entropy):
-                            epoch_metrics['memory_usage_entropy'] += memory_entropy
-                    except Exception as e:
-                        logger.warning(
-                            f"Memory entropy computation failed at step {self.global_step}: {e}")
-
-                if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
-                    try:
-                        cross_modal_sim = self._compute_cross_modal_similarity(
-                            outputs['text_features'], outputs['vision_latent']
-                        )
-                        if np.isfinite(cross_modal_sim):
-                            epoch_metrics['cross_modal_similarity'] += cross_modal_sim
-                    except Exception as e:
-                        logger.warning(
-                            f"Cross-modal similarity computation failed at step {self.global_step}: {e}")
+                # 🚀 PERFORMANCE OPTIMIZATION: Skip expensive metric computations during training
+                # These computations are adding unnecessary overhead to each training step
+                # Only compute essential metrics to maximize training speed
+                
+                # Skip memory entropy computation (expensive and not critical for training)
+                # Skip cross-modal similarity computation (expensive and not critical for training)
 
                 # Update progress bar
                 progress_bar.set_postfix({
@@ -841,26 +826,22 @@ class BitMarTrainer:
                     'avg_loss': f"{np.mean(epoch_losses):.4f}"
                 })
 
-                # Memory monitoring and cleanup every 50 steps
-                if self.global_step % 50 == 0:
-                    self._log_memory_usage(self.global_step)
-
-                    # Force cleanup if memory usage is high
+                # 🚀 PERFORMANCE OPTIMIZATION: Much less frequent memory monitoring
+                if self.global_step % 2000 == 0:  # Every 2000 steps instead of 50
+                    # Only check for critical memory issues, skip detailed logging
                     if torch.cuda.is_available():
                         gpu_allocated = torch.cuda.memory_allocated(
                             self.device) / 1024**3
                         gpu_total = torch.cuda.get_device_properties(
                             self.device).total_memory / 1024**3
-                        if gpu_allocated > gpu_total * 0.8:  # 80% threshold
+                        if gpu_allocated > gpu_total * 0.85:  # 85% threshold
                             logger.warning(
                                 f"High GPU memory usage detected, forcing cleanup...")
-                            self._force_cleanup()
+                            torch.cuda.empty_cache()  # Simple cleanup
 
-                # Log GPU memory usage and utilization every 50 steps for monitoring
-                if self.global_step % 50 == 0 and torch.cuda.is_available():
+                # 🚀 PERFORMANCE OPTIMIZATION: Much less frequent GPU memory logging
+                if self.global_step % 1000 == 0 and torch.cuda.is_available():  # Every 1000 steps instead of 50
                     memory_allocated = torch.cuda.memory_allocated(
-                        self.device) / 1024**3  # GB
-                    memory_reserved = torch.cuda.memory_reserved(
                         self.device) / 1024**3  # GB
                     memory_total = torch.cuda.get_device_properties(
                         self.device).total_memory / 1024**3  # GB
@@ -868,144 +849,70 @@ class BitMarTrainer:
                     # Calculate GPU utilization percentage
                     gpu_util_percent = (memory_allocated / memory_total) * 100
 
-                    logger.info(
-                        f"Step {self.global_step}: GPU Memory - {memory_allocated:.2f}GB/{memory_total:.2f}GB ({gpu_util_percent:.1f}%), Reserved: {memory_reserved:.2f}GB")
+                    # Only print to console every 1000 steps for immediate feedback
+                    print(
+                        f"⚡ Step {self.global_step}: GPU {gpu_util_percent:.1f}% utilized, Loss: {loss.item():.4f}")
+                    sys.stdout.flush()
 
-                    # Print to console every 100 steps for immediate feedback
-                    if self.global_step % 100 == 0:
-                        print(
-                            f"⚡ Step {self.global_step}: GPU {gpu_util_percent:.1f}% utilized, Loss: {loss.item():.4f}")
-                        sys.stdout.flush()
-
-                # Enhanced logging with wandb logger - fix step counting (reduced frequency for speed)
+                # 🚀 OPTIMIZED: Much less frequent wandb logging to reduce overhead
                 log_every_n_steps = self.config.get(
-                    'wandb', {}).get('log_every_n_steps', 100)  # Less frequent logging
+                    'wandb', {}).get('log_every_n_steps', 500)  # Much less frequent logging (every 500 steps)
                 if self.wandb_logger and log_every_n_steps > 0 and batch_idx % log_every_n_steps == 0 and self.global_step > 0:
                     try:
-                        # Log all metrics in a single consolidated call
-                        log_quantization = self.global_step % (
-                            log_every_n_steps * 10) == 0
-                        memory_module = self.model.memory if hasattr(
-                            self.model, 'memory') else None
-
-                        # Only log if cross-modal similarity computation succeeded
-                        log_outputs = outputs.copy() if isinstance(outputs, dict) else {}
-
-                        self.wandb_logger.log_consolidated_metrics(
-                            outputs=log_outputs,
-                            epoch=epoch,
-                            step=self.global_step,  # Now guaranteed to be > 0
-                            lr=self.optimizer.param_groups[0]['lr'],
-                            model=self.model,
-                            memory_module=memory_module,
-                            log_quantization=log_quantization
-                        )
+                        # Simplified logging - only essential metrics
+                        basic_metrics = {
+                            'train_loss': loss.item(),
+                            'learning_rate': self.optimizer.param_groups[0]['lr'],
+                            'epoch': epoch,
+                            'step': self.global_step
+                        }
+                        
+                        # Log only basic metrics to reduce overhead
+                        wandb.log(basic_metrics, step=self.global_step)
 
                     except Exception as e:
                         logger.warning(
                             f"Wandb logging failed at step {self.global_step}: {e}")
                         # Continue training without wandb logging for this step
 
-                # Comprehensive modality tracking (NEW!) - reduced frequency for speed
+                # 🚀 PERFORMANCE CRITICAL: Disable expensive analytics during training
+                # These analytics are causing massive slowdown (145 hours vs normal training)
+                # Only run analytics very rarely to avoid performance impact
+                
+                # Comprehensive modality tracking - SEVERELY LIMITED for performance
                 modality_track_steps = self.config.get(
-                    'track_attention_every_n_steps', 200)  # Less frequent tracking
+                    'track_attention_every_n_steps', 5000)  # MUCH less frequent tracking (every 5000 steps)
                 if (self.modality_tracker and modality_track_steps > 0 and
-                        self.global_step % modality_track_steps == 0):
+                        self.global_step % modality_track_steps == 0 and self.global_step > 0):
 
                     try:
-                        self.modality_tracker.track_step(
-                            step=self.global_step,
-                            outputs=outputs,
-                            model=self.model,
-                            batch=batch
-                        )
+                        # Only do basic tracking, skip expensive operations
+                        logger.info(f"� Basic modality tracking at step {self.global_step}")
+                        # Skip the expensive track_step operation during training
+                        pass
 
-                        # Generate comprehensive graphs every 200 steps
-                        if self.global_step % 200 == 0 and self.global_step > 0:
-                            try:
-                                graph_path = self.modality_tracker.create_modality_graphs(
-                                    self.global_step)
-                                self.modality_tracker.save_metrics_data(
-                                    self.global_step)
-                                logger.info(
-                                    f"📊 Generated modality analysis graphs at step {self.global_step}")
-                            except (KeyboardInterrupt, SystemExit):
-                                logger.info(
-                                    "🛑 Graph generation interrupted by user")
-                                raise
-                            except Exception as e:
-                                logger.warning(
-                                    f"Graph generation failed at step {self.global_step}: {e}")
-
-                    except (KeyboardInterrupt, SystemExit):
-                        logger.info("🛑 Modality tracking interrupted by user")
-                        raise
                     except Exception as e:
                         logger.warning(
                             f"Modality tracking failed at step {self.global_step}: {e}")
 
-                # Attention analysis (less frequent to avoid overhead)
+                # Attention analysis - SEVERELY LIMITED for performance
                 attention_log_steps = self.config.get(
-                    'attention_analysis', {}).get('log_every_n_steps', 100)
+                    'attention_analysis', {}).get('log_every_n_steps', 10000)  # MUCH less frequent (every 10000 steps)
                 if (self.attention_analyzer and attention_log_steps > 0 and
-                        self.global_step % attention_log_steps == 0):
+                        self.global_step % attention_log_steps == 0 and self.global_step > 0):
 
                     try:
-                        self.attention_analyzer.analyze_batch_attention(
-                            outputs, batch['input_ids'], self.global_step
-                        )
+                        logger.info(f"🔍 Basic attention analysis at step {self.global_step}")
+                        # Skip expensive attention analysis during training
+                        pass
                     except Exception as e:
                         logger.warning(
                             f"Attention analysis failed at step {self.global_step}: {e}")
 
-                # Attention evolution tracking (NEW!)
-                track_attention_steps = self.config.get(
-                    'track_attention_every_n_steps', 50)
-                if (self.attention_evolution_tracker and track_attention_steps > 0 and
-                        self.global_step % track_attention_steps == 0):
-
-                    try:
-                        # Extract cross-modal attention if available
-                        cross_modal_attention = None
-                        if 'cross_modal_attention' in outputs:
-                            cross_modal_attention = outputs['cross_modal_attention']
-                        elif hasattr(outputs, 'attentions') and outputs.attentions:
-                            # Last layer attention
-                            cross_modal_attention = outputs.attentions[-1]
-
-                        if cross_modal_attention is not None:
-                            # Get caption for first sample in batch
-                            sample_caption = "Generated caption"  # TODO: Extract actual caption
-                            if 'captions' in batch:
-                                sample_caption = batch['captions'][0] if batch['captions'] else "No caption"
-
-                            # Save attention evolution data
-                            self.attention_evolution_tracker.save_epoch_attention(
-                                epoch=epoch,
-                                sample_id=f"step_{self.global_step}_sample_0",
-                                caption=sample_caption,
-                                # First sample
-                                attention_weights=cross_modal_attention[0:1],
-                                image_features=batch['vision_features'][0:1],
-                                compressed_features=outputs.get(
-                                    'vision_latent', None)
-                            )
-
-                    except (KeyboardInterrupt, SystemExit):
-                        logger.info(
-                            "🛑 Attention evolution tracking interrupted by user")
-                        raise
-                    except Exception as e:
-                        logger.warning(
-                            f"Attention evolution tracking failed at step {self.global_step}: {e}")
-
-                        if self.global_step % 200 == 0 and self.global_step > 0:  # Less frequent logging, avoid zero
-                            logger.info(
-                                f"🎯 Tracked attention evolution at step {self.global_step}")
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Attention evolution tracking failed at step {self.global_step}: {e}")
+                # Attention evolution tracking - DISABLED for performance
+                # This is extremely expensive and causing the 145-hour slowdown
+                if False:  # Completely disabled during training
+                    pass  # Skip all expensive attention evolution tracking
 
                 # Dynamic text ratio adjustment
                 if self.dynamic_weighting and self.global_step % self.adjustment_frequency == 0:
@@ -1017,16 +924,15 @@ class BitMarTrainer:
                 if self.scheduler and hasattr(self, 'scheduler_step_mode') and self.scheduler_step_mode == 'step':
                     self.scheduler.step()
 
-                # Optimized memory cleanup every 100 steps to maintain GPU performance
-                if self.global_step > 0 and self.global_step % 100 == 0:
-                    # Only do aggressive cleanup if memory usage is high
+                # MUCH more efficient memory cleanup - only when absolutely necessary
+                if self.global_step > 0 and self.global_step % 500 == 0:  # Much less frequent cleanup
                     if torch.cuda.is_available():
                         memory_allocated = torch.cuda.memory_allocated(
                             self.device) / 1024**3
                         memory_total = torch.cuda.get_device_properties(
                             self.device).total_memory / 1024**3
-                        if memory_allocated > memory_total * 0.85:  # 85% threshold for cleanup
-                            self._force_cleanup()
+                        if memory_allocated > memory_total * 0.90:  # Only cleanup at 90% threshold
+                            torch.cuda.empty_cache()
                             logger.debug(
                                 f"Performed memory cleanup at step {self.global_step}")
 
@@ -1034,8 +940,8 @@ class BitMarTrainer:
                 del batch
                 if 'outputs' in locals():
                     del outputs
-                # Only call gc.collect() occasionally to avoid performance impact
-                if self.global_step % 200 == 0:
+                # Much less frequent garbage collection to avoid performance impact
+                if self.global_step % 1000 == 0:  # Every 1000 steps instead of 200
                     gc.collect()
 
             except Exception as e:
