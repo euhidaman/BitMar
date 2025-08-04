@@ -41,12 +41,12 @@ data:
   text_encoder_name: "gpt2"
   max_seq_length: 128 # Increased for better performance
 
-  # DataLoader settings - Optimized for RTX A6000 (48GB VRAM)
-  batch_size: 16 # Optimized for RTX A6000
+  # DataLoader settings - MAXIMUM GPU UTILIZATION for RTX A6000 (48GB VRAM)
+  batch_size: 24 # INCREASED for maximum GPU utilization (was 16)
   num_workers: 0 # Disabled for h5py compatibility (h5py objects cannot be pickled)  
   pin_memory: true
-  persistent_workers: true
-  prefetch_factor: 4 # Increased for RTX A6000
+  persistent_workers: false # Disabled with num_workers=0
+  prefetch_factor: 8 # INCREASED for maximum GPU feed (was 4)
 
   # Full dataset training (no sample limits)
   # max_samples: null  # Train on entire dataset for best results
@@ -59,9 +59,9 @@ data:
     - "glue/sst2" # Public dataset, no auth required
 
 training:
-  # Training configuration - 10 EPOCHS with BabyLM compliance
+  # Training configuration - 10 EPOCHS with MAXIMUM GPU UTILIZATION
   max_epochs: 10
-  accumulate_grad_batches: 4 # Reduced for larger batch size
+  accumulate_grad_batches: 3 # Adjusted for larger batch size (24)
   gradient_clip_val: 1.0
   val_check_interval: 500 # More frequent validation
   scheduler: "cosine"
@@ -70,12 +70,12 @@ training:
   learning_rate: 0.0005 # Optimized for RTX A6000
   weight_decay: 0.01
 
-  # GPU optimization settings for RTX A6000
-  gradient_accumulation_steps: 4 # Matches accumulate_grad_batches
+  # MAXIMUM GPU UTILIZATION settings for RTX A6000
+  gradient_accumulation_steps: 3 # Adjusted for larger batches (effective = 24*3=72)
   save_every_n_epochs: 2 # Save checkpoints every 2 epochs
   use_mixed_precision: true # Enable for RTX A6000
   use_gradient_checkpointing: true # Memory optimization
-  compile_model: true # PyTorch 2.0 optimization
+  compile_model: false # Disabled for stability (was true)
 
 # Weights & Biases configuration - OPTIMIZED FOR SPEED
 # Enhanced wandb configuration with minimal logging for speed
