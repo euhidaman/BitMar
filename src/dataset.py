@@ -180,6 +180,14 @@ class MixedMultimodalTextDataset(Dataset):
         text_samples = len(self.text_cache)
         logger.info(f"📁 Text cache: {text_samples} samples")
 
+        # 🔍 DEBUG: Log bounds for troubleshooting
+        logger.info(f"🔍 BOUNDS CHECK:")
+        logger.info(f"   Vision features shape: {self.vision_features.shape}")
+        logger.info(f"   Vision captions count: {len(self.vision_captions):,}")  
+        logger.info(f"   Text cache size: {len(self.text_cache):,}")
+        logger.info(f"   Vision samples: {vision_samples:,}")
+        logger.info(f"   Text samples: {text_samples:,}")
+
         # 🎯 CORRECTED BABYLM COMPLIANCE: 50M image + 50M caption + 50M text tokens
         logger.info("🎯 Applying CORRECTED BabyLM limits:")
         logger.info("   → 50M image tokens (Dino-V2 embeddings)")
@@ -242,6 +250,16 @@ class MixedMultimodalTextDataset(Dataset):
                 for idx, (caption_idx, input_ids) in enumerate(zip(batch_indices, batch_encoded['input_ids'])):
                     caption_token_count = len(input_ids)
                     
+                    # BOUNDS CHECK: Ensure caption_idx is within vision features bounds
+                    if caption_idx >= self.vision_features.shape[0]:
+                        logger.warning(f"⚠️ Caption index {caption_idx} exceeds vision features bounds {self.vision_features.shape[0]}, skipping")
+                        continue
+                        
+                    # BOUNDS CHECK: Ensure caption_idx is within text cache bounds  
+                    if caption_idx >= len(self.text_cache):
+                        logger.warning(f"⚠️ Caption index {caption_idx} exceeds text cache bounds {len(self.text_cache)}, skipping")
+                        continue
+                    
                     # Check if we can fit this caption within our budget
                     if caption_tokens_used + caption_token_count <= self.max_caption_tokens:
                         multimodal_indices.append(('multimodal', caption_idx))
@@ -256,6 +274,10 @@ class MixedMultimodalTextDataset(Dataset):
                 logger.warning(f"Batch tokenization failed: {e}, falling back to individual processing")
                 # Fallback to individual tokenization for this batch only
                 for caption_idx in batch_indices:
+                    # BOUNDS CHECK: Ensure caption_idx is within bounds
+                    if caption_idx >= self.vision_features.shape[0] or caption_idx >= len(self.text_cache):
+                        continue
+                        
                     if caption_idx < len(self.vision_captions):
                         caption_data = self.vision_captions[caption_idx]
                         caption = caption_data.get('caption', '') if isinstance(caption_data, dict) else str(caption_data)
@@ -452,13 +474,25 @@ class MixedMultimodalTextDataset(Dataset):
         return len(self.mixed_indices)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Ultra-fast sample loading with aggressive caching"""
+        """Ultra-fast sample loading with aggressive caching and bounds checking"""
         sample_type, sample_idx = self.mixed_indices[idx]
 
         if sample_type == 'multimodal':
+            # BOUNDS CHECK: Ensure sample_idx is within vision features bounds
+            if sample_idx >= self.vision_features.shape[0]:
+                logger.error(f"❌ Vision features index out of bounds: {sample_idx} >= {self.vision_features.shape[0]}")
+                # Use last available vision feature as fallback
+                sample_idx = self.vision_features.shape[0] - 1
+                
             # Use GPU-optimized cached data (multi-worker compatible)
             vision_features = self.vision_features[sample_idx].clone()
 
+            # BOUNDS CHECK: Ensure sample_idx is within text cache bounds
+            if sample_idx >= len(self.text_cache):
+                logger.error(f"❌ Text cache index out of bounds: {sample_idx} >= {len(self.text_cache)}")
+                # Use modulo to wrap around to available data
+                sample_idx = sample_idx % len(self.text_cache)
+                
             text_data = self.text_cache[sample_idx]
             
             # Get caption from loaded captions
