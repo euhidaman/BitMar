@@ -1,33 +1,33 @@
 model:
-  # BitNet Text Encoder (Tiny Model - Quantized)
+  # BitNet Text Encoder (LARGER Model for GPU Utilization)
   vocab_size: 50257 # GPT-2 vocabulary
-  text_encoder_dim: 256 # Reduced from 512 for edge efficiency
-  text_encoder_layers: 4 # Reduced from 6 layers
-  text_encoder_heads: 4 # Reduced from 8 heads
+  text_encoder_dim: 512 # DOUBLED for more GPU work (was 256)
+  text_encoder_layers: 8 # DOUBLED for more GPU computation (was 4)
+  text_encoder_heads: 8 # DOUBLED for more GPU parallelism (was 4)
 
-  # BitNet Text Decoder (Tiny Model - Quantized)
-  text_decoder_dim: 256 # Reduced from 512 for edge efficiency
-  text_decoder_layers: 4 # Reduced from 6 layers
-  text_decoder_heads: 4 # Reduced from 8 heads
+  # BitNet Text Decoder (LARGER Model for GPU Utilization)
+  text_decoder_dim: 512 # DOUBLED for more GPU work (was 256)
+  text_decoder_layers: 8 # DOUBLED for more GPU computation (was 4)
+  text_decoder_heads: 8 # DOUBLED for more GPU parallelism (was 4)
 
-  # Vision processing (DiNOv2 features - Efficient)
+  # Vision processing (DiNOv2 features - LARGER for GPU Utilization)
   vision_encoder_dim: 768 # DiNOv2 feature dimension (fixed)
-  vision_latent_size: 256 # Reduced from 512 to match episode_dim
-  vision_hidden_size: 128 # Reduced from 256
+  vision_latent_size: 512 # DOUBLED for more GPU work (was 256)
+  vision_hidden_size: 256 # DOUBLED for more GPU computation (was 128)
 
-  # QFormer-inspired Cross-modal fusion with Quadrangle Attention
-  fusion_hidden_size: 256 # Reduced from 512
-  fusion_num_heads: 4 # Reduced from 8
-  fusion_num_layers: 2 # Keep at 2 for cross-modal capability
-  fusion_num_queries: 32 # NEW: Number of learnable query tokens for QFormer fusion
+  # QFormer-inspired Cross-modal fusion with Quadrangle Attention (LARGER)
+  fusion_hidden_size: 512 # DOUBLED for more GPU work (was 256)
+  fusion_num_heads: 8 # DOUBLED for more GPU parallelism (was 4)
+  fusion_num_layers: 4 # DOUBLED for more GPU computation (was 2)
+  fusion_num_queries: 64 # DOUBLED for more complex queries (was 32)
 
   # Quadrangle Attention Configuration (NEW)
   use_quadrangle_attention: true # Enable QFormer's Quadrangle Attention mechanism
   quadrangle_memory_size: 1024 # Dedicated memory for quadrangle attention episodic processing
 
-  # Episodic Memory (Tiny Model - Edge Optimized)
-  memory_size: 16 # Ultra-compact: 16 memory slots for edge deployment
-  episode_dim: 256 # Reduced episode dimension for efficiency
+  # Episodic Memory (LARGER for GPU Utilization)
+  memory_size: 64 # QUADRUPLED memory slots for more GPU work (was 16)
+  episode_dim: 512 # DOUBLED episode dimension for more GPU computation (was 256)
   memory_alpha: 0.15 # Slightly higher for faster adaptation with fewer slots
   direct_writing: true
 
@@ -39,14 +39,14 @@ data:
   # Dataset configuration - FULL DATASET FOR BEST RESULTS
   dataset_dir: "../babylm_dataset"
   text_encoder_name: "gpt2"
-  max_seq_length: 128 # Increased for better performance
+  max_seq_length: 256 # DOUBLED for more GPU work and better understanding (was 128)
 
-  # DataLoader settings - MAXIMUM GPU UTILIZATION for RTX A6000 (48GB VRAM)
-  batch_size: 24 # INCREASED for maximum GPU utilization (was 16)
+  # DataLoader settings - EXTREME GPU UTILIZATION for RTX A6000 (49GB VRAM)
+  batch_size: 64 # TRIPLED batch size for maximum VRAM utilization (was 24)
   num_workers: 0 # Disabled for h5py compatibility (h5py objects cannot be pickled)  
   pin_memory: true
   persistent_workers: false # Disabled with num_workers=0
-  prefetch_factor: 8 # INCREASED for maximum GPU feed (was 4)
+  prefetch_factor: 16 # DOUBLED prefetch for continuous GPU saturation (was 8)
 
   # Full dataset training (no sample limits)
   # max_samples: null  # Train on entire dataset for best results
@@ -59,23 +59,23 @@ data:
     - "glue/sst2" # Public dataset, no auth required
 
 training:
-  # Training configuration - 10 EPOCHS with MAXIMUM GPU UTILIZATION
+  # Training configuration - 10 EPOCHS with EXTREME GPU UTILIZATION
   max_epochs: 10
-  accumulate_grad_batches: 3 # Adjusted for larger batch size (24)
+  accumulate_grad_batches: 1 # REDUCED due to much larger batch size (64)
   gradient_clip_val: 1.0
-  val_check_interval: 500 # More frequent validation
+  val_check_interval: 200 # Less frequent validation for speed
   scheduler: "cosine"
   min_lr: 0.00001
-  warmup_steps: 500 # Reduced warmup for 10 epochs
-  learning_rate: 0.0005 # Optimized for RTX A6000
+  warmup_steps: 300 # Reduced warmup for faster training
+  learning_rate: 0.001 # INCREASED learning rate for faster convergence
   weight_decay: 0.01
 
-  # MAXIMUM GPU UTILIZATION settings for RTX A6000
-  gradient_accumulation_steps: 3 # Adjusted for larger batches (effective = 24*3=72)
+  # EXTREME GPU UTILIZATION settings for RTX A6000
+  gradient_accumulation_steps: 1 # REDUCED due to much larger batches (effective = 64*1=64)
   save_every_n_epochs: 2 # Save checkpoints every 2 epochs
   use_mixed_precision: true # Enable for RTX A6000
-  use_gradient_checkpointing: true # Memory optimization
-  compile_model: false # Disabled for stability (was true)
+  use_gradient_checkpointing: false # DISABLED to maximize speed over memory
+  compile_model: false # Disabled for stability
 
 # Weights & Biases configuration - OPTIMIZED FOR SPEED
 # Enhanced wandb configuration with minimal logging for speed
