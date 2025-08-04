@@ -1668,47 +1668,33 @@ class BitMarTrainer:
 
         for batch_idx, batch in enumerate(progress_bar):
             try:
-                # 🔥🔥🔥 CRITICAL: AGGRESSIVE GPU-ONLY ENFORCEMENT 🔥🔥🔥
-                # PREVENT ALL CPU OPERATIONS THAT CAUSE 4.57s/it SLOWDOWN
+                # 🔥 EFFICIENT GPU ENFORCEMENT: Ensure GPU training
+                # Data comes from single-threaded DataLoader on CPU, transfer to GPU efficiently
                 
-                # 1. Force CUDA context immediately
+                # 1. Set CUDA context for this training step
                 torch.cuda.set_device(self.device)
                 # DON'T set default tensor type - causes DataLoader generator issues
                 # torch.set_default_tensor_type('torch.cuda.FloatTensor')  # REMOVED
                 
-                # 2. CRITICAL: Force ALL batch tensors to GPU with verification
+                # 2. EFFICIENT GPU TRANSFER: Move CPU tensors to GPU for training
                 for key in ['input_ids', 'attention_mask', 'vision_features', 'labels']:
                     if key in batch and batch[key] is not None:
-                        original_device = batch[key].device
-                        if original_device.type != 'cuda':
-                            logger.error(f"🚨 CRITICAL: {key} on CPU ({original_device})! Training will be SLOW!")
-                            batch[key] = batch[key].cuda(self.device, non_blocking=True)
-                            
-                        # Double verification 
                         if batch[key].device.type != 'cuda':
-                            raise RuntimeError(f"FAILED to move {key} to GPU! Device: {batch[key].device}")
+                            batch[key] = batch[key].cuda(self.device, non_blocking=True)
                 
-                # 3. CRITICAL: Ensure model is on GPU before EVERY forward pass
-                model_device = next(self.model.parameters()).device
-                if model_device.type != 'cuda':
-                    logger.error(f"🚨 CRITICAL: Model on {model_device}! Moving to GPU...")
-                    self.model = self.model.cuda()
-                    torch.cuda.synchronize()
-                    
-                    # Verify it moved
-                    if next(self.model.parameters()).device.type != 'cuda':
-                        raise RuntimeError("Model FAILED to move to GPU!")
-                
-                # 4. Monitor GPU usage to catch CPU fallbacks
-                if self.global_step % 10 == 0:  # Check frequently
-                    gpu_memory = torch.cuda.memory_allocated(self.device) / 1024**3
-                    if gpu_memory < 1.5:  # Less than 1.5GB indicates CPU usage
-                        logger.error(f"🚨 LOW GPU MEMORY ({gpu_memory:.1f}GB) = CPU USAGE! This causes 4.57s/it!")
-                        
-                        # Emergency GPU enforcement
-                        torch.cuda.empty_cache()
+                # 3. Verify model is on GPU (periodic check)
+                if self.global_step % 500 == 0:  # Check every 500 steps
+                    model_device = next(self.model.parameters()).device
+                    if model_device.type != 'cuda':
+                        logger.error(f"🚨 Model moved to {model_device}! Moving back to GPU...")
                         self.model = self.model.cuda()
                         torch.cuda.synchronize()
+                
+                # 4. Monitor GPU usage (less frequently for performance)
+                if self.global_step % 100 == 0:  # Check every 100 steps
+                    gpu_memory = torch.cuda.memory_allocated(self.device) / 1024**3
+                    if self.global_step % 1000 == 0:  # Log every 1000 steps
+                        logger.info(f"✅ GPU Memory: {gpu_memory:.1f}GB - training on GPU")
                 
                 # OPTIMIZED OOM Protection - check memory less frequently for speed
                 if self.global_step % 100 == 0 and torch.cuda.is_available():  # Check every 100 steps
