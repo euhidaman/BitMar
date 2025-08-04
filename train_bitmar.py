@@ -641,76 +641,86 @@ class BitMarTrainer:
         logger.info(
             f"Using max sequence length: {enhanced_data_config['max_seq_length']}")
 
-        # Apply MEMORY-OPTIMIZED settings for RTX A6000
+        # Apply RTX A6000 OPTIMIZED settings - LARGE BATCHES FOR GPU SPEED
         if quick_mode.get('enabled', False):
             logger.info(
-                "🚀 Applying MEMORY-OPTIMIZED quick training mode for RTX A6000...")
-            # Smaller batch size for memory efficiency
+                "🚀 Applying RTX A6000 optimized quick training mode...")
+            # LARGE batch size for RTX A6000 (48GB VRAM)
             enhanced_data_config['batch_size'] = max(
-                enhanced_data_config.get('batch_size', 4), 6)  # Small batches for RTX A6000
-            enhanced_data_config['max_seq_length'] = min(enhanced_data_config.get(
-                'max_seq_length', 512), 96)  # Shorter sequences for memory
-            # Reduced workers for memory efficiency
-            enhanced_data_config['num_workers'] = 4
-            # Moderate prefetching to save memory
-            enhanced_data_config['prefetch_factor'] = 2
+                enhanced_data_config.get('batch_size', 16), 16)  # Force minimum 16 for A6000
+            enhanced_data_config['max_seq_length'] = enhanced_data_config.get(
+                'max_seq_length', 128)  # Keep full sequences for better performance
+            # Maximum workers for A6000
+            enhanced_data_config['num_workers'] = 8
+            # High prefetching for A6000
+            enhanced_data_config['prefetch_factor'] = 4
             logger.info(
-                f"MEMORY-OPTIMIZED Quick mode: batch_size={enhanced_data_config['batch_size']}, max_seq_length={enhanced_data_config['max_seq_length']}")
+                f"RTX A6000 OPTIMIZED: batch_size={enhanced_data_config['batch_size']}, max_seq_length={enhanced_data_config['max_seq_length']}")
             logger.info(
-                f"MEMORY-OPTIMIZED Workers: {enhanced_data_config['num_workers']}, prefetch_factor={enhanced_data_config['prefetch_factor']}")
+                f"RTX A6000 Workers: {enhanced_data_config['num_workers']}, prefetch_factor={enhanced_data_config['prefetch_factor']}")
             logger.info(
-                "📊 Quick mode: Preserving mixed training (text + multimodal) for better learning")
+                "📊 A6000 mode: Using LARGE batches for maximum GPU utilization")
 
-        # Apply ULTRA-AGGRESSIVE GPU-optimized data loading for 2-3 hour epochs
+        # Apply AGGRESSIVE GPU-optimized data loading for RTX A6000
         enhanced_data_config.update({
-            # ULTRA-AGGRESSIVE GPU optimization settings for fast epochs
-            'num_workers': 4,  # Reduced workers to prevent CPU bottleneck
+            # RTX A6000 OPTIMIZED settings for maximum GPU utilization
+            'num_workers': 8,  # Maximum workers for A6000
             'pin_memory': True,  # Critical for GPU transfer speed
             'persistent_workers': True,  # Keep workers alive for efficiency
-            'prefetch_factor': 2,  # Reduced prefetching to save memory
+            'prefetch_factor': 4,  # High prefetching for A6000
             'multiprocessing_context': None,  # Use default (spawn on Windows)
             'drop_last': True,  # Consistent batch sizes for GPU efficiency
             'non_blocking': True,  # Non-blocking GPU transfers for speed
             'shuffle': True,  # Ensure data shuffling for better GPU utilization
-            'timeout': 30,  # Faster timeout for data loading
-            # 🎯 MEMORY-OPTIMIZED: Small batches with higher gradient accumulation
-            'batch_size': 2,  # Very small batches for memory efficiency
-            'max_seq_length': 64,  # Shorter sequences for faster processing
-            # Disable CPU memory optimizations that hurt GPU performance
-            'memory_efficient_loading': False,
-            'cpu_data_caching': False,
+            'timeout': 60,  # Reasonable timeout for large batches
+            # 🔥 RTX A6000: LARGE batches for maximum GPU utilization
+            'batch_size': 16,  # LARGE batches for RTX A6000 (48GB)
+            'max_seq_length': 128,  # Full sequences for optimal performance
             # Enable GPU-optimized data preprocessing
-            'gpu_preprocessing': False,  # Disable to reduce GPU load
+            'gpu_preprocessing': False,  # CPU preprocessing, GPU training
             'async_data_transfer': True,
-            # 🚀 SPEED OPTIMIZATIONS for fast iterations
+            # 🚀 GPU SPEED OPTIMIZATIONS
             'fast_tokenization': True,  # Use fast tokenizers
-            'precomputed_features': False,  # Disable to reduce complexity
-            'aggressive_caching': False,  # Disable to save memory
             'reduced_validation_frequency': True,  # Validate less frequently for speed
             'skip_expensive_metrics': True,  # Skip computationally expensive metrics
-            # � ULTRA-AGGRESSIVE SPEED OPTIMIZATIONS
-            'compile_dataloader': True,  # Compile data loading for speed
-            'mixed_precision_data': True,  # Use mixed precision in data loading
-            'zero_copy_tensors': True,  # Enable zero-copy tensor operations
-            'optimized_collate': True,  # Use optimized batch collation
-            'lazy_loading': True,  # Lazy load data when possible
-            'tensor_cores': True,  # Optimize for tensor cores
-            # �📊 FULL DATASET TRAINING - NO SAMPLE LIMITS for best results
-            # 'max_samples_per_epoch': None,  # REMOVED: Use full dataset for best results
-            # 'max_samples_per_epoch': 50000,  # REMOVED: Now using proper BabyLM token limits (100M text + 50M image)
+            # 📊 FULL DATASET TRAINING - BabyLM compliance
             'use_babylm_token_limits': True,  # Enable proper BabyLM compliance in dataset
             'smart_sampling': False,  # Disable complex sampling
-            'gradient_accumulation_steps': 16,  # Higher accumulation for smaller batches (effective batch = 2*16=32)
+            'gradient_accumulation_steps': 4,  # Lower accumulation for larger batches (effective batch = 16*4=64)
         })
-        logger.info("🚀 Applied GPU-OPTIMIZED training for RTX A6000 with BabyLM compliance:")
-        logger.info(f"   - Workers: {enhanced_data_config['num_workers']} (reduced for efficiency)")
-        logger.info(f"   - Prefetch factor: {enhanced_data_config['prefetch_factor']} (reduced for memory)")
-        logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (small for fast iterations)")
-        logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (optimized for speed)")
+        logger.info("🚀 Applied RTX A6000 OPTIMIZED training with LARGE batches:")
+        logger.info(f"   - Workers: {enhanced_data_config['num_workers']} (maximum for A6000)")
+        logger.info(f"   - Prefetch factor: {enhanced_data_config['prefetch_factor']} (high for A6000)")
+        logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (LARGE for maximum GPU utilization)")
+        logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (full sequences for performance)")
         logger.info(f"   - Gradient accumulation: {enhanced_data_config['gradient_accumulation_steps']} (effective batch = {enhanced_data_config['batch_size'] * enhanced_data_config['gradient_accumulation_steps']})")
         logger.info("   - BabyLM token limits: 100M text tokens, 50M image tokens (strict compliance)")
         logger.info("   - Image-caption associations preserved during token limiting")
-        logger.info("🎯 Configuration optimized for fast GPU utilization with BabyLM compliance")
+        logger.info("🔥 RTX A6000 configuration optimized for MAXIMUM GPU utilization")
+        
+        # 🔥 CRITICAL: FORCE CUDA USAGE - NO CPU FALLBACKS
+        if torch.cuda.is_available():
+            logger.info("🔥 ENFORCING CUDA-ONLY TRAINING - NO CPU FALLBACKS ALLOWED")
+            
+            # Set CUDA as default device for all operations
+            torch.cuda.set_device(self.device)
+            
+            # Verify CUDA device
+            current_device = torch.cuda.current_device()
+            device_name = torch.cuda.get_device_name(current_device)
+            logger.info(f"✅ CUDA Device Confirmed: {device_name} (Device {current_device})")
+            
+            # Force all tensor operations to use CUDA
+            os.environ['CUDA_VISIBLE_DEVICES'] = str(self.device.index) if self.device.index is not None else '0'
+            logger.info(f"🎯 CUDA_VISIBLE_DEVICES set to: {os.environ['CUDA_VISIBLE_DEVICES']}")
+            
+            # Disable any CPU-based optimizations
+            torch.set_num_threads(1)  # Minimize CPU thread usage
+            logger.info("🚫 CPU thread usage minimized to force GPU-only training")
+            
+        else:
+            logger.error("❌ CRITICAL: CUDA not available - cannot proceed with GPU training!")
+            raise RuntimeError("CUDA required for training but not available!")
 
         # Dynamic multi-task weighting
         multi_task_config = self.config.get(
@@ -1597,6 +1607,26 @@ class BitMarTrainer:
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """Train for one epoch with Episodic Memory Consolidation optimized for 2-3 hour natural completion"""
         import time
+        import os
+        
+        # 🔥🔥🔥 CRITICAL: FORCE GPU-ONLY ENVIRONMENT 🔥🔥🔥
+        # DISABLE ALL CPU THREADING TO PREVENT 4.57s/it SLOWDOWN
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(torch.cuda.current_device())
+        os.environ['OMP_NUM_THREADS'] = '1'  # Disable OpenMP CPU threading
+        os.environ['MKL_NUM_THREADS'] = '1'  # Disable MKL CPU threading  
+        os.environ['NUMEXPR_NUM_THREADS'] = '1'  # Disable NumExpr threading
+        os.environ['OPENBLAS_NUM_THREADS'] = '1'  # Disable OpenBLAS threading
+        
+        # Force PyTorch to use only GPU
+        torch.set_num_threads(1)  # Minimize CPU threads
+        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        
+        # AGGRESSIVE: Ensure we're using the correct GPU
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA not available - cannot train on GPU!")
+            
+        torch.cuda.set_device(self.device)
+        torch.cuda.empty_cache()
         
         # CRITICAL: Verify GPU setup at start of each epoch
         logger.info(f"🎯 EPOCH {epoch} DEVICE CHECK:")
@@ -1606,6 +1636,7 @@ class BitMarTrainer:
         if torch.cuda.is_available():
             logger.info(f"   - CUDA device count: {torch.cuda.device_count()}")
             logger.info(f"   - Current CUDA device: {torch.cuda.current_device()}")
+            logger.info(f"   - GPU Memory: {torch.cuda.memory_allocated(self.device)/1024**3:.1f}GB allocated")
         
         self.model.train()
         train_loader = self.data_module.train_dataloader()
@@ -1635,6 +1666,47 @@ class BitMarTrainer:
 
         for batch_idx, batch in enumerate(progress_bar):
             try:
+                # 🔥🔥🔥 CRITICAL: AGGRESSIVE GPU-ONLY ENFORCEMENT 🔥🔥🔥
+                # PREVENT ALL CPU OPERATIONS THAT CAUSE 4.57s/it SLOWDOWN
+                
+                # 1. Force CUDA context immediately
+                torch.cuda.set_device(self.device)
+                torch.set_default_tensor_type('torch.cuda.FloatTensor')
+                
+                # 2. CRITICAL: Force ALL batch tensors to GPU with verification
+                for key in ['input_ids', 'attention_mask', 'vision_features', 'labels']:
+                    if key in batch and batch[key] is not None:
+                        original_device = batch[key].device
+                        if original_device.type != 'cuda':
+                            logger.error(f"🚨 CRITICAL: {key} on CPU ({original_device})! Training will be SLOW!")
+                            batch[key] = batch[key].cuda(self.device, non_blocking=True)
+                            
+                        # Double verification 
+                        if batch[key].device.type != 'cuda':
+                            raise RuntimeError(f"FAILED to move {key} to GPU! Device: {batch[key].device}")
+                
+                # 3. CRITICAL: Ensure model is on GPU before EVERY forward pass
+                model_device = next(self.model.parameters()).device
+                if model_device.type != 'cuda':
+                    logger.error(f"🚨 CRITICAL: Model on {model_device}! Moving to GPU...")
+                    self.model = self.model.cuda()
+                    torch.cuda.synchronize()
+                    
+                    # Verify it moved
+                    if next(self.model.parameters()).device.type != 'cuda':
+                        raise RuntimeError("Model FAILED to move to GPU!")
+                
+                # 4. Monitor GPU usage to catch CPU fallbacks
+                if self.global_step % 10 == 0:  # Check frequently
+                    gpu_memory = torch.cuda.memory_allocated(self.device) / 1024**3
+                    if gpu_memory < 1.5:  # Less than 1.5GB indicates CPU usage
+                        logger.error(f"🚨 LOW GPU MEMORY ({gpu_memory:.1f}GB) = CPU USAGE! This causes 4.57s/it!")
+                        
+                        # Emergency GPU enforcement
+                        torch.cuda.empty_cache()
+                        self.model = self.model.cuda()
+                        torch.cuda.synchronize()
+                
                 # OPTIMIZED OOM Protection - check memory less frequently for speed
                 if self.global_step % 100 == 0 and torch.cuda.is_available():  # Check every 100 steps
                     memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
@@ -3306,6 +3378,34 @@ def load_config(config_path: str) -> Dict:
 def main():
     """Main training function with command line interface"""
     print("🎬 Starting main() function...")
+    
+    # 🔥🔥🔥 CRITICAL: GLOBAL GPU-ONLY ENFORCEMENT 🔥🔥🔥
+    # FIX 4.57s/it SLOWDOWN BY PREVENTING ALL CPU OPERATIONS
+    import os
+    
+    print("🔥 ENFORCING GPU-ONLY ENVIRONMENT...")
+    
+    # Set environment variables BEFORE PyTorch loads
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'  # Force only GPU 0
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ['NUMEXPR_NUM_THREADS'] = '1'
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Allow async CUDA operations
+    
+    # Force PyTorch to prioritize GPU
+    import torch
+    if not torch.cuda.is_available():
+        raise RuntimeError("🚨 CUDA not available! Cannot run GPU-only training!")
+    
+    torch.set_num_threads(1)  # Minimize CPU threads
+    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+    torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
+    
+    print(f"✅ GPU-ONLY mode enabled: {torch.cuda.device_count()} GPU(s) available")
+    print(f"✅ Using GPU: {torch.cuda.get_device_name(0)}")
+    print(f"✅ CUDA Version: {torch.version.cuda}")
 
     parser = argparse.ArgumentParser(
         description="BitMar Training with Enhanced GPU Optimization")
