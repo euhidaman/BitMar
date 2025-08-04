@@ -1619,7 +1619,8 @@ class BitMarTrainer:
         
         # Force PyTorch to use only GPU
         torch.set_num_threads(1)  # Minimize CPU threads
-        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        # DON'T set default tensor type - causes DataLoader generator issues
+        # torch.set_default_tensor_type('torch.cuda.FloatTensor')  # REMOVED
         
         # AGGRESSIVE: Ensure we're using the correct GPU
         if not torch.cuda.is_available():
@@ -1671,7 +1672,8 @@ class BitMarTrainer:
                 
                 # 1. Force CUDA context immediately
                 torch.cuda.set_device(self.device)
-                torch.set_default_tensor_type('torch.cuda.FloatTensor')
+                # DON'T set default tensor type - causes DataLoader generator issues
+                # torch.set_default_tensor_type('torch.cuda.FloatTensor')  # REMOVED
                 
                 # 2. CRITICAL: Force ALL batch tensors to GPU with verification
                 for key in ['input_ids', 'attention_mask', 'vision_features', 'labels']:
@@ -3399,9 +3401,13 @@ def main():
         raise RuntimeError("🚨 CUDA not available! Cannot run GPU-only training!")
     
     torch.set_num_threads(1)  # Minimize CPU threads
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    # DON'T set default tensor type - causes DataLoader generator issues
+    # torch.set_default_tensor_type('torch.cuda.FloatTensor')  # REMOVED - causes generator error
     torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
     torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
+    
+    # Set CUDA device and create GPU generator for DataLoader
+    torch.cuda.set_device(0)
     
     print(f"✅ GPU-ONLY mode enabled: {torch.cuda.device_count()} GPU(s) available")
     print(f"✅ Using GPU: {torch.cuda.get_device_name(0)}")

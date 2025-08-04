@@ -717,7 +717,13 @@ class BabyLMDataModule:
         logger.info(f"Validation datasets: {list(self.val_datasets.keys())}")
 
     def train_dataloader(self) -> DataLoader:
-        """Create training dataloader"""
+        """Create training dataloader with CUDA generator for GPU-only training"""
+        # Create CUDA generator to fix "Expected a 'cuda' device type for generator but found 'cpu'" error
+        generator = None
+        if torch.cuda.is_available():
+            generator = torch.Generator(device='cuda')
+            generator.manual_seed(42)  # For reproducibility
+        
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -725,12 +731,20 @@ class BabyLMDataModule:
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers if self.num_workers > 0 else False,
-            drop_last=True
+            drop_last=True,
+            generator=generator  # Use CUDA generator
         )
 
     def val_dataloader(self) -> List[DataLoader]:
         """Create validation dataloaders"""
         val_loaders = []
+        
+        # Create CUDA generator for validation too
+        generator = None
+        if torch.cuda.is_available():
+            generator = torch.Generator(device='cuda')
+            generator.manual_seed(42)  # For reproducibility
+        
         for name, dataset in self.val_datasets.items():
             loader = DataLoader(
                 dataset,
@@ -738,7 +752,8 @@ class BabyLMDataModule:
                 shuffle=False,
                 num_workers=0,  # Use 0 for validation to avoid memory issues
                 pin_memory=self.pin_memory,
-                drop_last=False
+                drop_last=False,
+                generator=generator  # Use CUDA generator
             )
             val_loaders.append(loader)
         
