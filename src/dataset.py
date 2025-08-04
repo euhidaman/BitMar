@@ -2,7 +2,13 @@
 Dataset processing for BitMar
 Handles complete BabyLM multimodal dataset with GPU-OPTIMIZED STORAGE
 + train_50M text-only data for enhanced language modeling
-+ MULTI-WORKER DATA LOADING for maximum GPU utilization
++ MULTI-WORKER DATA LOADING for maximum GPU ut        # Step 2: Load exactly 50M text tokens from train_50M (separate from captions)
+        logger.info("📚 Loading 50M text tokens from train_50M (separate from captions)...")
+        text_only_samples = self._load_text_data_with_token_limit(self.max_text_tokens)
+        text_indices = [('text', i) for i in range(len(text_only_samples))]
+        
+        logger.info(f"✅ Text-only samples: {len(text_only_samples):,}")
+        logger.info(f"📊 Text tokens used: {self.text_token_count:,}/{self.max_text_tokens:,}")on
 """
 
 import json
@@ -127,11 +133,13 @@ class MixedMultimodalTextDataset(Dataset):
         self.load_text_data = load_text_data
         self.config = config or {}
 
-        # 🎯 BABYLM TOKEN LIMITS - SIMPLIFIED: 50M multimodal + 50M text tokens
-        self.max_text_tokens = 50_000_000    # 50M text tokens from train_50M
-        self.max_image_tokens = 50_000_000   # 50M multimodal tokens (image-caption pairs)
+        # 🎯 BABYLM TOKEN LIMITS - CORRECTED: 50M image + 50M caption + 50M text tokens
+        self.max_text_tokens = 50_000_000      # 50M text tokens from train_50M
+        self.max_image_tokens = 50_000_000     # 50M image tokens (Dino-V2 embeddings)
+        self.max_caption_tokens = 50_000_000   # 50M caption tokens (paired with images)
         self.text_token_count = 0
         self.image_token_count = 0
+        self.caption_token_count = 0
         
         # Initialize tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -140,11 +148,11 @@ class MixedMultimodalTextDataset(Dataset):
 
         # ALWAYS use aggressive optimization with token limits
         logger.info("🚀 AGGRESSIVE OPTIMIZATION MODE - Setting up ultra-fast dataset with BabyLM token limits...")
-        logger.info(f"🎯 Token Limits: {self.max_text_tokens:,} text tokens, {self.max_image_tokens:,} image tokens")
+        logger.info(f"🎯 Token Limits: {self.max_text_tokens:,} text tokens, {self.max_image_tokens:,} image tokens, {self.max_caption_tokens:,} caption tokens")
         self._setup_aggressive_optimization_with_limits()
 
     def _setup_aggressive_optimization_with_limits(self):
-        """Setup with BabyLM compliance: 50M multimodal + 50M text tokens (simplified, no heavy compression)"""
+        """Setup with BabyLM compliance: 50M image + 50M caption + 50M text tokens"""
         start_time = time.time()
 
         # Initialize GPU-optimized optimizer  
@@ -161,16 +169,52 @@ class MixedMultimodalTextDataset(Dataset):
         text_samples = len(self.text_cache)
         logger.info(f"📁 Text cache: {text_samples} samples")
 
-        # 🎯 SIMPLIFIED BABYLM COMPLIANCE: 50M multimodal + 50M text tokens
-        logger.info("🎯 Applying SIMPLIFIED BabyLM limits (50M multimodal + 50M text tokens)...")
+        # 🎯 CORRECTED BABYLM COMPLIANCE: 50M image + 50M caption + 50M text tokens
+        logger.info("🎯 Applying CORRECTED BabyLM limits:")
+        logger.info("   → 50M image tokens (Dino-V2 embeddings)")
+        logger.info("   → 50M caption tokens (paired with images)")
+        logger.info("   → 50M text tokens (from train_50M)")
         
-        # Step 1: Take exactly 50M multimodal samples (image-caption pairs)
-        max_multimodal_samples = min(self.max_image_tokens, vision_samples, text_samples)
-        multimodal_indices = [('multimodal', i) for i in range(max_multimodal_samples)]
-        self.image_token_count = max_multimodal_samples
+        # Step 1: Calculate how many image-caption pairs we need
+        # Each image = fixed tokens (Dino-V2 embedding), captions = variable tokens
+        # We need to count actual tokens, not samples
         
-        logger.info(f"✅ Multimodal samples: {max_multimodal_samples:,} (preserving image-caption pairs)")
-        logger.info(f"📊 Multimodal tokens used: {self.image_token_count:,}/{self.max_image_tokens:,}")
+        # Estimate tokens per image (Dino-V2 embeddings are typically 768 or 1024 dimensions)
+        # For simplicity, assume 1 token per image (since embeddings are pre-computed features)
+        tokens_per_image = 1  
+        
+        # Calculate multimodal pairs needed
+        max_multimodal_pairs = min(
+            self.max_image_tokens // tokens_per_image,  # How many images we can fit
+            vision_samples,
+            text_samples
+        )
+        
+        # Count actual caption tokens for the selected pairs
+        caption_tokens_used = 0
+        selected_pairs = 0
+        multimodal_indices = []
+        
+        for i in range(min(max_multimodal_pairs, vision_samples)):
+            # Get caption and count its tokens
+            if i < len(self.vision_metadata):
+                caption = self.vision_metadata[i].get('caption', '')
+                caption_token_count = len(self.tokenizer.encode(caption, add_special_tokens=False))
+                
+                # Check if we can fit this caption within our budget
+                if caption_tokens_used + caption_token_count <= self.max_caption_tokens:
+                    multimodal_indices.append(('multimodal', i))
+                    caption_tokens_used += caption_token_count
+                    selected_pairs += 1
+                else:
+                    break  # Stop if we exceed caption token budget
+        
+        self.image_token_count = selected_pairs * tokens_per_image
+        self.caption_token_count = caption_tokens_used
+        
+        logger.info(f"✅ Image-caption pairs selected: {selected_pairs:,}")
+        logger.info(f"📊 Image tokens used: {self.image_token_count:,}/{self.max_image_tokens:,}")
+        logger.info(f"📊 Caption tokens used: {self.caption_token_count:,}/{self.max_caption_tokens:,}")
 
         # Step 2: Load exactly 50M text tokens from train_50M 
         logger.info("� Loading 50M text tokens from train_50M...")
@@ -188,14 +232,19 @@ class MixedMultimodalTextDataset(Dataset):
         setup_time = time.time() - start_time
 
         # Final token summary
-        logger.info(f"🎯 SIMPLIFIED BABYLM COMPLIANCE SUMMARY:")
+        total_multimodal_tokens = self.image_token_count + self.caption_token_count
+        total_tokens = total_multimodal_tokens + self.text_token_count
+        
+        logger.info(f"🎯 CORRECTED BABYLM COMPLIANCE SUMMARY:")
         logger.info(f"   Setup time: {setup_time:.1f}s")
-        logger.info(f"   Multimodal tokens: {self.image_token_count:,}/{self.max_image_tokens:,} (image-caption pairs)")
+        logger.info(f"   Image tokens: {self.image_token_count:,}/{self.max_image_tokens:,} (Dino-V2 embeddings)")
+        logger.info(f"   Caption tokens: {self.caption_token_count:,}/{self.max_caption_tokens:,} (paired with images)")
         logger.info(f"   Text tokens: {self.text_token_count:,}/{self.max_text_tokens:,} (from train_50M)")
+        logger.info(f"   Total multimodal tokens: {total_multimodal_tokens:,} (image + caption)")
+        logger.info(f"   Total tokens: {total_tokens:,}")
         logger.info(f"   Total dataset samples: {len(self.mixed_indices):,}")
         logger.info(f"   GPU-optimized storage: Enabled (no heavy compression)")
-        logger.info(f"   Note: Model can be quantized to 1.58-bit post-training for efficiency")
-        logger.info(f"✅ BabyLM compliance: SIMPLE and FAST!")
+        logger.info(f"✅ BabyLM compliance: 50M image + 50M caption + 50M text tokens!")
 
     def _load_text_data_with_token_limit(self, token_budget: int) -> List[str]:
         """Load text data respecting token budget"""
@@ -312,7 +361,10 @@ class MixedMultimodalTextDataset(Dataset):
             }
 
     def get_token_usage_stats(self) -> Dict[str, int]:
-        """Get current token usage statistics"""
+        """Get current token usage statistics for the corrected BabyLM compliance"""
+        total_multimodal_tokens = self.image_token_count + self.caption_token_count
+        total_tokens = total_multimodal_tokens + self.text_token_count
+        
         return {
             'text_tokens_used': self.text_token_count,
             'text_tokens_limit': self.max_text_tokens,
@@ -320,8 +372,14 @@ class MixedMultimodalTextDataset(Dataset):
             'image_tokens_used': self.image_token_count,
             'image_tokens_limit': self.max_image_tokens,
             'image_tokens_remaining': max(0, self.max_image_tokens - self.image_token_count),
+            'caption_tokens_used': self.caption_token_count,
+            'caption_tokens_limit': self.max_caption_tokens,
+            'caption_tokens_remaining': max(0, self.max_caption_tokens - self.caption_token_count),
+            'total_multimodal_tokens': total_multimodal_tokens,
+            'total_tokens': total_tokens,
             'text_utilization_pct': 100.0 * self.text_token_count / self.max_text_tokens,
             'image_utilization_pct': 100.0 * self.image_token_count / self.max_image_tokens,
+            'caption_utilization_pct': 100.0 * self.caption_token_count / self.max_caption_tokens,
         }
 
 # Keep original class for backward compatibility

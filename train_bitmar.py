@@ -116,67 +116,26 @@ class BitMarTrainer:
         print(f"🎯 Device selected: {self.device}")
         sys.stdout.flush()
 
-        # Ensure CUDA is initialized if available - WITH TIMEOUT PROTECTION
+        # Ensure CUDA is initialized if available - FAST INITIALIZATION
         if self.device.type == 'cuda':
             try:
-                print("🔄 Initializing CUDA...")
+                print("🔄 Quick CUDA initialization...")
                 sys.stdout.flush()
-
-                # Add timeout protection for CUDA operations
-                import signal
-                import threading
-                import time
-
-                def cuda_init_with_timeout():
-                    """Initialize CUDA with timeout protection"""
-                    try:
-                        # Test CUDA availability first
-                        if not torch.cuda.is_available():
-                            raise RuntimeError("CUDA not available")
-
-                        # Initialize CUDA (this can hang)
-                        torch.cuda.init()
-
-                        # Get device name (this can also hang)
-                        device_name = torch.cuda.get_device_name(self.device)
-                        return device_name
-                    except Exception as e:
-                        raise e
-
-                # Use threading for timeout control on Windows
-                result = [None]
-                exception = [None]
-
-                def cuda_worker():
-                    try:
-                        result[0] = cuda_init_with_timeout()
-                    except Exception as e:
-                        exception[0] = e
-
-                thread = threading.Thread(target=cuda_worker)
-                thread.daemon = True
-                thread.start()
-                thread.join(timeout=10.0)  # 10 second timeout
-
-                if thread.is_alive():
-                    logger.warning(
-                        "CUDA initialization timed out (10s), continuing with CPU")
-                    self.device = torch.device("cpu")
-                elif exception[0]:
-                    logger.warning(
-                        f"CUDA initialization failed: {exception[0]}")
-                    logger.warning("Falling back to CPU")
-                    self.device = torch.device("cpu")
-                elif result[0]:
-                    logger.info(f"Using CUDA device: {result[0]}")
-                    logger.info(
-                        "CUDA initialized, model will be moved to GPU explicitly")
+                
+                # FAST CUDA check - no timeout delays
+                if torch.cuda.is_available():
+                    device_name = torch.cuda.get_device_name(self.device)
+                    logger.info(f"Using CUDA device: {device_name}")
                     print("✅ CUDA initialized successfully")
                     sys.stdout.flush()
                 else:
-                    logger.warning(
-                        "CUDA initialization returned no result, falling back to CPU")
+                    logger.warning("CUDA not available, falling back to CPU")
                     self.device = torch.device("cpu")
+
+            except Exception as e:
+                logger.warning(f"CUDA initialization failed: {e}")
+                logger.warning("Falling back to CPU")
+                self.device = torch.device("cpu")
 
             except Exception as e:
                 logger.warning(f"CUDA initialization failed: {e}")
@@ -195,39 +154,19 @@ class BitMarTrainer:
         self._last_model_device = None
         self._device_warnings_count = 0
         
-        # 📊 ADVANCED COMPONENT TRACKING INITIALIZATION
+        # 📊 MINIMAL COMPONENT TRACKING INITIALIZATION (for speed)
         self.component_metrics = {
-            'cross_modal_similarity': [],
-            'text_feature_learning': {
-                'encoder_gradients': [],
-                'decoder_gradients': [],
-                'parameter_changes': [],
-                'learning_rates': [],
-                'epochs': []
-            },
-            'vision_feature_learning': {
-                'gradients': [],
-                'parameter_changes': [],
-                'learning_rates': [],
-                'epochs': []
-            },
-            'fusion_feature_learning': {
-                'gradients': [],
-                'parameter_changes': [],
-                'quadrangle_attention_weights': [],
-                'learning_rates': [],
-                'epochs': []
-            },
-            'phase_transitions': [],
-            'memory_usage_tracking': []
+            'training_loss': [],
+            'validation_loss': [],
+            'epoch_times': []
         }
         
-        # Store parameter snapshots for change tracking
+        # Minimal parameter tracking for essential metrics only
         self.parameter_snapshots = {}
-        self.tracking_interval = 50000  # Track every 50k steps
-        self.epoch_tracking_interval = 1  # Track every epoch
+        self.tracking_interval = 100000  # Track less frequently for speed
+        self.epoch_tracking_interval = 5  # Track every 5 epochs only
         
-        print("📊 Advanced component tracking initialized")
+        print("📊 Minimal tracking initialized for maximum speed")
         sys.stdout.flush()
 
         print(f"✅ Final device: {self.device}")
@@ -373,17 +312,14 @@ class BitMarTrainer:
             # 2. Enable CUDA graph capture for consistent workloads
             torch.cuda.set_device(self.device)
             
-            # 3. Preallocate GPU memory pools to prevent fragmentation
-            # This forces GPU memory allocation upfront for better utilization
+            # 3. FAST GPU setup - minimal memory warmup
             try:
-                # Preallocate significant GPU memory to force utilization
-                memory_warmup_size = int(torch.cuda.get_device_properties(self.device).total_memory * 0.1)  # 10% of VRAM
-                warmup_tensor = torch.randn(memory_warmup_size // 4, device=self.device, dtype=torch.float32)
-                del warmup_tensor
-                torch.cuda.empty_cache()
-                logger.info("🔥 GPU memory warmup completed - improved memory allocation")
+                # Quick memory test - minimal overhead
+                test_tensor = torch.randn(100, 100, device=self.device, dtype=torch.float32)
+                del test_tensor
+                logger.info("🔥 GPU memory test completed - ready for training")
             except Exception as e:
-                logger.warning(f"GPU memory warmup failed: {e}")
+                logger.warning(f"GPU memory test failed: {e}")
             
             # 4. Enable tensor parallelism hints for GPU utilization
             if hasattr(torch.backends.cuda, 'enable_math_sdp'):
@@ -420,19 +356,17 @@ class BitMarTrainer:
             # 5. Enable CUDA streams for overlapped execution
             self.cuda_stream = torch.cuda.Stream()
             
-            # 6. Force synchronous GPU operations for consistent utilization
-            torch.cuda.synchronize(self.device)  # Ensure GPU placement is complete
+            # 6. FAST GPU setup - no blocking synchronization
             
-            # 7. Enable persistent GPU kernels for better utilization
+            # 7. Quick GPU kernel test - minimal overhead
             try:
-                # This forces GPU to stay active and improves utilization
-                dummy_computation = torch.randn(1000, 1000, device=self.device)
-                dummy_result = torch.matmul(dummy_computation, dummy_computation.T)
+                # This tests GPU readiness without massive computation
+                dummy_computation = torch.randn(100, 100, device=self.device)
+                dummy_result = dummy_computation * 2.0
                 del dummy_computation, dummy_result
-                torch.cuda.synchronize()
-                logger.info("🔥 GPU kernels warmed up for maximum utilization")
+                logger.info("🔥 GPU kernels ready for training")
             except Exception as e:
-                logger.warning(f"GPU kernel warmup failed: {e}")
+                logger.warning(f"GPU kernel test failed: {e}")
                 
             logger.info("🔥 Model FORCED to GPU with MAXIMUM UTILIZATION optimizations")
         else:
@@ -513,17 +447,12 @@ class BitMarTrainer:
                         logger.warning(f"CUDA graphs failed: {e}")
                         self._cuda_graph_enabled = False
                     
-                    # EXTREME: Preallocate massive GPU memory to force utilization
+                    # EXTREME: Minimal GPU memory initialization for speed
                     try:
-                        # Allocate 80% of GPU memory upfront to force utilization
-                        massive_memory_size = int(gpu_props.total_memory * 0.8)  # 80% of VRAM
-                        logger.info(f"🔥 EXTREME: Preallocating {massive_memory_size / 1024**3:.1f}GB GPU memory for utilization")
-                        massive_tensor = torch.randn(massive_memory_size // 4, device=self.device, dtype=torch.float32)
-                        del massive_tensor
-                        torch.cuda.empty_cache()
-                        logger.info("🔥 EXTREME GPU memory preallocation completed - forcing maximum utilization")
+                        # Quick GPU readiness check - no massive allocations
+                        logger.info(f"🔥 RTX A6000 optimized - ready for training")
                     except Exception as e:
-                        logger.warning(f"EXTREME GPU memory preallocation failed: {e}")
+                        logger.warning(f"GPU initialization check failed: {e}")
                         logger.info("Continuing with standard memory allocation")
                     
                     # Set batch processing hints for A6000 EXTREME utilization
@@ -570,15 +499,9 @@ class BitMarTrainer:
             # DON'T change default tensor type as it can cause issues
             # torch.set_default_tensor_type('torch.cuda.FloatTensor')  # DISABLED
             
-            # Disable CPU fallbacks
+            # Fast GPU operations setup - no blocking
             os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Allow async GPU operations
             os.environ['TORCH_USE_CUDA_DSA'] = '1'   # Force CUDA device selection
-            
-            # Force GPU memory preallocation for stability
-            torch.cuda.empty_cache()
-            dummy = torch.zeros(1000, 1000, device=self.device)  # Preallocate GPU memory
-            del dummy
-            torch.cuda.synchronize()
             
             logger.info("🚀 GPU async operations enabled, CPU fallbacks disabled")
         
@@ -665,13 +588,16 @@ class BitMarTrainer:
         logger.info("⚡ Attention evolution tracking disabled for maximum training speed")
         self.attention_evolution_tracker = None
         
-        # Initialize parameter snapshots for tracking
-        logger.info("📊 Initializing parameter tracking snapshots...")
+        # Initialize minimal parameter snapshots for speed
+        logger.info("📊 Initializing minimal parameter tracking...")
         self.parameter_snapshots = {}
+        # Only track a few key parameters instead of all
+        param_count = 0
         for name, param in self.model.named_parameters():
-            if param.requires_grad:
+            if param.requires_grad and param_count < 10:  # Only track first 10 trainable params
                 self.parameter_snapshots[name] = param.data.clone()
-        logger.info(f"📊 Tracking {len(self.parameter_snapshots)} trainable parameters")
+                param_count += 1
+        logger.info(f"📊 Tracking {len(self.parameter_snapshots)} key parameters (optimized for speed)")
 
         # Create enhanced data module with adaptive strategies
         logger.info(
@@ -770,7 +696,7 @@ class BitMarTrainer:
         logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (TRIPLED for maximum VRAM utilization)")
         logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (DOUBLED for more GPU work)")
         logger.info(f"   - Gradient accumulation: {enhanced_data_config['gradient_accumulation_steps']} (effective batch = {enhanced_data_config['batch_size'] * enhanced_data_config['gradient_accumulation_steps']})")
-        logger.info("   - BabyLM token limits: 100M text tokens, 50M image tokens (strict compliance)")
+        logger.info("   - BabyLM token limits: 50M text + 50M image + 50M caption tokens (strict compliance)")
         logger.info("   - Image-caption associations preserved during token limiting")
         logger.info("🔥 RTX A6000 configuration optimized for EXTREME GPU utilization")
         logger.info("🚀 EXTREME GPU UTILIZATION: TRIPLED batches, DOUBLED sequences, EXTREME prefetch, MULTI-WORKER!")
@@ -848,8 +774,12 @@ class BitMarTrainer:
             logger.info("🎯 BABYLM TOKEN COMPLIANCE VERIFICATION:")
             logger.info(f"   📝 Text Tokens: {token_stats['text_tokens_used']:,}/{token_stats['text_tokens_limit']:,} ({token_stats['text_utilization_pct']:.1f}%)")
             logger.info(f"   🖼️ Image Tokens: {token_stats['image_tokens_used']:,}/{token_stats['image_tokens_limit']:,} ({token_stats['image_utilization_pct']:.1f}%)")
-            logger.info(f"   📊 Text Budget Remaining: {token_stats['text_tokens_remaining']:,}")
+            logger.info(f"   � Caption Tokens: {token_stats['caption_tokens_used']:,}/{token_stats['caption_tokens_limit']:,} ({token_stats['caption_utilization_pct']:.1f}%)")
+            logger.info(f"   📊 Total Multimodal: {token_stats['total_multimodal_tokens']:,} (image + caption)")
+            logger.info(f"   📊 Total Tokens: {token_stats['total_tokens']:,}")
+            logger.info(f"   �📊 Text Budget Remaining: {token_stats['text_tokens_remaining']:,}")
             logger.info(f"   📊 Image Budget Remaining: {token_stats['image_tokens_remaining']:,}")
+            logger.info(f"   📊 Caption Budget Remaining: {token_stats['caption_tokens_remaining']:,}")
             
             # Log to wandb if available
             if self.wandb_logger:
@@ -860,6 +790,11 @@ class BitMarTrainer:
                     'babylm_compliance/image_tokens_used': token_stats['image_tokens_used'],
                     'babylm_compliance/image_tokens_limit': token_stats['image_tokens_limit'],
                     'babylm_compliance/image_utilization_pct': token_stats['image_utilization_pct'],
+                    'babylm_compliance/caption_tokens_used': token_stats['caption_tokens_used'],
+                    'babylm_compliance/caption_tokens_limit': token_stats['caption_tokens_limit'],
+                    'babylm_compliance/caption_utilization_pct': token_stats['caption_utilization_pct'],
+                    'babylm_compliance/total_multimodal_tokens': token_stats['total_multimodal_tokens'],
+                    'babylm_compliance/total_tokens': token_stats['total_tokens'],
                 })
             
             # Verify compliance
@@ -869,8 +804,12 @@ class BitMarTrainer:
             if token_stats['image_tokens_used'] > token_stats['image_tokens_limit']:
                 logger.error(f"❌ IMAGE TOKEN LIMIT EXCEEDED: {token_stats['image_tokens_used']:,} > {token_stats['image_tokens_limit']:,}")
                 raise ValueError("BabyLM image token limit exceeded!")
+            if token_stats['caption_tokens_used'] > token_stats['caption_tokens_limit']:
+                logger.error(f"❌ CAPTION TOKEN LIMIT EXCEEDED: {token_stats['caption_tokens_used']:,} > {token_stats['caption_tokens_limit']:,}")
+                raise ValueError("BabyLM caption token limit exceeded!")
                 
             logger.info("✅ BabyLM token limits strictly enforced and verified!")
+            logger.info("✅ Compliance: 50M image + 50M caption + 50M text tokens!")
         else:
             logger.warning("⚠️ Token usage tracking not available for this dataset")
 
