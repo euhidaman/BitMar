@@ -717,12 +717,11 @@ class BabyLMDataModule:
         logger.info(f"Validation datasets: {list(self.val_datasets.keys())}")
 
     def train_dataloader(self) -> DataLoader:
-        """Create training dataloader with CUDA generator for GPU-only training"""
-        # Create CUDA generator to fix "Expected a 'cuda' device type for generator but found 'cpu'" error
-        generator = None
-        if torch.cuda.is_available():
-            generator = torch.Generator(device='cuda')
-            generator.manual_seed(42)  # For reproducibility
+        """Create training dataloader with CPU generator (required by PyTorch)"""
+        # PyTorch DataLoader requires CPU generator even for GPU training
+        # This fixes: "Expected a 'cpu' device type for generator but found 'cuda'"
+        generator = torch.Generator()  # Always CPU generator
+        generator.manual_seed(42)  # For reproducibility
         
         return DataLoader(
             self.train_dataset,
@@ -732,18 +731,16 @@ class BabyLMDataModule:
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers if self.num_workers > 0 else False,
             drop_last=True,
-            generator=generator  # Use CUDA generator
+            generator=generator  # CPU generator (required by PyTorch)
         )
 
     def val_dataloader(self) -> List[DataLoader]:
         """Create validation dataloaders"""
         val_loaders = []
         
-        # Create CUDA generator for validation too
-        generator = None
-        if torch.cuda.is_available():
-            generator = torch.Generator(device='cuda')
-            generator.manual_seed(42)  # For reproducibility
+        # PyTorch DataLoader requires CPU generator even for GPU training
+        generator = torch.Generator()  # Always CPU generator
+        generator.manual_seed(42)  # For reproducibility
         
         for name, dataset in self.val_datasets.items():
             loader = DataLoader(
@@ -753,7 +750,7 @@ class BabyLMDataModule:
                 num_workers=0,  # Use 0 for validation to avoid memory issues
                 pin_memory=self.pin_memory,
                 drop_last=False,
-                generator=generator  # Use CUDA generator
+                generator=generator  # CPU generator (required by PyTorch)
             )
             val_loaders.append(loader)
         
@@ -769,7 +766,17 @@ class BabyLMDataModule:
             max_seq_length=self.max_seq_length,
             max_samples=50
         )
-        return DataLoader(dummy_dataset, batch_size=self.batch_size, shuffle=False)
+        
+        # PyTorch DataLoader requires CPU generator
+        generator = torch.Generator()
+        generator.manual_seed(42)
+        
+        return DataLoader(
+            dummy_dataset, 
+            batch_size=self.batch_size, 
+            shuffle=False,
+            generator=generator  # CPU generator (required by PyTorch)
+        )
 
     def get_sample_batch(self, split: str = "train", num_samples: int = 4) -> Dict[str, torch.Tensor]:
         """Get a sample batch for testing"""
