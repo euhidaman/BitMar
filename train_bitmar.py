@@ -398,7 +398,7 @@ class BitMarTrainer:
 
         # 🚀 ENHANCED GPU OPTIMIZATIONS FOR MAXIMUM PERFORMANCE
         try:
-            # Enhanced PyTorch optimizations for GPU acceleration
+            # Enhanced PyTorch optimizations for RTX A6000 (48GB VRAM)
             if torch.cuda.is_available():
                 # Explicitly set CUDA device for all operations
                 torch.cuda.set_device(self.device)
@@ -412,12 +412,30 @@ class BitMarTrainer:
                 # Enable optimized attention
                 torch.backends.cuda.enable_flash_sdp(True)
                 
-                # Set CUDA memory management for RTX A6000 efficiency
-                torch.cuda.set_per_process_memory_fraction(
-                    0.85, device=self.device)  # Use 85% of GPU memory for stability
+                # RTX A6000 specific memory management (48GB VRAM)
+                gpu_props = torch.cuda.get_device_properties(self.device)
+                total_memory_gb = gpu_props.total_memory / 1024**3
+                
+                if total_memory_gb > 40:  # RTX A6000 or similar
+                    torch.cuda.set_per_process_memory_fraction(0.90, device=self.device)  # Use 90% for A6000
+                    logger.info(f"🎯 RTX A6000 detected ({total_memory_gb:.1f}GB) - using 90% memory fraction")
+                    
+                    # A6000-specific optimizations
+                    torch.cuda.empty_cache()  # Clear cache before setting up
+                    
+                    # Enable aggressive memory recycling for A6000
+                    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:1024,garbage_collection_threshold:0.7,expandable_segments:True'
+                    
+                    # Set batch processing hints for A6000
+                    self._a6000_optimized = True
+                    logger.info("🔥 RTX A6000 specific optimizations enabled")
+                else:
+                    torch.cuda.set_per_process_memory_fraction(0.85, device=self.device)  # Conservative for smaller GPUs
+                    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512,garbage_collection_threshold:0.8'
+                    self._a6000_optimized = False
 
                 logger.info(
-                    "🔥 ENABLED AGGRESSIVE CUDA optimizations: cuDNN benchmark, TF32, FlashAttention, memory optimization")
+                    "🔥 ENABLED AGGRESSIVE CUDA optimizations: cuDNN benchmark, TF32, FlashAttention, A6000 memory optimization")
                 logger.info(f"🎯 CUDA device explicitly set to: {self.device}")
                 print("⚡ GPU optimizations enabled")
                 sys.stdout.flush()
@@ -1602,8 +1620,16 @@ class BitMarTrainer:
                     self.global_step += 1
                     continue
 
-                # 🧠 EPISODIC MEMORY CONSOLIDATION: Forward pass based on phase
+                # 🧠 EPISODIC MEMORY CONSOLIDATION: Forward pass based on phase with OOM protection
                 try:
+                    # RTX A6000 memory monitoring for OOM prevention
+                    if hasattr(self, '_a6000_optimized') and self._a6000_optimized:
+                        if self.global_step % 100 == 0:  # Check every 100 steps
+                            allocated_gb = torch.cuda.memory_allocated(self.device) / 1024**3
+                            if allocated_gb > 40:  # Warn if using >40GB on A6000
+                                logger.warning(f"🚨 High GPU memory usage: {allocated_gb:.1f}GB/48GB")
+                                torch.cuda.empty_cache()  # Preventive cleanup
+                    
                     # CRITICAL: Ensure all inputs are on GPU with optimized transfers
                     for key in ['input_ids', 'attention_mask', 'vision_features', 'labels']:
                         if key in batch and batch[key] is not None:
@@ -1762,7 +1788,32 @@ class BitMarTrainer:
                         self.optimizer.zero_grad(set_to_none=True)
 
                 except RuntimeError as e:
-                    if "device" in str(e).lower():
+                    if "out of memory" in str(e).lower():
+                        # GPU OOM recovery for RTX A6000
+                        logger.error(f"🚨 GPU OOM detected: {e}")
+                        
+                        # Emergency memory cleanup
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                        
+                        # Log memory usage
+                        if torch.cuda.is_available():
+                            allocated = torch.cuda.memory_allocated(self.device) / 1024**3
+                            reserved = torch.cuda.memory_reserved(self.device) / 1024**3
+                            logger.error(f"Memory: {allocated:.1f}GB allocated, {reserved:.1f}GB reserved")
+                        
+                        # Reduce batch size temporarily if on A6000
+                        if hasattr(self, '_a6000_optimized') and self._a6000_optimized:
+                            logger.info("🔧 Implementing A6000 OOM recovery strategy")
+                            # Skip this batch and continue
+                            self.optimizer.zero_grad(set_to_none=True)
+                            self.global_step += 1
+                            continue
+                        else:
+                            # For smaller GPUs, raise the error
+                            raise e
+                            
+                    elif "device" in str(e).lower():
                         logger.warning(f"Device error in backward pass: {e}")
                         # Recreate optimizer and retry
                         self._create_device_pinned_optimizer()

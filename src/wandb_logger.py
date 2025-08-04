@@ -41,6 +41,14 @@ class BitMarWandbLogger:
         plt.style.use('seaborn-v0_8')
         sns.set_palette("husl")
         
+    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None):
+        """Log metrics to wandb with proper step tracking"""
+        if step is not None:
+            self.step = step
+        
+        # Log metrics with current step
+        wandb.log(metrics, step=self.step)
+        
     def log_consolidated_metrics(self, outputs: Dict[str, torch.Tensor], epoch: int, step: int, 
                                 lr: float, model: nn.Module, memory_module=None, 
                                 log_quantization: bool = False):
@@ -147,13 +155,30 @@ class BitMarWandbLogger:
             metrics['Features/Episode_Std'] = episode.std().item()
             metrics['Features/Episode_Norm'] = torch.norm(episode, dim=-1).mean().item()
             
-        # Cross-modal similarity
+        # Cross-modal similarity with enhanced tracking
         if 'text_features' in outputs and 'vision_latent' in outputs:
             if outputs['text_features'] is not None and outputs['vision_latent'] is not None:
                 similarity = self._compute_cross_modal_similarity(
                     outputs['text_features'], outputs['vision_latent']
                 )
-                metrics['Features/CrossModal_Similarity'] = similarity
+                metrics['CrossModal/Similarity'] = similarity
+                metrics['CrossModal/Text_Vision_Alignment'] = similarity
+                
+        # Additional cross-modal metrics
+        if 'cross_modal_similarity' in outputs:
+            similarity = outputs['cross_modal_similarity']
+            if isinstance(similarity, (int, float)):
+                metrics['CrossModal/Similarity'] = similarity
+            elif hasattr(similarity, 'item'):
+                metrics['CrossModal/Similarity'] = similarity.item()
+                
+        # Modality-specific loss tracking for learning curves
+        if 'text_loss' in outputs and outputs['text_loss'] is not None:
+            metrics['Loss/Text_Modality'] = outputs['text_loss'].item()
+        if 'vision_loss' in outputs and outputs['vision_loss'] is not None:
+            metrics['Loss/Vision_Modality'] = outputs['vision_loss'].item()
+        if 'multimodal_loss' in outputs and outputs['multimodal_loss'] is not None:
+            metrics['Loss/Multimodal_Fusion'] = outputs['multimodal_loss'].item()
         
         # Gradient metrics
         total_norm = 0
@@ -464,13 +489,39 @@ class BitMarWandbLogger:
         
     def log_epoch_summary(self, epoch: int, train_loss: float, val_loss: float, 
                          memory_efficiency: float, step: int, **kwargs):
-        """Log epoch summary metrics"""
+        """Log epoch summary metrics with enhanced cross-modal tracking"""
         metrics = {
             'Epoch_Summary/Epoch': epoch,
             'Epoch_Summary/Train_Loss': train_loss,
             'Epoch_Summary/Val_Loss': val_loss,
             'Epoch_Summary/Memory_Efficiency': memory_efficiency,
         }
+        
+        # Enhanced cross-modal similarity tracking
+        if 'cross_modal_similarity' in kwargs:
+            similarity = kwargs['cross_modal_similarity']
+            metrics['Epoch_Summary/CrossModal_Similarity'] = similarity
+            metrics['CrossModal/Epoch_Similarity'] = similarity
+            
+            # Track improvement over epochs
+            if hasattr(self, '_last_similarity'):
+                similarity_delta = similarity - self._last_similarity
+                metrics['CrossModal/Similarity_Delta'] = similarity_delta
+            self._last_similarity = similarity
+        
+        # Episodic consolidation phase tracking
+        if 'consolidation_phase' in kwargs:
+            phase = kwargs['consolidation_phase']
+            # Convert phase to numeric for graphing
+            phase_mapping = {
+                'episodic_capture': 1,
+                'memory_consolidation': 2,
+                'quadrangle_optimization': 3,
+                'semantic_integration': 4
+            }
+            if phase in phase_mapping:
+                metrics['Training/Consolidation_Phase'] = phase_mapping[phase]
+                metrics[f'Phase/{phase}_completion'] = 1.0
         
         # Add any additional epoch metrics
         for key, value in kwargs.items():
