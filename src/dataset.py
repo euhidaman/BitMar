@@ -159,10 +159,21 @@ class MixedMultimodalTextDataset(Dataset):
         self.optimizer = GPUOptimizedDataOptimizer(str(self.dataset_dir))
 
         # Get GPU-optimized vision features (multi-worker compatible, no heavy compression)
-        self.vision_features, self.vision_metadata = self.optimizer.get_optimized_vision_features()
+        self.vision_features, self.vision_storage_metadata = self.optimizer.get_optimized_vision_features()
         vision_samples = self.vision_features.shape[0]
         logger.info(f"📁 GPU-optimized vision features shape: {self.vision_features.shape}")
         logger.info(f"🔥 Multi-worker data loading: ENABLED (no compression bottleneck)")
+        
+        # Load captions from JSON files
+        logger.info("📝 Loading captions from JSON files...")
+        with open(self.dataset_dir / "cc_3M_captions.json", 'r') as f:
+            cc_captions = json.load(f)
+        with open(self.dataset_dir / "local_narr_captions.json", 'r') as f:
+            ln_captions = json.load(f)
+        
+        # Combine captions (should match vision features order)
+        self.vision_captions = cc_captions + ln_captions
+        logger.info(f"📊 Total captions loaded: {len(self.vision_captions):,}")
 
         # Get tokenized cache with token counting
         self.text_cache = self.optimizer.get_tokenized_cache(self.max_seq_length)
@@ -197,8 +208,8 @@ class MixedMultimodalTextDataset(Dataset):
         
         for i in range(min(max_multimodal_pairs, vision_samples)):
             # Get caption and count its tokens
-            if i < len(self.vision_metadata):
-                caption = self.vision_metadata[i].get('caption', '')
+            if i < len(self.vision_captions):
+                caption = self.vision_captions[i].get('caption', '') if isinstance(self.vision_captions[i], dict) else str(self.vision_captions[i])
                 caption_token_count = len(self.tokenizer.encode(caption, add_special_tokens=False))
                 
                 # Check if we can fit this caption within our budget
@@ -324,13 +335,22 @@ class MixedMultimodalTextDataset(Dataset):
             vision_features = self.vision_features[sample_idx].clone()
 
             text_data = self.text_cache[sample_idx]
+            
+            # Get caption from loaded captions
+            caption = ""
+            if sample_idx < len(self.vision_captions):
+                caption_data = self.vision_captions[sample_idx]
+                if isinstance(caption_data, dict):
+                    caption = caption_data.get('caption', f"sample_{sample_idx}")
+                else:
+                    caption = str(caption_data)
 
             return {
                 'input_ids': torch.tensor(text_data['input_ids'], dtype=torch.long),
                 'attention_mask': torch.tensor(text_data['attention_mask'], dtype=torch.long),
                 'labels': torch.tensor(text_data['input_ids'], dtype=torch.long),
                 'vision_features': vision_features,
-                'caption': f"sample_{sample_idx}",
+                'caption': caption,
                 'sample_type': 'multimodal',
                 'index': sample_idx
             }
