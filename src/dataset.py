@@ -84,21 +84,39 @@ class GPUOptimizedDataOptimizer:
 
         tokenized_data = []
         batch_size = 1000
+        vocab_size = tokenizer.vocab_size  # Get vocab size for validation
 
         for i in range(0, len(all_captions), batch_size):
             batch = all_captions[i:i+batch_size]
+            
+            # Extract captions from dict format if needed
+            batch_texts = []
+            for caption in batch:
+                if isinstance(caption, dict):
+                    batch_texts.append(caption.get('caption', ''))
+                else:
+                    batch_texts.append(str(caption))
+            
             encoded = tokenizer(
-                batch,
+                batch_texts,
                 max_length=max_seq_length,
                 padding='max_length',
                 truncation=True,
                 return_tensors="pt"
             )
 
-            for j in range(len(batch)):
+            for j in range(len(batch_texts)):
+                input_ids = encoded['input_ids'][j].tolist()
+                attention_mask = encoded['attention_mask'][j].tolist()
+                
+                # CRITICAL: Validate token IDs before storing
+                if any(token_id >= vocab_size or token_id < 0 for token_id in input_ids):
+                    logger.warning(f"⚠️ Invalid token IDs found in batch {i}, item {j}. Clamping to valid range.")
+                    input_ids = [max(0, min(token_id, vocab_size - 1)) for token_id in input_ids]
+                
                 tokenized_data.append({
-                    'input_ids': encoded['input_ids'][j].tolist(),
-                    'attention_mask': encoded['attention_mask'][j].tolist()
+                    'input_ids': input_ids,
+                    'attention_mask': attention_mask
                 })
 
             if i % 50000 == 0:
@@ -425,6 +443,8 @@ class MixedMultimodalTextDataset(Dataset):
             return 0
             
         tokens_added = 0
+        vocab_size = self.tokenizer.vocab_size  # Get vocab size for validation
+        
         try:
             # FAST: Batch tokenize all lines at once
             batch_encoded = self.tokenizer(
@@ -437,6 +457,11 @@ class MixedMultimodalTextDataset(Dataset):
             
             # Add lines that fit within budget
             for line, input_ids in zip(batch_lines, batch_encoded['input_ids']):
+                # CRITICAL: Validate token IDs
+                if any(token_id >= vocab_size or token_id < 0 for token_id in input_ids):
+                    logger.warning(f"⚠️ Invalid token IDs in text line, skipping: max={max(input_ids)}, min={min(input_ids)}, vocab_size={vocab_size}")
+                    continue
+                    
                 line_tokens = len(input_ids)
                 if tokens_added + line_tokens <= remaining_budget:
                     text_samples.append(line)
@@ -451,12 +476,21 @@ class MixedMultimodalTextDataset(Dataset):
             for line in batch_lines:
                 if tokens_added >= remaining_budget:
                     break
-                line_tokens = len(self.tokenizer.encode(line, add_special_tokens=True))
-                if tokens_added + line_tokens <= remaining_budget:
-                    text_samples.append(line)
-                    tokens_added += line_tokens
-                else:
-                    break
+                try:
+                    input_ids = self.tokenizer.encode(line, add_special_tokens=True)
+                    # CRITICAL: Validate token IDs
+                    if any(token_id >= vocab_size or token_id < 0 for token_id in input_ids):
+                        logger.warning(f"⚠️ Invalid token IDs in fallback text line, skipping")
+                        continue
+                    line_tokens = len(input_ids)
+                    if tokens_added + line_tokens <= remaining_budget:
+                        text_samples.append(line)
+                        tokens_added += line_tokens
+                    else:
+                        break
+                except Exception as e2:
+                    logger.warning(f"Fallback tokenization failed for line: {e2}")
+                    continue
                     
         return tokens_added
 
@@ -495,6 +529,17 @@ class MixedMultimodalTextDataset(Dataset):
                 
             text_data = self.text_cache[sample_idx]
             
+            # CRITICAL: Validate token IDs to prevent CUDA embedding errors
+            input_ids = torch.tensor(text_data['input_ids'], dtype=torch.long)
+            attention_mask = torch.tensor(text_data['attention_mask'], dtype=torch.long)
+            
+            # Check for out-of-bounds token IDs (tokenizer vocab size limit)
+            vocab_size = self.tokenizer.vocab_size
+            if torch.any(input_ids >= vocab_size) or torch.any(input_ids < 0):
+                logger.warning(f"⚠️ Invalid token IDs detected: max={input_ids.max()}, min={input_ids.min()}, vocab_size={vocab_size}")
+                # Clamp token IDs to valid range
+                input_ids = torch.clamp(input_ids, 0, vocab_size - 1)
+            
             # Get caption from loaded captions
             caption = ""
             if sample_idx < len(self.vision_captions):
@@ -505,9 +550,9 @@ class MixedMultimodalTextDataset(Dataset):
                     caption = str(caption_data)
 
             return {
-                'input_ids': torch.tensor(text_data['input_ids'], dtype=torch.long),
-                'attention_mask': torch.tensor(text_data['attention_mask'], dtype=torch.long),
-                'labels': torch.tensor(text_data['input_ids'], dtype=torch.long),
+                'input_ids': input_ids,
+                'attention_mask': attention_mask,
+                'labels': input_ids.clone(),
                 'vision_features': vision_features,
                 'caption': caption,
                 'sample_type': 'multimodal',
@@ -528,6 +573,13 @@ class MixedMultimodalTextDataset(Dataset):
 
             input_ids = encoded['input_ids'].squeeze(0)
             attention_mask = encoded['attention_mask'].squeeze(0)
+            
+            # CRITICAL: Validate token IDs to prevent CUDA embedding errors
+            vocab_size = self.tokenizer.vocab_size
+            if torch.any(input_ids >= vocab_size) or torch.any(input_ids < 0):
+                logger.warning(f"⚠️ Invalid token IDs in text sample: max={input_ids.max()}, min={input_ids.min()}, vocab_size={vocab_size}")
+                # Clamp token IDs to valid range
+                input_ids = torch.clamp(input_ids, 0, vocab_size - 1)
 
             return {
                 'input_ids': input_ids,
