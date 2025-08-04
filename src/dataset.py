@@ -723,6 +723,28 @@ class BabyLMDataModule:
         generator = torch.Generator()  # Always CPU generator
         generator.manual_seed(42)  # For reproducibility
         
+        # 🔥 CRITICAL: Custom collate function to move data to GPU immediately
+        def gpu_collate_fn(batch):
+            """Custom collate function that moves tensors to GPU for maximum speed"""
+            # Get device - prefer CUDA if available
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            
+            # Standard collate first
+            collated = torch.utils.data.dataloader.default_collate(batch)
+            
+            # Move all tensors to GPU
+            def move_to_gpu(item):
+                if isinstance(item, torch.Tensor):
+                    return item.to(device, non_blocking=True)
+                elif isinstance(item, dict):
+                    return {k: move_to_gpu(v) for k, v in item.items()}
+                elif isinstance(item, (list, tuple)):
+                    return type(item)(move_to_gpu(x) for x in item)
+                else:
+                    return item
+            
+            return move_to_gpu(collated)
+        
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -731,7 +753,8 @@ class BabyLMDataModule:
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers if self.num_workers > 0 else False,
             drop_last=True,
-            generator=generator  # CPU generator (required by PyTorch)
+            generator=generator,  # CPU generator (required by PyTorch)
+            collate_fn=gpu_collate_fn  # 🔥 CRITICAL: Move data to GPU immediately
         )
 
     def val_dataloader(self) -> List[DataLoader]:
@@ -742,6 +765,28 @@ class BabyLMDataModule:
         generator = torch.Generator()  # Always CPU generator
         generator.manual_seed(42)  # For reproducibility
         
+        # 🔥 CRITICAL: Custom collate function to move data to GPU immediately
+        def gpu_collate_fn(batch):
+            """Custom collate function that moves tensors to GPU for maximum speed"""
+            # Get device - prefer CUDA if available
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            
+            # Standard collate first
+            collated = torch.utils.data.dataloader.default_collate(batch)
+            
+            # Move all tensors to GPU
+            def move_to_gpu(item):
+                if isinstance(item, torch.Tensor):
+                    return item.to(device, non_blocking=True)
+                elif isinstance(item, dict):
+                    return {k: move_to_gpu(v) for k, v in item.items()}
+                elif isinstance(item, (list, tuple)):
+                    return type(item)(move_to_gpu(x) for x in item)
+                else:
+                    return item
+            
+            return move_to_gpu(collated)
+        
         for name, dataset in self.val_datasets.items():
             loader = DataLoader(
                 dataset,
@@ -750,7 +795,8 @@ class BabyLMDataModule:
                 num_workers=0,  # Use 0 for validation to avoid memory issues
                 pin_memory=self.pin_memory,
                 drop_last=False,
-                generator=generator  # CPU generator (required by PyTorch)
+                generator=generator,  # CPU generator (required by PyTorch)
+                collate_fn=gpu_collate_fn  # 🔥 CRITICAL: Move data to GPU immediately
             )
             val_loaders.append(loader)
         
@@ -771,11 +817,34 @@ class BabyLMDataModule:
         generator = torch.Generator()
         generator.manual_seed(42)
         
+        # 🔥 CRITICAL: Custom collate function to move data to GPU immediately
+        def gpu_collate_fn(batch):
+            """Custom collate function that moves tensors to GPU for maximum speed"""
+            # Get device - prefer CUDA if available
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            
+            # Standard collate first
+            collated = torch.utils.data.dataloader.default_collate(batch)
+            
+            # Move all tensors to GPU
+            def move_to_gpu(item):
+                if isinstance(item, torch.Tensor):
+                    return item.to(device, non_blocking=True)
+                elif isinstance(item, dict):
+                    return {k: move_to_gpu(v) for k, v in item.items()}
+                elif isinstance(item, (list, tuple)):
+                    return type(item)(move_to_gpu(x) for x in item)
+                else:
+                    return item
+            
+            return move_to_gpu(collated)
+        
         return DataLoader(
             dummy_dataset, 
             batch_size=self.batch_size, 
             shuffle=False,
-            generator=generator  # CPU generator (required by PyTorch)
+            generator=generator,  # CPU generator (required by PyTorch)
+            collate_fn=gpu_collate_fn  # 🔥 CRITICAL: Move data to GPU immediately
         )
 
     def get_sample_batch(self, split: str = "train", num_samples: int = 4) -> Dict[str, torch.Tensor]:
