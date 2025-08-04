@@ -3574,6 +3574,13 @@ def main():
         default=100,
         help="Log metrics every N steps"
     )
+    parser.add_argument(
+        "--gpu_optimization_level",
+        type=str,
+        default="standard",
+        choices=["standard", "high", "maximum"],
+        help="GPU optimization level (standard, high, maximum)"
+    )
 
     args = parser.parse_args()
     print(f"✅ Arguments parsed: {args}")
