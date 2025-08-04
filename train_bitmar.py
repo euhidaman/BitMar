@@ -1668,55 +1668,12 @@ class BitMarTrainer:
 
         for batch_idx, batch in enumerate(progress_bar):
             try:
-                # 🔥 EFFICIENT GPU ENFORCEMENT: Ensure GPU training
-                # Data comes from single-threaded DataLoader on CPU, transfer to GPU efficiently
-                
-                # 1. Set CUDA context for this training step
-                torch.cuda.set_device(self.device)
-                # DON'T set default tensor type - causes DataLoader generator issues
-                # torch.set_default_tensor_type('torch.cuda.FloatTensor')  # REMOVED
-                
-                # 2. EFFICIENT GPU TRANSFER: Move CPU tensors to GPU for training
-                for key in ['input_ids', 'attention_mask', 'vision_features', 'labels']:
-                    if key in batch and batch[key] is not None:
-                        if batch[key].device.type != 'cuda':
-                            batch[key] = batch[key].cuda(self.device, non_blocking=True)
-                
-                # 3. Verify model is on GPU (periodic check)
-                if self.global_step % 500 == 0:  # Check every 500 steps
-                    model_device = next(self.model.parameters()).device
-                    if model_device.type != 'cuda':
-                        logger.error(f"🚨 Model moved to {model_device}! Moving back to GPU...")
-                        self.model = self.model.cuda()
-                        torch.cuda.synchronize()
-                
-                # 4. Monitor GPU usage (less frequently for performance)
-                if self.global_step % 100 == 0:  # Check every 100 steps
-                    gpu_memory = torch.cuda.memory_allocated(self.device) / 1024**3
-                    if self.global_step % 1000 == 0:  # Log every 1000 steps
-                        logger.info(f"✅ GPU Memory: {gpu_memory:.1f}GB - training on GPU")
-                
-                # OPTIMIZED OOM Protection - check memory less frequently for speed
-                if self.global_step % 100 == 0 and torch.cuda.is_available():  # Check every 100 steps
-                    memory_allocated = torch.cuda.memory_allocated(self.device) / 1024**3  # GB
-                    total_memory = torch.cuda.get_device_properties(self.device).total_memory / 1024**3  # GB
-                    memory_usage_percent = (memory_allocated / total_memory) * 100
-                    
-                    if memory_usage_percent > 80:  # If using more than 80% memory
-                        logger.warning(f"High memory usage detected: {memory_usage_percent:.1f}% - clearing cache")
-                        torch.cuda.empty_cache()
-                        gc.collect()
+                # � EFFICIENT GPU TRAINING: Clean batch-to-device transfer
+                batch = self._safe_batch_to_device(batch)
                 
                 # Pass global step to model for consolidation logic
                 if hasattr(self.model, 'global_step'):
                     self.model.global_step = self.global_step
-                
-                # MINIMAL device checks - only when absolutely necessary
-                if self.global_step % 25000 == 0:  # Much less frequent checks for speed
-                    self._silent_device_check()
-
-                # Use efficient batch transfer method
-                batch = self._efficient_batch_transfer(batch)
 
                 # 🚀 CRITICAL: Validate and fix batch dimensions before forward pass
                 try:
@@ -1764,15 +1721,6 @@ class BitMarTrainer:
                         torch.cuda.synchronize()
                         logger.info(f"✅ Model moved back to {self.device}")
                     
-                    # 🔥 VERIFY GPU USAGE: Check if we're actually using GPU
-                    if self.global_step % 50 == 0:  # Check every 50 steps
-                        gpu_usage = torch.cuda.utilization(self.device) if hasattr(torch.cuda, 'utilization') else 0
-                        gpu_memory = torch.cuda.memory_allocated(self.device) / 1024**3
-                        logger.info(f"🔥 GPU Status: {gpu_usage}% utilization, {gpu_memory:.1f}GB memory")
-                        
-                        if gpu_memory < 1.0:  # Less than 1GB suggests CPU usage
-                            logger.error("🚨 WARNING: Very low GPU memory usage - might be using CPU!")
-                    
                     # 🧠 ADVANCED 10-EPOCH CONSOLIDATION PHASE-SPECIFIC PROCESSING
                     if consolidation_phase == "episodic_capture":
                         # Phase 1: Foundation & Rapid Episodic Capture (Epochs 0-2)
@@ -1792,10 +1740,11 @@ class BitMarTrainer:
                     
                     loss = outputs['loss']
                     
-                    # CRITICAL: Ensure loss is on GPU for proper computation
-                    if hasattr(loss, 'device') and loss.device != self.device:
-                        logger.warning(f"🚨 Loss on wrong device! {loss.device} -> {self.device}")
-                        loss = loss.to(self.device)
+                    # Minimal GPU monitoring every 1000 steps
+                    if self.global_step % 1000 == 0:
+                        gpu_memory = torch.cuda.memory_allocated(self.device) / 1024**3
+                        logger.info(f"🚀 Step {self.global_step}: GPU Memory {gpu_memory:.1f}GB")
+                        
                 except RuntimeError as e:
                     if "out of memory" in str(e).lower() or "device" in str(e).lower():
                         logger.warning(
@@ -3317,33 +3266,18 @@ class BitMarTrainer:
                 logger.info("🧹 Triggering aggressive CPU memory cleanup...")
                 self._force_cleanup()
 
-    def _efficient_batch_transfer(self, batch):
-        """Efficiently transfer batch to GPU with minimal CPU memory usage"""
-        try:
-            # Transfer tensors one by one and delete from CPU immediately
-            gpu_batch = {}
-
-            for key, value in batch.items():
-                if isinstance(value, torch.Tensor):
-                    # Move to GPU and immediately delete CPU reference
-                    gpu_batch[key] = value.to(self.device, non_blocking=True)
-                    del value  # Explicit deletion
-                else:
-                    gpu_batch[key] = value
-
-            # Clear the original batch
-            batch.clear()
-            del batch
-
-            # Force cleanup
-            gc.collect()
-
-            return gpu_batch
-
-        except Exception as e:
-            logger.warning(
-                f"Efficient batch transfer failed: {e}, falling back to standard transfer")
-            return self._safe_batch_to_device(batch)
+    def _safe_batch_to_device(self, batch):
+        """Efficiently transfer batch to device with minimal overhead"""
+        if not isinstance(batch, dict):
+            return batch
+            
+        device_batch = {}
+        for key, value in batch.items():
+            if isinstance(value, torch.Tensor):
+                device_batch[key] = value.to(self.device, non_blocking=True)
+            else:
+                device_batch[key] = value
+        return device_batch
 
 
 def load_config(config_path: str) -> Dict:
