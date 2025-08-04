@@ -1,7 +1,8 @@
 """
 Dataset processing for BitMar
-Handles complete BabyLM multimodal dataset with AGGRESSIVE OPTIMIZATIONS
+Handles complete BabyLM multimodal dataset with GPU-OPTIMIZED STORAGE
 + train_50M text-only data for enhanced language modeling
++ MULTI-WORKER DATA LOADING for maximum GPU utilization
 """
 
 import json
@@ -15,9 +16,11 @@ import logging
 import random
 import os
 from pathlib import Path
-import h5py
 import pickle
 import time
+
+# Import GPU-optimized storage instead of h5py
+from .gpu_optimized_storage import GPUOptimizedVisionStorage, GPUOptimizedDataset
 
 # Fix tokenizer parallelism warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -25,93 +28,29 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 logger = logging.getLogger(__name__)
 
 
-class AggressiveDataOptimizer:
-    """Aggressive data optimization for immediate speedup"""
+class GPUOptimizedDataOptimizer:
+    """GPU-optimized data optimization with multi-worker support"""
 
     def __init__(self, dataset_dir: str):
         self.dataset_dir = Path(dataset_dir)
         self.cache_dir = self.dataset_dir / "speed_cache"
         self.cache_dir.mkdir(exist_ok=True)
+        
+        # Initialize GPU-optimized storage
+        self.gpu_storage = GPUOptimizedVisionStorage(str(dataset_dir))
 
-    def get_compressed_vision_cache(self):
-        """Get or create aggressively compressed vision cache"""
-        cache_file = self.cache_dir / "ultra_compressed_vision.h5"
-
-        if cache_file.exists():
-            logger.info(f"🚀 Using ultra-compressed vision cache: {cache_file}")
-            return h5py.File(cache_file, 'r')
-
-        logger.info("🔥 Creating ultra-compressed vision cache for massive speedup...")
-
-        # Load original data
-        cc_feat1 = np.load(self.dataset_dir / "cc_3M_dino_v2_states_1of2.npy", mmap_mode='r')
-        cc_feat2 = np.load(self.dataset_dir / "cc_3M_dino_v2_states_2of2.npy", mmap_mode='r')
-
-        total_samples = cc_feat1.shape[0] + cc_feat2.shape[0]
-        logger.info(f"Compressing {total_samples} vision samples with 50x compression...")
-
-        # Ultra-aggressive compression: 768*196 -> 64 dimensions
-        compressed_dim = 64
-        compression_ratio = (768 * 196) / compressed_dim  # Calculate ratio upfront
-        original_size_gb = (cc_feat1.nbytes + cc_feat2.nbytes) / 1e9
-
-        with h5py.File(cache_file, 'w') as h5f:
-            compressed_data = h5f.create_dataset(
-                'features',
-                shape=(total_samples, compressed_dim),
-                dtype=np.float16,  # Half precision
-                compression='gzip',
-                compression_opts=9
-            )
-
-            chunk_size = 5000
-            projection_matrix = None
-
-            for i in range(0, total_samples, chunk_size):
-                end_idx = min(i + chunk_size, total_samples)
-
-                # Load chunk
-                if i < cc_feat1.shape[0]:
-                    if end_idx <= cc_feat1.shape[0]:
-                        chunk = cc_feat1[i:end_idx]
-                    else:
-                        chunk1 = cc_feat1[i:]
-                        chunk2 = cc_feat2[:end_idx - cc_feat1.shape[0]]
-                        chunk = np.concatenate([chunk1, chunk2])
-                else:
-                    start_idx2 = i - cc_feat1.shape[0]
-                    end_idx2 = end_idx - cc_feat1.shape[0]
-                    chunk = cc_feat2[start_idx2:end_idx2]
-
-                # Ultra-aggressive compression: flatten and downsample
-                chunk_flat = chunk.reshape(chunk.shape[0], -1)  # Flatten spatial
-
-                # Random projection for ultra compression
-                if projection_matrix is None:
-                    np.random.seed(42)
-                    projection_matrix = np.random.randn(chunk_flat.shape[1], compressed_dim).astype(np.float32)
-                    projection_matrix /= np.sqrt(chunk_flat.shape[1])  # Normalize
-
-                # Apply compression
-                compressed_chunk = chunk_flat @ projection_matrix
-                compressed_data[i:end_idx] = compressed_chunk.astype(np.float16)
-
-                if i % 50000 == 0:
-                    logger.info(f"Compressed {i}/{total_samples} samples...")
-
-            # Store metadata
-            h5f.attrs['compression_ratio'] = compression_ratio
-            h5f.attrs['original_size_gb'] = original_size_gb
-            h5f.attrs['total_samples'] = total_samples
-
-        # File is now properly closed, calculate compressed size
-        compressed_size_gb = os.path.getsize(cache_file) / 1e9
-
-        logger.info(f"✅ Ultra-compression complete! {compression_ratio:.1f}x smaller")
-        logger.info(f"   Original: {original_size_gb:.2f}GB → Compressed: {compressed_size_gb:.2f}GB")
-
-        # Return opened file for reading
-        return h5py.File(cache_file, 'r')
+    def get_optimized_vision_features(self):
+        """Get GPU-optimized vision features (multi-worker compatible)"""
+        logger.info("🚀 Loading GPU-optimized vision features...")
+        
+        # Convert from h5py if needed and load optimized features
+        features, metadata = self.gpu_storage.load_optimized_features()
+        
+        logger.info(f"✅ GPU-optimized features loaded: {features.shape}")
+        logger.info(f"🔥 Multi-worker data loading: ENABLED")
+        logger.info(f"📊 Compression ratio: {metadata.get('compression_ratio', 'Unknown'):.1f}x")
+        
+        return features, metadata
 
     def get_tokenized_cache(self, max_seq_length=256):
         """Get or create tokenized text cache"""
@@ -208,13 +147,14 @@ class MixedMultimodalTextDataset(Dataset):
         """Setup with aggressive optimizations and BabyLM token limits"""
         start_time = time.time()
 
-        # Initialize aggressive optimizer
-        self.optimizer = AggressiveDataOptimizer(str(self.dataset_dir))
+        # Initialize GPU-optimized optimizer
+        self.optimizer = GPUOptimizedDataOptimizer(str(self.dataset_dir))
 
-        # Get compressed vision cache
-        self.vision_cache = self.optimizer.get_compressed_vision_cache()
-        vision_samples = self.vision_cache['features'].shape[0]
-        logger.info(f"📁 Vision cache shape: {self.vision_cache['features'].shape}")
+        # Get GPU-optimized vision features (multi-worker compatible)
+        self.vision_features, self.vision_metadata = self.optimizer.get_optimized_vision_features()
+        vision_samples = self.vision_features.shape[0]
+        logger.info(f"📁 GPU-optimized vision features shape: {self.vision_features.shape}")
+        logger.info(f"🔥 Multi-worker data loading: ENABLED")
 
         # Get tokenized cache with token counting
         self.text_cache = self.optimizer.get_tokenized_cache(self.max_seq_length)
@@ -395,10 +335,8 @@ class MixedMultimodalTextDataset(Dataset):
         sample_type, sample_idx = self.mixed_indices[idx]
 
         if sample_type == 'multimodal':
-            # Use ultra-compressed cached data
-            vision_features = torch.from_numpy(
-                self.vision_cache['features'][sample_idx]
-            ).float()
+            # Use GPU-optimized cached data (multi-worker compatible)
+            vision_features = self.vision_features[sample_idx].clone()
 
             text_data = self.text_cache[sample_idx]
 
@@ -717,23 +655,29 @@ class BabyLMDataModule:
         logger.info(f"Validation datasets: {list(self.val_datasets.keys())}")
 
     def train_dataloader(self) -> DataLoader:
-        """Create training dataloader without multiprocessing for h5py compatibility"""
+        """Create training dataloader with MULTI-WORKER support for maximum GPU utilization"""
         # PyTorch DataLoader requires CPU generator even for GPU training
         # This fixes: "Expected a 'cpu' device type for generator but found 'cuda'"
         generator = torch.Generator()  # Always CPU generator
         generator.manual_seed(42)  # For reproducibility
         
-        # Disable multiprocessing due to h5py pickle issues
-        # h5py objects cannot be pickled and shared across processes
+        # 🚀 ENABLE MULTI-WORKER DATA LOADING - GPU-optimized storage supports this!
+        # No more h5py constraints - use maximum workers for GPU saturation
+        num_workers = min(8, os.cpu_count())  # Use up to 8 workers or CPU count
+        
+        logger.info(f"🚀 MULTI-WORKER DATA LOADING ENABLED: {num_workers} workers")
+        logger.info("🔥 H5py constraint eliminated - maximum GPU utilization possible!")
+        
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
-            num_workers=0,  # CRITICAL: Disable multiprocessing for h5py compatibility
+            num_workers=num_workers,  # 🚀 MULTI-WORKER ENABLED!
             pin_memory=self.pin_memory,
-            persistent_workers=False,  # Disabled since num_workers=0
+            persistent_workers=True,  # Keep workers alive for efficiency
             drop_last=True,
-            generator=generator  # CPU generator (required by PyTorch)
+            generator=generator,  # CPU generator (required by PyTorch)
+            prefetch_factor=4,  # Prefetch multiple batches per worker
         )
 
     def val_dataloader(self) -> List[DataLoader]:

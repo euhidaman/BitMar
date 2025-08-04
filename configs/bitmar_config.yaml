@@ -41,11 +41,11 @@ data:
   text_encoder_name: "gpt2"
   max_seq_length: 256 # DOUBLED for more GPU work and better understanding (was 128)
 
-  # DataLoader settings - EXTREME GPU UTILIZATION for RTX A6000 (49GB VRAM)
+  # DataLoader settings - EXTREME GPU UTILIZATION with MULTI-WORKER SUPPORT (H5py eliminated!)
   batch_size: 64 # TRIPLED batch size for maximum VRAM utilization (was 24)
-  num_workers: 0 # Disabled for h5py compatibility (h5py objects cannot be pickled)  
+  num_workers: 8 # 🚀 MULTI-WORKER ENABLED! (h5py constraint eliminated)
   pin_memory: true
-  persistent_workers: false # Disabled with num_workers=0
+  persistent_workers: true # Keep workers alive for efficiency
   prefetch_factor: 16 # DOUBLED prefetch for continuous GPU saturation (was 8)
 
   # Full dataset training (no sample limits)

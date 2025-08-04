@@ -23,8 +23,6 @@ from tqdm import tqdm
 from typing import Dict, Optional
 from pathlib import Path
 import wandb
-import torch
-import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim import AdamW
 
@@ -34,7 +32,6 @@ from torch.optim import AdamW
 # from src.modality_tracker import ModalityTracker  # REMOVED: Already disabled in code
 from src.wandb_logger import BitMarWandbLogger
 from src.model import create_bitmar_model, count_parameters
-from src.dataset import create_data_module
 from src.dataset import create_data_module
 print("🚀 Starting train_bitmar.py script...")
 
@@ -734,12 +731,12 @@ class BitMarTrainer:
             logger.info(
                 "📊 A6000 mode: Using LARGE batches for maximum GPU utilization")
 
-        # Apply AGGRESSIVE GPU-optimized data loading for RTX A6000
+        # Apply GPU-OPTIMIZED data loading for RTX A6000 (MULTI-WORKER ENABLED!)
         enhanced_data_config.update({
-            # RTX A6000 EXTREME GPU UTILIZATION settings (49GB VRAM)
-            'num_workers': 0,  # Disabled for h5py compatibility (h5py cannot be pickled)
+            # RTX A6000 EXTREME GPU UTILIZATION settings (49GB VRAM) with MULTI-WORKER SUPPORT
+            'num_workers': 8,  # 🚀 MULTI-WORKER ENABLED! (h5py constraint eliminated)
             'pin_memory': True,  # Critical for GPU transfer speed
-            'persistent_workers': False,  # Disabled with num_workers=0
+            'persistent_workers': True,  # Keep workers alive for efficiency
             'prefetch_factor': 16,  # EXTREME prefetching for maximum GPU saturation (was 8)
             'multiprocessing_context': None,  # Use default (spawn on Windows)
             'drop_last': True,  # Consistent batch sizes for GPU efficiency
@@ -765,9 +762,10 @@ class BitMarTrainer:
             'overlapped_transfers': True,  # Enable overlapped CPU-GPU transfers
             'tensor_parallel_hints': True,  # Enable tensor parallelism hints
             'aggressive_gpu_utilization': True,  # NEW: Enable all aggressive optimizations
+            'multi_worker_gpu_optimized': True,  # NEW: Multi-worker GPU optimization
         })
-        logger.info("🚀 Applied RTX A6000 EXTREME GPU UTILIZATION training:")
-        logger.info(f"   - Workers: {enhanced_data_config['num_workers']} (disabled for h5py compatibility)")
+        logger.info("🚀 Applied RTX A6000 EXTREME GPU UTILIZATION with MULTI-WORKER SUPPORT:")
+        logger.info(f"   - Workers: {enhanced_data_config['num_workers']} (🔥 MULTI-WORKER ENABLED!)")
         logger.info(f"   - Prefetch factor: {enhanced_data_config['prefetch_factor']} (EXTREME for maximum GPU saturation)")
         logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (TRIPLED for maximum VRAM utilization)")
         logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (DOUBLED for more GPU work)")
@@ -775,8 +773,8 @@ class BitMarTrainer:
         logger.info("   - BabyLM token limits: 100M text tokens, 50M image tokens (strict compliance)")
         logger.info("   - Image-caption associations preserved during token limiting")
         logger.info("🔥 RTX A6000 configuration optimized for EXTREME GPU utilization")
-        logger.info("🚀 EXTREME GPU UTILIZATION: TRIPLED batches, DOUBLED sequences, EXTREME prefetch")
-        logger.warning("⚠️ Single-threaded data loading compensated with EXTREME batch sizes for maximum GPU utilization")
+        logger.info("🚀 EXTREME GPU UTILIZATION: TRIPLED batches, DOUBLED sequences, EXTREME prefetch, MULTI-WORKER!")
+        logger.info("✅ H5py constraint ELIMINATED - multi-worker data loading maximizes GPU utilization")
         
         # 🔥 CRITICAL: FORCE CUDA USAGE - NO CPU FALLBACKS
         if torch.cuda.is_available():
