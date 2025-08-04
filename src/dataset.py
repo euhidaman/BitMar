@@ -201,24 +201,80 @@ class MixedMultimodalTextDataset(Dataset):
             text_samples
         )
         
-        # Count actual caption tokens for the selected pairs
+        # Count actual caption tokens for the selected pairs - OPTIMIZED FOR SPEED
         caption_tokens_used = 0
         selected_pairs = 0
         multimodal_indices = []
         
-        for i in range(min(max_multimodal_pairs, vision_samples)):
-            # Get caption and count its tokens
-            if i < len(self.vision_captions):
-                caption = self.vision_captions[i].get('caption', '') if isinstance(self.vision_captions[i], dict) else str(self.vision_captions[i])
-                caption_token_count = len(self.tokenizer.encode(caption, add_special_tokens=False))
+        logger.info(f"📊 Processing {min(max_multimodal_pairs, vision_samples):,} captions for token counting...")
+        
+        # PERFORMANCE OPTIMIZATION: Batch process captions for speed
+        batch_size = 1000  # Process 1000 captions at a time
+        for batch_start in range(0, min(max_multimodal_pairs, vision_samples), batch_size):
+            batch_end = min(batch_start + batch_size, min(max_multimodal_pairs, vision_samples))
+            
+            # Extract batch of captions
+            batch_captions = []
+            batch_indices = []
+            
+            for i in range(batch_start, batch_end):
+                if i < len(self.vision_captions):
+                    caption_data = self.vision_captions[i]
+                    caption = caption_data.get('caption', '') if isinstance(caption_data, dict) else str(caption_data)
+                    batch_captions.append(caption)
+                    batch_indices.append(i)
+            
+            # Skip empty batch
+            if not batch_captions:
+                break
                 
-                # Check if we can fit this caption within our budget
-                if caption_tokens_used + caption_token_count <= self.max_caption_tokens:
-                    multimodal_indices.append(('multimodal', i))
-                    caption_tokens_used += caption_token_count
-                    selected_pairs += 1
-                else:
-                    break  # Stop if we exceed caption token budget
+            # FAST: Batch tokenize all captions at once
+            try:
+                batch_encoded = self.tokenizer(
+                    batch_captions, 
+                    add_special_tokens=False, 
+                    padding=False, 
+                    truncation=False,
+                    return_tensors=None  # Return lists, not tensors
+                )
+                
+                # Process batch results
+                for idx, (caption_idx, input_ids) in enumerate(zip(batch_indices, batch_encoded['input_ids'])):
+                    caption_token_count = len(input_ids)
+                    
+                    # Check if we can fit this caption within our budget
+                    if caption_tokens_used + caption_token_count <= self.max_caption_tokens:
+                        multimodal_indices.append(('multimodal', caption_idx))
+                        caption_tokens_used += caption_token_count
+                        selected_pairs += 1
+                    else:
+                        # EARLY STOP: We've reached the caption token limit
+                        logger.info(f"🛑 Caption token limit reached at {selected_pairs:,} pairs")
+                        break
+                        
+            except Exception as e:
+                logger.warning(f"Batch tokenization failed: {e}, falling back to individual processing")
+                # Fallback to individual tokenization for this batch only
+                for caption_idx in batch_indices:
+                    if caption_idx < len(self.vision_captions):
+                        caption_data = self.vision_captions[caption_idx]
+                        caption = caption_data.get('caption', '') if isinstance(caption_data, dict) else str(caption_data)
+                        caption_token_count = len(self.tokenizer.encode(caption, add_special_tokens=False))
+                        
+                        if caption_tokens_used + caption_token_count <= self.max_caption_tokens:
+                            multimodal_indices.append(('multimodal', caption_idx))
+                            caption_tokens_used += caption_token_count
+                            selected_pairs += 1
+                        else:
+                            break
+            
+            # Early termination if we've hit the limit
+            if caption_tokens_used >= self.max_caption_tokens:
+                break
+                
+            # Progress logging for large datasets
+            if (batch_end % 10000) == 0:
+                logger.info(f"📊 Progress: {batch_end:,} captions processed, {selected_pairs:,} pairs selected, {caption_tokens_used:,} caption tokens used")
         
         self.image_token_count = selected_pairs * tokens_per_image
         self.caption_token_count = caption_tokens_used
@@ -258,16 +314,32 @@ class MixedMultimodalTextDataset(Dataset):
         logger.info(f"✅ BabyLM compliance: 50M image + 50M caption + 50M text tokens!")
 
     def _load_text_data_with_token_limit(self, token_budget: int) -> List[str]:
-        """Load text data respecting token budget"""
+        """Load text data respecting token budget - OPTIMIZED FOR SPEED"""
         text_samples = []
         tokens_used = 0
         
+        # Check for train_50M directory first, then extract from ZIP if needed
         train_50m_dir = self.dataset_dir / "train_50M"
+        train_50m_zip = self.dataset_dir / "train_50M.zip"
+        
+        if not train_50m_dir.exists() and train_50m_zip.exists():
+            logger.info("🗂️ train_50M directory not found, extracting from ZIP...")
+            import zipfile
+            try:
+                with zipfile.ZipFile(train_50m_zip, 'r') as zip_ref:
+                    zip_ref.extractall(self.dataset_dir)
+                logger.info("✅ train_50M.zip extracted successfully")
+            except Exception as e:
+                logger.error(f"❌ Failed to extract train_50M.zip: {e}")
+                self.text_token_count = 0
+                return []
+        
         if not train_50m_dir.exists():
-            logger.warning("train_50M not found - skipping text-only data")
+            logger.warning("❌ train_50M not found (neither directory nor ZIP) - skipping text-only data")
+            self.text_token_count = 0
             return []
 
-        # Load text files efficiently with token counting
+        # Load text files efficiently with BATCH token counting
         text_files = [
             "simple_wiki.train",
             "gutenberg.train", 
@@ -280,29 +352,40 @@ class MixedMultimodalTextDataset(Dataset):
             if not filepath.exists():
                 continue
                 
-            logger.info(f"📖 Loading {filename} with token counting...")
+            logger.info(f"📖 Loading {filename} with OPTIMIZED batch token counting...")
             
             try:
                 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    batch_lines = []
+                    batch_size = 500  # Process 500 lines at a time for speed
+                    
                     for line_num, line in enumerate(f):
                         line = line.strip()
                         if not line:
                             continue
                             
-                        # Quick token count estimation (more accurate than string length)
-                        estimated_tokens = len(self.tokenizer.encode(line[:200], add_special_tokens=True))
+                        batch_lines.append(line)
                         
-                        if tokens_used + estimated_tokens > token_budget:
-                            logger.info(f"Token budget reached in {filename} at line {line_num}")
-                            break
+                        # Process batch when full or at end of file
+                        if len(batch_lines) >= batch_size:
+                            tokens_added = self._process_text_batch(batch_lines, token_budget - tokens_used, text_samples)
+                            tokens_used += tokens_added
+                            batch_lines = []
                             
-                        text_samples.append(line)
-                        tokens_used += estimated_tokens
+                            # Early termination if budget reached
+                            if tokens_used >= token_budget:
+                                logger.info(f"🛑 Text token budget reached in {filename} at line {line_num}")
+                                break
+                                
+                            # Progress logging
+                            if len(text_samples) % 5000 == 0:
+                                logger.info(f"   📊 Progress: {len(text_samples):,} text samples, {tokens_used:,} tokens")
+                    
+                    # Process remaining lines in final batch
+                    if batch_lines and tokens_used < token_budget:
+                        tokens_added = self._process_text_batch(batch_lines, token_budget - tokens_used, text_samples)
+                        tokens_used += tokens_added
                         
-                        # Progress logging
-                        if len(text_samples) % 10000 == 0:
-                            logger.info(f"   Loaded {len(text_samples)} text samples, {tokens_used:,} tokens")
-                            
                 if tokens_used >= token_budget:
                     break
                     
@@ -310,8 +393,50 @@ class MixedMultimodalTextDataset(Dataset):
                 logger.warning(f"Error loading {filename}: {e}")
                 continue
 
-        logger.info(f"📚 Text loading complete: {len(text_samples)} samples, {tokens_used:,} tokens")
+        logger.info(f"📚 Text loading complete: {len(text_samples):,} samples, {tokens_used:,} tokens")
+        self.text_token_count = tokens_used  # Store for compliance tracking
         return text_samples
+    
+    def _process_text_batch(self, batch_lines: List[str], remaining_budget: int, text_samples: List[str]) -> int:
+        """Process a batch of text lines with efficient tokenization"""
+        if remaining_budget <= 0:
+            return 0
+            
+        tokens_added = 0
+        try:
+            # FAST: Batch tokenize all lines at once
+            batch_encoded = self.tokenizer(
+                batch_lines,
+                add_special_tokens=True,
+                padding=False,
+                truncation=False,
+                return_tensors=None  # Return lists, not tensors
+            )
+            
+            # Add lines that fit within budget
+            for line, input_ids in zip(batch_lines, batch_encoded['input_ids']):
+                line_tokens = len(input_ids)
+                if tokens_added + line_tokens <= remaining_budget:
+                    text_samples.append(line)
+                    tokens_added += line_tokens
+                else:
+                    # Stop adding when budget would be exceeded
+                    break
+                    
+        except Exception as e:
+            logger.warning(f"Batch text tokenization failed: {e}, using fallback")
+            # Fallback to individual processing
+            for line in batch_lines:
+                if tokens_added >= remaining_budget:
+                    break
+                line_tokens = len(self.tokenizer.encode(line, add_special_tokens=True))
+                if tokens_added + line_tokens <= remaining_budget:
+                    text_samples.append(line)
+                    tokens_added += line_tokens
+                else:
+                    break
+                    
+        return tokens_added
 
     def _load_minimal_text_data(self) -> List[str]:
         """Legacy method - now redirects to token-limited loading"""
