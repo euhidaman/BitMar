@@ -717,26 +717,23 @@ class BabyLMDataModule:
         logger.info(f"Validation datasets: {list(self.val_datasets.keys())}")
 
     def train_dataloader(self) -> DataLoader:
-        """Create training dataloader with spawn multiprocessing for CUDA compatibility"""
+        """Create training dataloader without multiprocessing for h5py compatibility"""
         # PyTorch DataLoader requires CPU generator even for GPU training
         # This fixes: "Expected a 'cpu' device type for generator but found 'cuda'"
         generator = torch.Generator()  # Always CPU generator
         generator.manual_seed(42)  # For reproducibility
         
-        # Use spawn method for CUDA compatibility in multiprocessing
-        import multiprocessing as mp
-        mp_context = mp.get_context('spawn') if self.num_workers > 0 else None
-        
+        # Disable multiprocessing due to h5py pickle issues
+        # h5py objects cannot be pickled and shared across processes
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
-            num_workers=self.num_workers,
+            num_workers=0,  # CRITICAL: Disable multiprocessing for h5py compatibility
             pin_memory=self.pin_memory,
-            persistent_workers=self.persistent_workers if self.num_workers > 0 else False,
+            persistent_workers=False,  # Disabled since num_workers=0
             drop_last=True,
-            generator=generator,  # CPU generator (required by PyTorch)
-            multiprocessing_context=mp_context  # Use spawn for CUDA compatibility
+            generator=generator  # CPU generator (required by PyTorch)
         )
 
     def val_dataloader(self) -> List[DataLoader]:

@@ -616,7 +616,7 @@ class BitMarTrainer:
             'dataset_dir': "../babylm_dataset",
             'max_seq_length': 128,  # Optimal for RTX A6000
             'batch_size': 16,       # LARGE batch size for RTX A6000 (48GB)
-            'num_workers': 8,       # Maximum workers for fast data loading
+            'num_workers': 0,       # Disabled for h5py compatibility (h5py cannot be pickled)
             'pin_memory': True,     # Critical for GPU transfer speed
             'text_encoder_name': 'gpt2',
             'persistent_workers': True,  # Keep workers alive for efficiency
@@ -650,8 +650,8 @@ class BitMarTrainer:
                 enhanced_data_config.get('batch_size', 16), 16)  # Force minimum 16 for A6000
             enhanced_data_config['max_seq_length'] = enhanced_data_config.get(
                 'max_seq_length', 128)  # Keep full sequences for better performance
-            # Maximum workers for A6000
-            enhanced_data_config['num_workers'] = 8
+            # Disable workers for h5py compatibility (h5py objects cannot be pickled)
+            enhanced_data_config['num_workers'] = 0
             # High prefetching for A6000
             enhanced_data_config['prefetch_factor'] = 4
             logger.info(
@@ -664,7 +664,7 @@ class BitMarTrainer:
         # Apply AGGRESSIVE GPU-optimized data loading for RTX A6000
         enhanced_data_config.update({
             # RTX A6000 OPTIMIZED settings for maximum GPU utilization
-            'num_workers': 8,  # Maximum workers for A6000
+            'num_workers': 0,  # Disabled for h5py compatibility (h5py cannot be pickled)
             'pin_memory': True,  # Critical for GPU transfer speed
             'persistent_workers': True,  # Keep workers alive for efficiency
             'prefetch_factor': 4,  # High prefetching for A6000
@@ -689,7 +689,7 @@ class BitMarTrainer:
             'gradient_accumulation_steps': 4,  # Lower accumulation for larger batches (effective batch = 16*4=64)
         })
         logger.info("🚀 Applied RTX A6000 OPTIMIZED training with LARGE batches:")
-        logger.info(f"   - Workers: {enhanced_data_config['num_workers']} (maximum for A6000)")
+        logger.info(f"   - Workers: {enhanced_data_config['num_workers']} (disabled for h5py compatibility)")
         logger.info(f"   - Prefetch factor: {enhanced_data_config['prefetch_factor']} (high for A6000)")
         logger.info(f"   - Batch size: {enhanced_data_config['batch_size']} (LARGE for maximum GPU utilization)")
         logger.info(f"   - Max sequence length: {enhanced_data_config['max_seq_length']} (full sequences for performance)")
@@ -697,6 +697,7 @@ class BitMarTrainer:
         logger.info("   - BabyLM token limits: 100M text tokens, 50M image tokens (strict compliance)")
         logger.info("   - Image-caption associations preserved during token limiting")
         logger.info("🔥 RTX A6000 configuration optimized for MAXIMUM GPU utilization")
+        logger.warning("⚠️ Single-threaded data loading enabled for h5py compatibility - may reduce data loading speed")
         
         # 🔥 CRITICAL: FORCE CUDA USAGE - NO CPU FALLBACKS
         if torch.cuda.is_available():

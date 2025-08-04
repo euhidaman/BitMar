@@ -43,7 +43,7 @@ data:
 
   # DataLoader settings - Optimized for RTX A6000 (48GB VRAM)
   batch_size: 16 # Optimized for RTX A6000
-  num_workers: 8 # Maximum workers for fast data loading  
+  num_workers: 0 # Disabled for h5py compatibility (h5py objects cannot be pickled)  
   pin_memory: true
   persistent_workers: true
   prefetch_factor: 4 # Increased for RTX A6000
