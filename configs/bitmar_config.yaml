@@ -42,8 +42,8 @@ data:
   max_seq_length: 128 # Increased for better performance
 
   # DataLoader settings - Optimized for RTX A6000 (48GB VRAM)
-  batch_size: 16 # Increased for RTX A6000
-  num_workers: 8 # Increased for better data loading
+  batch_size: 16 # Optimized for RTX A6000
+  num_workers: 8 # Maximum workers for fast data loading  
   pin_memory: true
   persistent_workers: true
   prefetch_factor: 4 # Increased for RTX A6000

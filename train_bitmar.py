@@ -365,6 +365,38 @@ class BitMarTrainer:
 
         self.model = create_bitmar_model(model_config)
 
+        # 🔥 CRITICAL: FORCE MODEL TO GPU IMMEDIATELY FOR MAXIMUM SPEED
+        if torch.cuda.is_available():
+            logger.info(f"🚀 FORCING model to GPU: {self.device}")
+            self.model = self.model.to(self.device)
+            
+            # Verify all parameters are on GPU
+            gpu_params = 0
+            cpu_params = 0
+            for name, param in self.model.named_parameters():
+                if param.device.type == 'cuda':
+                    gpu_params += 1
+                else:
+                    cpu_params += 1
+                    logger.warning(f"❌ Parameter {name} still on CPU: {param.device}")
+                    # Force move to GPU
+                    param.data = param.data.to(self.device)
+            
+            logger.info(f"✅ Model placement: {gpu_params} GPU params, {cpu_params} CPU params")
+            
+            # Force all buffers to GPU as well
+            for name, buffer in self.model.named_buffers():
+                if buffer.device.type != 'cuda':
+                    logger.warning(f"❌ Buffer {name} on CPU: {buffer.device}")
+                    buffer.data = buffer.data.to(self.device)
+            
+            # Set model to train mode on GPU
+            self.model.train()
+            torch.cuda.synchronize()  # Ensure GPU placement is complete
+            logger.info("🔥 Model FORCED to GPU and synchronized")
+        else:
+            logger.error("❌ CUDA not available - training will be extremely slow!")
+
         # Log Quadrangle Attention configuration
         if model_config.get('use_quadrangle_attention', False):
             logger.info("🚀 QFormer Quadrangle Attention ENABLED")
@@ -463,6 +495,23 @@ class BitMarTrainer:
             self.use_amp = False
             logger.warning("Mixed precision training not available")
 
+        # 🔥 FORCE ALL OPERATIONS TO GPU - CRITICAL FOR SPEED
+        if torch.cuda.is_available():
+            # DON'T change default tensor type as it can cause issues
+            # torch.set_default_tensor_type('torch.cuda.FloatTensor')  # DISABLED
+            
+            # Disable CPU fallbacks
+            os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Allow async GPU operations
+            os.environ['TORCH_USE_CUDA_DSA'] = '1'   # Force CUDA device selection
+            
+            # Force GPU memory preallocation for stability
+            torch.cuda.empty_cache()
+            dummy = torch.zeros(1000, 1000, device=self.device)  # Preallocate GPU memory
+            del dummy
+            torch.cuda.synchronize()
+            
+            logger.info("🚀 GPU async operations enabled, CPU fallbacks disabled")
+        
         # 🔥 PYTORCH 2.0 MODEL COMPILATION - DISABLED for stability
         # torch.compile can cause dimension assertion errors with dynamic shapes
         # Disabling for faster and more stable training
@@ -562,22 +611,22 @@ class BitMarTrainer:
         enhanced_data_config = self.config['data'].copy()
 
         # Ensure all required keys are included with proper fallbacks
-        # 🚀 MEMORY-OPTIMIZED SETTINGS FOR RTX A6000 (47GB) 🚀
+        # 🚀 RTX A6000 OPTIMIZED SETTINGS (48GB VRAM) 🚀
         required_keys = {
             'dataset_dir': "../babylm_dataset",
-            'max_seq_length': 96,   # Reduced from 128 for memory efficiency
-            'batch_size': 4,        # Much smaller batch size for RTX A6000
-            'num_workers': 4,       # Reduced workers to prevent memory pressure
+            'max_seq_length': 128,  # Optimal for RTX A6000
+            'batch_size': 16,       # LARGE batch size for RTX A6000 (48GB)
+            'num_workers': 8,       # Maximum workers for fast data loading
             'pin_memory': True,     # Critical for GPU transfer speed
             'text_encoder_name': 'gpt2',
             'persistent_workers': True,  # Keep workers alive for efficiency
             'validation_datasets': ['glue/sst2'],
-            # MEMORY-OPTIMIZED GPU settings for RTX A6000
-            'prefetch_factor': 2,   # Reduced prefetching to save memory
+            # GPU-OPTIMIZED settings for RTX A6000
+            'prefetch_factor': 4,   # Higher prefetching for GPU speed
             'drop_last': True,      # Consistent batch sizes for GPU efficiency
             'memory_efficient_loading': True,   # Enable memory efficiency
             'non_blocking': True,   # Enable non-blocking GPU transfers
-            'dataloader_timeout': 60,  # Faster timeout for stuck data loading
+            'dataloader_timeout': 120,  # Longer timeout for large batches
         }
 
         for key, fallback_value in required_keys.items():
@@ -1633,15 +1682,11 @@ class BitMarTrainer:
                     # CRITICAL: Ensure all inputs are on GPU with optimized transfers
                     for key in ['input_ids', 'attention_mask', 'vision_features', 'labels']:
                         if key in batch and batch[key] is not None:
-                            # Debug: Check current device
-                            if hasattr(batch[key], 'device'):
-                                current_device = batch[key].device
-                                if current_device != self.device:
-                                    logger.info(f"🔧 Moving {key} from {current_device} to {self.device}")
+                            # AGGRESSIVE: Force to GPU if not already there
+                            if batch[key].device != self.device:
+                                logger.warning(f"� {key} on wrong device {batch[key].device}, forcing to {self.device}")
+                                batch[key] = batch[key].to(self.device, non_blocking=True)
                             
-                            # Use non_blocking=True for maximum GPU transfer speed
-                            batch[key] = batch[key].to(
-                                self.device, non_blocking=True)
                             # Simplified finite check that's torch.compile friendly
                             if torch.is_floating_point(batch[key]) and torch.any(torch.isnan(batch[key])):
                                 logger.warning(
@@ -1649,12 +1694,24 @@ class BitMarTrainer:
                                 self.global_step += 1
                                 continue
                     
-                    # CRITICAL: Verify model is on GPU
+                    # 🔥 CRITICAL: Verify model is on GPU before every forward pass
                     model_device = next(self.model.parameters()).device
                     if model_device != self.device:
-                        logger.warning(f"🚨 Model on wrong device! {model_device} != {self.device}")
-                        self.model.to(self.device)
-
+                        logger.error(f"🚨 CRITICAL: Model on wrong device! {model_device} != {self.device}")
+                        logger.error("🔧 FORCING model back to GPU...")
+                        self.model = self.model.to(self.device)
+                        torch.cuda.synchronize()
+                        logger.info(f"✅ Model moved back to {self.device}")
+                    
+                    # 🔥 VERIFY GPU USAGE: Check if we're actually using GPU
+                    if self.global_step % 50 == 0:  # Check every 50 steps
+                        gpu_usage = torch.cuda.utilization(self.device) if hasattr(torch.cuda, 'utilization') else 0
+                        gpu_memory = torch.cuda.memory_allocated(self.device) / 1024**3
+                        logger.info(f"🔥 GPU Status: {gpu_usage}% utilization, {gpu_memory:.1f}GB memory")
+                        
+                        if gpu_memory < 1.0:  # Less than 1GB suggests CPU usage
+                            logger.error("🚨 WARNING: Very low GPU memory usage - might be using CPU!")
+                    
                     # 🧠 ADVANCED 10-EPOCH CONSOLIDATION PHASE-SPECIFIC PROCESSING
                     if consolidation_phase == "episodic_capture":
                         # Phase 1: Foundation & Rapid Episodic Capture (Epochs 0-2)
