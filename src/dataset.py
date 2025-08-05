@@ -20,7 +20,12 @@ try:
     from .token_constrained_dataset import create_token_constrained_data_module
     TOKEN_CONSTRAINED_AVAILABLE = True
 except ImportError:
-    TOKEN_CONSTRAINED_AVAILABLE = False
+    try:
+        # Try importing without relative import
+        from token_constrained_dataset import create_token_constrained_data_module
+        TOKEN_CONSTRAINED_AVAILABLE = True
+    except ImportError:
+        TOKEN_CONSTRAINED_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 

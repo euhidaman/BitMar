@@ -29,6 +29,18 @@ from src.model import create_bitmar_model, count_parameters
 from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
 
+# Try to import token-constrained dataset
+try:
+    from src.token_constrained_dataset import create_token_constrained_data_module
+    TOKEN_CONSTRAINED_AVAILABLE = True
+except ImportError:
+    try:
+        # Try importing without src prefix (in case running from different directory)
+        from token_constrained_dataset import create_token_constrained_data_module
+        TOKEN_CONSTRAINED_AVAILABLE = True
+    except ImportError:
+        TOKEN_CONSTRAINED_AVAILABLE = False
+
 # Try to import optional components
 try:
     from codecarbon import EmissionsTracker
@@ -152,22 +164,34 @@ class TokenAwareTrainer:
         """Setup model and token-constrained data"""
         logger.info("Setting up model and token-constrained data...")
 
-        # Create token-constrained data module
-        self.data_module = create_data_module(self.config['data'])
+        # Check if we should use token-constrained dataset
+        if self.config.get('token_constraints') and TOKEN_CONSTRAINED_AVAILABLE:
+            logger.info("🎯 Using token-constrained dataset for 100M tokens")
+            self.data_module = create_token_constrained_data_module(self.config['data'])
+        else:
+            if self.config.get('token_constraints') and not TOKEN_CONSTRAINED_AVAILABLE:
+                logger.warning("⚠️  Token constraints specified but token-constrained dataset not available")
+            logger.info("📊 Using standard BabyLM dataset")
+            self.data_module = create_data_module(self.config['data'])
+        
         self.data_module.setup()
 
-        # Get and log token statistics
-        token_stats = self.data_module.get_token_statistics()
-        logger.info("📊 Token Statistics:")
-        for key, value in token_stats.items():
-            if isinstance(value, int):
-                logger.info(f"  • {key}: {value:,}")
-            else:
-                logger.info(f"  • {key}: {value}")
+        # Get and log token statistics if available
+        if hasattr(self.data_module, 'get_token_statistics'):
+            token_stats = self.data_module.get_token_statistics()
+            logger.info("📊 Token Statistics:")
+            for key, value in token_stats.items():
+                if isinstance(value, int):
+                    logger.info(f"  • {key}: {value:,}")
+                else:
+                    logger.info(f"  • {key}: {value}")
 
-        # Verify token constraints
-        if token_stats['total_tokens'] != self.target_tokens:
-            logger.warning(f"Token mismatch: Expected {self.target_tokens:,}, got {token_stats['total_tokens']:,}")
+            # Verify token constraints
+            if token_stats['total_tokens'] != self.target_tokens:
+                logger.warning(f"Token mismatch: Expected {self.target_tokens:,}, got {token_stats['total_tokens']:,}")
+        else:
+            logger.warning("⚠️  Token statistics not available - using standard dataset")
+            logger.info(f"Target tokens: {self.target_tokens:,}")
 
         # Create model
         self.model = create_bitmar_model(self.config['model'])
