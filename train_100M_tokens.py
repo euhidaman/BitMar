@@ -13,7 +13,11 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-from torch.cuda.amp import GradScaler, autocast  # Mixed precision training
+from torch.cuda.amp import GradScaler
+try:
+    from torch.amp import autocast  # New PyTorch syntax
+except ImportError:
+    from torch.cuda.amp import autocast  # Fallback for older PyTorch
 import wandb
 from pathlib import Path
 from typing import Dict, Optional
@@ -431,6 +435,18 @@ class TokenAwareTrainer:
         self.model = create_bitmar_model(self.config['model'])
         self.model.to(self.device)
 
+        # Check for NaN parameters after model creation
+        nan_params = []
+        for name, param in self.model.named_parameters():
+            if not torch.isfinite(param).all():
+                nan_params.append(name)
+        
+        if nan_params:
+            logger.error(f"❌ Model contains NaN parameters: {nan_params}")
+            raise RuntimeError(f"Model initialization failed - NaN parameters detected: {nan_params}")
+        else:
+            logger.info("✅ Model parameters initialized successfully (no NaN values)")
+
         # Verify model is on correct device
         logger.info(f"🎮 Device Verification:")
         logger.info(f"  • Model device: {next(self.model.parameters()).device}")
@@ -715,6 +731,22 @@ class TokenAwareTrainer:
                 try:
                     logger.debug(f"Starting forward pass for step {self.global_step}")
                     
+                    # Check inputs for NaN values before forward pass
+                    input_checks = {
+                        'input_ids': batch['input_ids'],
+                        'attention_mask': batch['attention_mask'], 
+                        'vision_features': batch['vision_features'],
+                        'labels': batch['labels']
+                    }
+                    
+                    for input_name, input_tensor in input_checks.items():
+                        if not torch.isfinite(input_tensor).all():
+                            logger.error(f"NaN/Inf detected in {input_name} before forward pass")
+                            logger.error(f"  Shape: {input_tensor.shape}")
+                            logger.error(f"  Non-finite count: {torch.sum(~torch.isfinite(input_tensor)).item()}")
+                            # Skip this batch
+                            raise ValueError(f"Invalid input: {input_name} contains NaN/Inf values")
+                    
                     # Fix dtype consistency for mixed precision
                     if self.use_mixed_precision:
                         # Ensure vision_features are float32 before autocast converts to float16
@@ -723,16 +755,30 @@ class TokenAwareTrainer:
                     
                     # Use mixed precision if enabled
                     if self.use_mixed_precision:
-                        with autocast():
-                            outputs = self.model(
-                                input_ids=batch['input_ids'],
-                                attention_mask=batch['attention_mask'],
-                                vision_features=batch['vision_features'],
-                                labels=batch['labels'],
-                                step=self.global_step,
-                                has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)),
-                                adaptive_controller=self.adaptive_controller
-                            )
+                        try:
+                            # Try new PyTorch syntax first
+                            with autocast('cuda'):
+                                outputs = self.model(
+                                    input_ids=batch['input_ids'],
+                                    attention_mask=batch['attention_mask'],
+                                    vision_features=batch['vision_features'],
+                                    labels=batch['labels'],
+                                    step=self.global_step,
+                                    has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)),
+                                    adaptive_controller=self.adaptive_controller
+                                )
+                        except TypeError:
+                            # Fallback to old syntax for older PyTorch versions
+                            with autocast():
+                                outputs = self.model(
+                                    input_ids=batch['input_ids'],
+                                    attention_mask=batch['attention_mask'],
+                                    vision_features=batch['vision_features'],
+                                    labels=batch['labels'],
+                                    step=self.global_step,
+                                    has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)),
+                                    adaptive_controller=self.adaptive_controller
+                                )
                     else:
                         outputs = self.model(
                             input_ids=batch['input_ids'],
@@ -765,9 +811,26 @@ class TokenAwareTrainer:
 
                 loss = outputs['loss']
 
-                # Check for valid loss
+                # Check for valid loss with enhanced debugging
                 if not torch.isfinite(loss):
-                    logger.warning(f"Invalid loss at step {self.global_step}: {loss.item()}")
+                    logger.error(f"Invalid loss at step {self.global_step}: {loss.item()}")
+                    logger.error(f"Loss type: {type(loss)}, Loss dtype: {loss.dtype}")
+                    
+                    # Log model outputs for debugging
+                    logger.error("Model output debug info:")
+                    for key, value in outputs.items():
+                        if torch.is_tensor(value):
+                            logger.error(f"  {key}: shape={value.shape}, dtype={value.dtype}, finite={torch.isfinite(value).all()}")
+                            if not torch.isfinite(value).all():
+                                logger.error(f"    Non-finite values in {key}: {torch.sum(~torch.isfinite(value)).item()}")
+                    
+                    # Skip this batch to prevent NaN propagation
+                    logger.warning("Skipping batch due to invalid loss")
+                    
+                    # Clear gradients and cache
+                    self.optimizer.zero_grad()
+                    if self.device.type == 'cuda':
+                        torch.cuda.empty_cache()
                     continue
 
                 # Backward pass with mixed precision support
@@ -776,6 +839,21 @@ class TokenAwareTrainer:
                 if self.use_mixed_precision:
                     # Mixed precision backward pass
                     self.scaler.scale(loss).backward()
+                    
+                    # Check for NaN gradients before clipping
+                    has_nan_grad = False
+                    for name, param in self.model.named_parameters():
+                        if param.grad is not None and not torch.isfinite(param.grad).all():
+                            logger.error(f"NaN gradient detected in {name}")
+                            has_nan_grad = True
+                            break
+                    
+                    if has_nan_grad:
+                        logger.error("Skipping optimizer step due to NaN gradients")
+                        self.optimizer.zero_grad()
+                        if self.device.type == 'cuda':
+                            torch.cuda.empty_cache()
+                        continue
                     
                     # Gradient clipping with mixed precision
                     if self.config['training']['gradient_clip_val'] > 0:
@@ -791,6 +869,21 @@ class TokenAwareTrainer:
                 else:
                     # Standard precision backward pass
                     loss.backward()
+                    
+                    # Check for NaN gradients before clipping
+                    has_nan_grad = False
+                    for name, param in self.model.named_parameters():
+                        if param.grad is not None and not torch.isfinite(param.grad).all():
+                            logger.error(f"NaN gradient detected in {name}")
+                            has_nan_grad = True
+                            break
+                    
+                    if has_nan_grad:
+                        logger.error("Skipping optimizer step due to NaN gradients")
+                        self.optimizer.zero_grad()
+                        if self.device.type == 'cuda':
+                            torch.cuda.empty_cache()
+                        continue
                     
                     # Gradient clipping
                     if self.config['training']['gradient_clip_val'] > 0:
