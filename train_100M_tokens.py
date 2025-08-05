@@ -770,6 +770,32 @@ class TokenAwareTrainer:
                         if 'vision_features' in batch:
                             batch['vision_features'] = batch['vision_features'].float()
                     
+                # Enhanced forward pass with detailed debugging
+                try:
+                    # Add detailed tensor debugging
+                    logger.debug(f"Forward pass debug info for step {self.global_step}:")
+                    logger.debug(f"  • input_ids shape: {batch['input_ids'].shape}")
+                    logger.debug(f"  • attention_mask shape: {batch['attention_mask'].shape}")
+                    logger.debug(f"  • vision_features shape: {batch['vision_features'].shape}")
+                    logger.debug(f"  • labels shape: {batch['labels'].shape}")
+                    
+                    # Check vision features dimensions
+                    if batch['vision_features'].dim() != 2:
+                        logger.error(f"ERROR: Vision features has wrong dimensions!")
+                        logger.error(f"  • Expected: [batch_size, 768]")
+                        logger.error(f"  • Got: {batch['vision_features'].shape}")
+                        # Fix the dimension issue
+                        batch['vision_features'] = batch['vision_features'].view(batch['vision_features'].size(0), -1)
+                        if batch['vision_features'].size(-1) != 768:
+                            # Pad or truncate to 768
+                            if batch['vision_features'].size(-1) > 768:
+                                batch['vision_features'] = batch['vision_features'][:, :768]
+                            else:
+                                padding = torch.zeros(batch['vision_features'].size(0), 768 - batch['vision_features'].size(-1), 
+                                                    device=batch['vision_features'].device, dtype=batch['vision_features'].dtype)
+                                batch['vision_features'] = torch.cat([batch['vision_features'], padding], dim=-1)
+                        logger.debug(f"  • Fixed vision_features shape: {batch['vision_features'].shape}")
+                    
                     # Use mixed precision if enabled
                     if self.use_mixed_precision:
                         try:
@@ -813,6 +839,11 @@ class TokenAwareTrainer:
                     logger.error(f"Error type: {type(forward_error).__name__}")
                     logger.error(f"Error details: {str(forward_error)}")
                     
+                    # Enhanced debugging info
+                    import traceback
+                    logger.error("Full traceback:")
+                    logger.error(traceback.format_exc())
+                    
                     # Log model architecture info for debugging
                     logger.error(f"Model architecture details:")
                     if hasattr(self.model, 'text_encoder'):
@@ -824,9 +855,7 @@ class TokenAwareTrainer:
                     if hasattr(self.model, 'memory'):
                         logger.error(f"  • Memory episode dim: {self.model.memory.episode_dim}")
                     
-                    raise forward_error
-
-                loss = outputs['loss']
+                    raise forward_error                loss = outputs['loss']
 
                 # Check for valid loss with enhanced debugging
                 if not torch.isfinite(loss):
