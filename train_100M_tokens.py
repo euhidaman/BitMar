@@ -19,6 +19,7 @@ from typing import Dict, Optional
 import numpy as np
 from tqdm import tqdm
 import time
+import traceback
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
@@ -74,13 +75,41 @@ class TokenAwareTrainer:
 
     def __init__(self, config_path: str, device: Optional[str] = None):
         """Initialize trainer with token awareness"""
-        # Load configuration
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+        # Load configuration with validation
+        try:
+            with open(config_path, 'r') as f:
+                self.config = yaml.safe_load(f)
+            
+            # Validate required config sections
+            required_sections = ['token_constraints', 'model', 'data', 'training', 'output']
+            for section in required_sections:
+                if section not in self.config:
+                    raise ValueError(f"Missing required config section: {section}")
+                    
+            logger.info(f"Configuration loaded successfully from {config_path}")
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        except yaml.YAMLError as e:
+            raise ValueError(f"Invalid YAML in config file: {e}")
+        except Exception as e:
+            raise ValueError(f"Failed to load config: {e}")
 
-        # Set device
+        # Set device with better error handling
         if device:
-            self.device = torch.device(device)
+            try:
+                self.device = torch.device(device)
+                # Test if device is available
+                if device.startswith('cuda'):
+                    if not torch.cuda.is_available():
+                        logger.warning(f"CUDA not available, falling back to CPU")
+                        self.device = torch.device("cpu")
+                    elif device != "cuda:0" and not torch.cuda.device_count() > int(device.split(':')[1]):
+                        logger.warning(f"Device {device} not available, using cuda:0")
+                        self.device = torch.device("cuda:0")
+                logger.info(f"Using device: {self.device}")
+            except Exception as e:
+                logger.warning(f"Failed to set device {device}: {e}, using default")
+                self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -205,7 +234,9 @@ class TokenAwareTrainer:
 
         # Log model info
         param_count = count_parameters(self.model)
-        logger.info(f"Model parameters: {param_count:,}")
+        logger.info(f"Model created with {param_count['total_parameters']:,} total parameters")
+        logger.info(f"Trainable parameters: {param_count['trainable_parameters']:,}")
+        logger.info(f"Non-trainable parameters: {param_count['non_trainable_parameters']:,}")
 
         # Setup optimizer with token-aware configuration
         self.setup_optimizer()
@@ -291,12 +322,17 @@ class TokenAwareTrainer:
         logger.info(f"🎯 Tokens processed so far: {self.tokens_processed:,}")
         logger.info(f"   Dataset size: {self.target_tokens:,} tokens")
         
-        # Log to wandb
+        # Log to wandb with error handling
         if self.use_wandb:
-            wandb.log({
-                'token_progress/processed': self.tokens_processed,
-                'token_progress/target': self.target_tokens
-            }, step=self.global_step)
+            try:
+                wandb.log({
+                    'token_progress/processed': self.tokens_processed,
+                    'token_progress/target': self.target_tokens
+                }, step=self.global_step)
+            except Exception as e:
+                logger.warning(f"Failed to log to wandb: {e}")
+                # Disable wandb if it keeps failing
+                self.use_wandb = False
 
     def save_token_checkpoint(self):
         """Save checkpoint with token information"""
@@ -418,10 +454,21 @@ class TokenAwareTrainer:
                         'step': self.global_step
                     }
                     
+                    # Only add similarity if it was computed
                     if outputs.get('text_features') is not None and outputs.get('vision_latent') is not None:
-                        log_dict['train/cross_modal_similarity'] = similarity
+                        try:
+                            current_similarity = self._compute_cross_modal_similarity(
+                                outputs['text_features'], outputs['vision_latent']
+                            )
+                            log_dict['train/cross_modal_similarity'] = current_similarity
+                        except Exception as e:
+                            logger.warning(f"Failed to compute similarity for wandb: {e}")
 
-                    wandb.log(log_dict, step=self.global_step)
+                    try:
+                        wandb.log(log_dict, step=self.global_step)
+                    except Exception as e:
+                        logger.warning(f"Failed to log to wandb during training: {e}")
+                        self.use_wandb = False
 
                 self.global_step += 1
 
@@ -431,6 +478,15 @@ class TokenAwareTrainer:
 
             except Exception as e:
                 logger.error(f"Training step failed: {e}")
+                
+                # Clear any gradients and free memory
+                if hasattr(self, 'optimizer'):
+                    self.optimizer.zero_grad()
+                
+                # Clear CUDA cache if using GPU
+                if self.device.type == 'cuda':
+                    torch.cuda.empty_cache()
+                
                 continue
 
         # Calculate epoch metrics
@@ -489,15 +545,19 @@ class TokenAwareTrainer:
                 # Save checkpoint after each epoch
                 self.save_token_checkpoint()
 
-                # Log epoch summary to wandb
+                # Log epoch summary to wandb with error handling
                 if self.use_wandb:
-                    wandb.log({
-                        'epoch/train_loss': epoch_metrics['train_loss'],
-                        'epoch/cross_modal_similarity': epoch_metrics['cross_modal_similarity'],
-                        'epoch/tokens_processed': self.tokens_processed,
-                        'epoch/tokens_in_epoch': epoch_metrics['tokens_in_epoch'],
-                        'epoch/number': epoch
-                    }, step=self.global_step)
+                    try:
+                        wandb.log({
+                            'epoch/train_loss': epoch_metrics['train_loss'],
+                            'epoch/cross_modal_similarity': epoch_metrics['cross_modal_similarity'],
+                            'epoch/tokens_processed': self.tokens_processed,
+                            'epoch/tokens_in_epoch': epoch_metrics['tokens_in_epoch'],
+                            'epoch/number': epoch
+                        }, step=self.global_step)
+                    except Exception as e:
+                        logger.warning(f"Failed to log epoch summary to wandb: {e}")
+                        self.use_wandb = False
 
                 # Continue training for all epochs (no token limit stopping)
 
@@ -523,7 +583,10 @@ class TokenAwareTrainer:
             logger.info(f"  • Best cross-modal similarity: {self.best_similarity:.4f}")
 
             if self.use_wandb:
-                wandb.finish()
+                try:
+                    wandb.finish()
+                except Exception as e:
+                    logger.warning(f"Failed to finish wandb run: {e}")
 
 
 def main():
@@ -548,7 +611,6 @@ def main():
         
     except Exception as e:
         logger.error(f"Training failed: {e}")
-        import traceback
         traceback.print_exc()
         sys.exit(1)
 
