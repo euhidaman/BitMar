@@ -460,14 +460,22 @@ class EpisodicMemory(nn.Module):
                     # Get LRU indices for this chunk
                     _, chunk_lru_indices = self.memory_age.topk(chunk_size, largest=False)
 
-                    # Update memory slots
-                    self.memory[chunk_lru_indices] = episode[i:end_idx].detach()
+                    # Update memory slots with dtype consistency
+                    episode_data = episode[i:end_idx].detach()
+                    # Ensure same dtype as memory buffer
+                    if episode_data.dtype != self.memory.dtype:
+                        episode_data = episode_data.to(self.memory.dtype)
+                    self.memory[chunk_lru_indices] = episode_data
                     self.memory_age[chunk_lru_indices] = self.memory_age.max() + 1 + i
                     self.memory_usage[chunk_lru_indices] += 1
             else:
                 # Normal case: batch_size <= memory_size
-                # Update memory slots
-                self.memory[lru_indices] = episode[:k].detach()
+                # Update memory slots with dtype consistency
+                episode_data = episode[:k].detach()
+                # Ensure same dtype as memory buffer
+                if episode_data.dtype != self.memory.dtype:
+                    episode_data = episode_data.to(self.memory.dtype)
+                self.memory[lru_indices] = episode_data
                 self.memory_age[lru_indices] = self.memory_age.max() + 1
                 self.memory_usage[lru_indices] += 1
 
@@ -496,9 +504,12 @@ class EpisodicMemory(nn.Module):
         # [batch_size, episode_dim]
         retrieved = torch.matmul(attention_weights, v)
 
-        # Update memory access statistics
-        access_counts = attention_weights.sum(0)
-        self.memory_usage += access_counts.detach()
+        # Update memory access statistics with dtype consistency
+        access_counts = attention_weights.sum(0).detach()
+        # Ensure same dtype as memory_usage buffer
+        if access_counts.dtype != self.memory_usage.dtype:
+            access_counts = access_counts.to(self.memory_usage.dtype)
+        self.memory_usage += access_counts
 
         return retrieved, attention_weights
 

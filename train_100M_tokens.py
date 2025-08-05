@@ -680,21 +680,24 @@ class TokenAwareTrainer:
                                 ], dim=1)
                         logger.debug(f"Normalized vision features: {batch['vision_features'].shape}")
                 
-                # Validate final tensor dimensions
+                # Validate final tensor dimensions (use actual batch size)
+                actual_batch_size = batch['input_ids'].size(0)
                 expected_shapes = {
-                    'input_ids': (32, 256),
-                    'attention_mask': (32, 256), 
-                    'labels': (32, 256),
-                    'vision_features': (32, 768),
-                    'has_vision': (32,),
-                    'vision_index': (32,)
+                    'input_ids': (actual_batch_size, 256),
+                    'attention_mask': (actual_batch_size, 256), 
+                    'labels': (actual_batch_size, 256),
+                    'vision_features': (actual_batch_size, 768),
+                    'has_vision': (actual_batch_size,),
+                    'vision_index': (actual_batch_size,)
                 }
                 
                 for key, expected_shape in expected_shapes.items():
                     if key in batch and torch.is_tensor(batch[key]):
                         actual_shape = batch[key].shape
                         if actual_shape != expected_shape:
-                            logger.warning(f"Unexpected {key} shape: {actual_shape}, expected: {expected_shape}")
+                            # Only log for shape mismatches that aren't just batch size differences
+                            if len(actual_shape) > 1 and actual_shape[1:] != expected_shape[1:]:
+                                logger.warning(f"Unexpected {key} shape: {actual_shape}, expected: {expected_shape}")
                             # Try to fix common issues
                             if key == 'vision_features' and len(actual_shape) == 2 and actual_shape[1] != 768:
                                 if actual_shape[1] > 768:
@@ -712,6 +715,12 @@ class TokenAwareTrainer:
                 try:
                     logger.debug(f"Starting forward pass for step {self.global_step}")
                     
+                    # Fix dtype consistency for mixed precision
+                    if self.use_mixed_precision:
+                        # Ensure vision_features are float32 before autocast converts to float16
+                        if 'vision_features' in batch:
+                            batch['vision_features'] = batch['vision_features'].float()
+                    
                     # Use mixed precision if enabled
                     if self.use_mixed_precision:
                         with autocast():
@@ -721,7 +730,7 @@ class TokenAwareTrainer:
                                 vision_features=batch['vision_features'],
                                 labels=batch['labels'],
                                 step=self.global_step,
-                                has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool)),
+                                has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)),
                                 adaptive_controller=self.adaptive_controller
                             )
                     else:
@@ -731,7 +740,7 @@ class TokenAwareTrainer:
                             vision_features=batch['vision_features'],
                             labels=batch['labels'],
                             step=self.global_step,
-                            has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool)),
+                            has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)),
                             adaptive_controller=self.adaptive_controller
                         )
                     
