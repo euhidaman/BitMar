@@ -76,7 +76,7 @@ data:
   token_counting_method: "gpt2" # Use GPT-2 tokenizer for counting
 
   # DataLoader settings (Optimized for balanced training)
-  batch_size: 64 # Balanced batch size
+  batch_size: 32 # Balanced batch size
   num_workers: 6 # Efficient data loading
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
