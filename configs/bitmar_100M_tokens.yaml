@@ -16,20 +16,20 @@ model:
 
   # Vision processing (Balanced compression)
   vision_encoder_dim: 768 # DiNOv2 input (fixed)
-  vision_latent_size: 64 # Balanced compression (768 -> 64, 12x reduction)
-  vision_hidden_size: 32 # Intermediate processing
+  vision_latent_size: 128 # Match text encoder dim for consistency
+  vision_hidden_size: 64 # Intermediate processing
   vision_compression_method: "learned_compression" # Best for cross-modal alignment
   vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
   vision_pool_size: 2 # 2x2 pooling
 
   # Cross-modal fusion (Balanced for 100M tokens)
-  fusion_hidden_size: 64 # Match vision latent size
+  fusion_hidden_size: 128 # Match text encoder dim for consistency
   fusion_num_heads: 4 # More heads for better alignment
   fusion_num_layers: 2 # Deeper fusion for understanding
 
   # Episodic Memory (Optimized for 100M tokens)
   memory_size: 32 # 32 memory slots for balanced storage
-  episode_dim: 64 # Match fusion dimension
+  episode_dim: 128 # Match fusion dimension for consistency
   memory_alpha: 0.2 # Balanced adaptation rate
   direct_writing: true
   memory_compression: true # Enable memory compression
