@@ -34,10 +34,8 @@ class BitNetLinear(nn.Module):
 
     def quantize_weights_1_58_bit(self, weight: torch.Tensor) -> torch.Tensor:
         """BitNet b1.58 weight quantization: {-1, 0, +1} with NaN safety"""
-        # Check for NaN inputs
-        if not torch.isfinite(weight).all():
-            # Replace NaN with small random values
-            weight = torch.where(torch.isfinite(weight), weight, torch.randn_like(weight) * 0.01)
+        # Replace NaN with small random values (compilation-friendly)
+        weight = torch.where(torch.isfinite(weight), weight, torch.randn_like(weight) * 0.01)
         
         # Compute scaling factor with numerical stability
         scale = weight.abs().mean() + 1e-8  # Add epsilon to prevent zero scale
@@ -46,9 +44,8 @@ class BitNetLinear(nn.Module):
         # Normalize weights with gradient clipping
         weight_norm = torch.clamp(weight / self.weight_scale, min=-10.0, max=10.0)
         
-        # Check for NaN after normalization
-        if not torch.isfinite(weight_norm).all():
-            weight_norm = torch.where(torch.isfinite(weight_norm), weight_norm, torch.zeros_like(weight_norm))
+        # Check for NaN after normalization (compilation-friendly)
+        weight_norm = torch.where(torch.isfinite(weight_norm), weight_norm, torch.zeros_like(weight_norm))
 
         # 1.58-bit quantization with threshold
         threshold = 2.0 / 3.0  # Optimal threshold for ternary quantization
@@ -63,9 +60,8 @@ class BitNetLinear(nn.Module):
 
     def quantize_activations_8bit(self, x: torch.Tensor) -> torch.Tensor:
         """8-bit activation quantization with enhanced numerical stability"""
-        # Check for NaN inputs first
-        if not torch.isfinite(x).all():
-            x = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
+        # Replace NaN inputs first (compilation-friendly)
+        x = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
         
         # Clamp extreme values to prevent overflow
         x_clamped = torch.clamp(x, min=-1e6, max=1e6)
@@ -73,10 +69,9 @@ class BitNetLinear(nn.Module):
         # Compute quantization parameters
         x_min, x_max = x_clamped.min(), x_clamped.max()
 
-        # Prevent division by zero
+        # Prevent division by zero with conditional tensor operation
         range_val = x_max - x_min
-        if range_val < 1e-8:
-            return x_clamped
+        range_val = torch.where(range_val < 1e-8, torch.tensor(1e-8, device=x.device, dtype=x.dtype), range_val)
 
         scale = range_val / 255.0 + 1e-8  # Add epsilon for safety
         self.input_scale.data = scale.clamp(min=1e-8, max=1e3)
@@ -88,58 +83,50 @@ class BitNetLinear(nn.Module):
         # Dequantize with NaN safety
         dequantized = scale * (quantized - zero_point)
         
-        # Final NaN check
-        if not torch.isfinite(dequantized).all():
-            dequantized = torch.where(torch.isfinite(dequantized), dequantized, x_clamped)
+        # Final NaN check (compilation-friendly)
+        dequantized = torch.where(torch.isfinite(dequantized), dequantized, x_clamped)
         
         return dequantized
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Check for NaN inputs
-        if not torch.isfinite(x).all():
-            # Replace NaN/Inf values with zeros to prevent propagation
-            x = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
+        # Replace NaN/Inf values with zeros (compilation-friendly)
+        x = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
         
         if self.training:
             # Full precision training with straight-through estimator
             # Forward pass with quantized weights but gradients flow through original weights
             weight_q = self.quantize_weights_1_58_bit(self.weight)
             
-            # Check for NaN in weight scale
-            if not torch.isfinite(self.weight_scale).all():
-                self.weight_scale.data = torch.where(
-                    torch.isfinite(self.weight_scale.data), 
-                    self.weight_scale.data, 
-                    torch.ones_like(self.weight_scale.data)
-                )
+            # Ensure weight scale is finite (compilation-friendly)
+            self.weight_scale.data = torch.where(
+                torch.isfinite(self.weight_scale.data), 
+                self.weight_scale.data, 
+                torch.ones_like(self.weight_scale.data)
+            )
             
             weight_forward = weight_q * self.weight_scale
 
             # Use original weight for gradient computation with safety check
             weight_diff = self.weight - self.weight.detach()
-            if not torch.isfinite(weight_diff).all():
-                weight_diff = torch.zeros_like(weight_diff)
+            weight_diff = torch.where(torch.isfinite(weight_diff), weight_diff, torch.zeros_like(weight_diff))
             
             weight_forward = weight_forward + weight_diff
             
-            # Final safety check on weight_forward
-            if not torch.isfinite(weight_forward).all():
-                weight_forward = torch.where(
-                    torch.isfinite(weight_forward), 
-                    weight_forward, 
-                    torch.randn_like(weight_forward) * 0.01
-                )
+            # Final safety check on weight_forward (compilation-friendly)
+            weight_forward = torch.where(
+                torch.isfinite(weight_forward), 
+                weight_forward, 
+                torch.randn_like(weight_forward) * 0.01
+            )
 
             result = F.linear(x, weight_forward, self.bias)
             
-            # Check output for NaN values
-            if not torch.isfinite(result).all():
-                # Replace NaN with small random values
-                result = torch.where(
-                    torch.isfinite(result), 
-                    result, 
-                    torch.randn_like(result) * 0.01
-                )
+            # Replace NaN with small random values (compilation-friendly)
+            result = torch.where(
+                torch.isfinite(result), 
+                result, 
+                torch.randn_like(result) * 0.01
+            )
             
             return result
         else:
@@ -149,13 +136,12 @@ class BitNetLinear(nn.Module):
             x_q = self.quantize_activations_8bit(x)
             result = F.linear(x_q, weight_q, self.bias)
             
-            # Safety check for inference
-            if not torch.isfinite(result).all():
-                result = torch.where(
-                    torch.isfinite(result), 
-                    result, 
-                    torch.zeros_like(result)
-                )
+            # Safety check for inference (compilation-friendly)
+            result = torch.where(
+                torch.isfinite(result), 
+                result, 
+                torch.zeros_like(result)
+            )
                 
             return result
 
@@ -508,19 +494,20 @@ class EpisodicMemory(nn.Module):
         """Write episode to memory with NaN safety"""
         batch_size = episode.size(0)
 
-        # Check for NaN in input episode
-        if not torch.isfinite(episode).all():
-            episode = torch.where(torch.isfinite(episode), episode, torch.zeros_like(episode))
+        # Replace NaN in input episode (compilation-friendly)
+        episode = torch.where(torch.isfinite(episode), episode, torch.zeros_like(episode))
 
         if self.direct_writing:
             # Direct writing: find least recently used slots
             # Ensure we don't request more indices than available memory slots
             k = min(batch_size, self.memory_size)
             
-            # Check for NaN in memory_age before topk
-            if not torch.isfinite(self.memory_age).all():
-                # Reset memory age if corrupted
-                self.memory_age.data = torch.arange(self.memory_size, dtype=self.memory_age.dtype, device=self.memory_age.device)
+            # Ensure memory_age is finite (compilation-friendly)
+            self.memory_age.data = torch.where(
+                torch.isfinite(self.memory_age.data),
+                self.memory_age.data,
+                torch.arange(self.memory_size, dtype=self.memory_age.dtype, device=self.memory_age.device)
+            )
             
             _, lru_indices = self.memory_age.topk(k, largest=False)
 
@@ -540,20 +527,22 @@ class EpisodicMemory(nn.Module):
                     if episode_data.dtype != self.memory.dtype:
                         episode_data = episode_data.to(self.memory.dtype)
                     
-                    # Check for NaN in episode data
-                    if not torch.isfinite(episode_data).all():
-                        episode_data = torch.where(
-                            torch.isfinite(episode_data), 
-                            episode_data, 
-                            torch.randn_like(episode_data) * 0.01
-                        )
+                    # Replace NaN in episode data (compilation-friendly)
+                    episode_data = torch.where(
+                        torch.isfinite(episode_data), 
+                        episode_data, 
+                        torch.randn_like(episode_data) * 0.01
+                    )
                     
                     self.memory[chunk_lru_indices] = episode_data
                     
-                    # Update age with safety
+                    # Update age with safety (compilation-friendly)
                     max_age = self.memory_age.max()
-                    if not torch.isfinite(max_age):
-                        max_age = torch.tensor(0.0, device=self.memory_age.device)
+                    max_age = torch.where(
+                        torch.isfinite(max_age),
+                        max_age,
+                        torch.tensor(0.0, device=self.memory_age.device)
+                    )
                     self.memory_age[chunk_lru_indices] = max_age + 1 + i
                     self.memory_usage[chunk_lru_indices] += 1
             else:
@@ -564,20 +553,22 @@ class EpisodicMemory(nn.Module):
                 if episode_data.dtype != self.memory.dtype:
                     episode_data = episode_data.to(self.memory.dtype)
                 
-                # Check for NaN in episode data
-                if not torch.isfinite(episode_data).all():
-                    episode_data = torch.where(
-                        torch.isfinite(episode_data), 
-                        episode_data, 
-                        torch.randn_like(episode_data) * 0.01
-                    )
+                # Replace NaN in episode data (compilation-friendly)
+                episode_data = torch.where(
+                    torch.isfinite(episode_data), 
+                    episode_data, 
+                    torch.randn_like(episode_data) * 0.01
+                )
                 
                 self.memory[lru_indices] = episode_data
                 
-                # Update age with safety
+                # Update age with safety (compilation-friendly)
                 max_age = self.memory_age.max()
-                if not torch.isfinite(max_age):
-                    max_age = torch.tensor(0.0, device=self.memory_age.device)
+                max_age = torch.where(
+                    torch.isfinite(max_age),
+                    max_age,
+                    torch.tensor(0.0, device=self.memory_age.device)
+                )
                 self.memory_age[lru_indices] = max_age + 1
                 self.memory_usage[lru_indices] += 1
 
@@ -591,9 +582,8 @@ class EpisodicMemory(nn.Module):
         if query.size(-1) != self.episode_dim:
             raise ValueError(f"Query dimension {query.size(-1)} doesn't match memory episode_dim {self.episode_dim}")
 
-        # Check for NaN in input query
-        if not torch.isfinite(query).all():
-            query = torch.where(torch.isfinite(query), query, torch.zeros_like(query))
+        # Replace NaN in input query (compilation-friendly)
+        query = torch.where(torch.isfinite(query), query, torch.zeros_like(query))
 
         # Check if memory is properly initialized (not all zeros)
         if self.memory.abs().sum() < 1e-8:
@@ -605,47 +595,45 @@ class EpisodicMemory(nn.Module):
         k = self.key_net(self.memory)  # [memory_size, episode_dim]
         v = self.value_net(self.memory)  # [memory_size, episode_dim]
 
-        # Check for NaN in query/key/value projections
-        if not torch.isfinite(q).all():
-            q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
-        if not torch.isfinite(k).all():
-            k = torch.where(torch.isfinite(k), k, torch.randn_like(k) * 0.01)
-        if not torch.isfinite(v).all():
-            v = torch.where(torch.isfinite(v), v, torch.randn_like(v) * 0.01)
+        # Replace NaN in query/key/value projections (compilation-friendly)
+        q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
+        k = torch.where(torch.isfinite(k), k, torch.randn_like(k) * 0.01)
+        v = torch.where(torch.isfinite(v), v, torch.randn_like(v) * 0.01)
 
         # Attention scores with numerical stability
         scale = math.sqrt(self.episode_dim) + 1e-8  # Add epsilon to prevent division by zero
         attention_scores = torch.matmul(q, k.transpose(0, 1)) / scale
         
         # [batch_size, memory_size]
-        # Check for NaN in attention scores
-        if not torch.isfinite(attention_scores).all():
-            attention_scores = torch.where(
-                torch.isfinite(attention_scores), 
-                attention_scores, 
-                torch.zeros_like(attention_scores)
-            )
+        # Replace NaN in attention scores (compilation-friendly)
+        attention_scores = torch.where(
+            torch.isfinite(attention_scores), 
+            attention_scores, 
+            torch.zeros_like(attention_scores)
+        )
         
         # Softmax with numerical stability
         attention_scores = torch.clamp(attention_scores, min=-50, max=50)  # Prevent overflow
         attention_weights = F.softmax(attention_scores, dim=-1)
 
-        # Check for NaN in attention weights
-        if not torch.isfinite(attention_weights).all():
-            # Fallback to uniform attention
-            attention_weights = torch.ones_like(attention_weights) / attention_weights.size(-1)
+        # Replace NaN in attention weights (compilation-friendly)
+        uniform_weights = torch.ones_like(attention_weights) / attention_weights.size(-1)
+        attention_weights = torch.where(
+            torch.isfinite(attention_weights), 
+            attention_weights, 
+            uniform_weights
+        )
 
         # Weighted memory retrieval
         # [batch_size, episode_dim]
         retrieved = torch.matmul(attention_weights, v)
 
-        # Check for NaN in retrieved memory
-        if not torch.isfinite(retrieved).all():
-            retrieved = torch.where(
-                torch.isfinite(retrieved), 
-                retrieved, 
-                torch.zeros_like(retrieved)
-            )
+        # Replace NaN in retrieved memory (compilation-friendly)
+        retrieved = torch.where(
+            torch.isfinite(retrieved), 
+            retrieved, 
+            torch.zeros_like(retrieved)
+        )
 
         # Update memory access statistics with dtype consistency
         access_counts = attention_weights.sum(0).detach()
@@ -653,13 +641,12 @@ class EpisodicMemory(nn.Module):
         if access_counts.dtype != self.memory_usage.dtype:
             access_counts = access_counts.to(self.memory_usage.dtype)
         
-        # Check for NaN in access counts
-        if not torch.isfinite(access_counts).all():
-            access_counts = torch.where(
-                torch.isfinite(access_counts), 
-                access_counts, 
-                torch.zeros_like(access_counts)
-            )
+        # Replace NaN in access counts (compilation-friendly)
+        access_counts = torch.where(
+            torch.isfinite(access_counts), 
+            access_counts, 
+            torch.zeros_like(access_counts)
+        )
         
         self.memory_usage += access_counts
 
