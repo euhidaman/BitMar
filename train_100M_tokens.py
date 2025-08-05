@@ -394,6 +394,7 @@ class TokenAwareTrainer:
             num_workers = getattr(self.data_module, 'num_workers', self.config['data']['num_workers'])
             pin_memory = getattr(self.data_module, 'pin_memory', self.config['data'].get('pin_memory', True))
             persistent_workers = getattr(self.data_module, 'persistent_workers', self.config['data'].get('persistent_workers', True))
+            prefetch_factor = getattr(self.data_module, 'prefetch_factor', self.config['data'].get('prefetch_factor', 2))
             
             return DataLoader(
                 dataset,
@@ -402,6 +403,7 @@ class TokenAwareTrainer:
                 num_workers=num_workers,
                 pin_memory=pin_memory,
                 persistent_workers=persistent_workers if num_workers > 0 else False,
+                prefetch_factor=prefetch_factor if num_workers > 0 else None,
                 drop_last=True,
                 collate_fn=self.custom_collate_fn
             )
@@ -472,6 +474,15 @@ class TokenAwareTrainer:
         logger.info(f"Trainable parameters: {param_count['trainable_parameters']:,}")
         logger.info(f"Non-trainable parameters: {param_count['non_trainable_parameters']:,}")
 
+        # Compile model for better performance (PyTorch 2.0+)
+        if self.config['training'].get('compile_model', False) and hasattr(torch, 'compile'):
+            try:
+                logger.info("🚀 Converting model for PyTorch compilation...")
+                self.model = torch.compile(self.model, mode='reduce-overhead')
+                logger.info("✅ Model compiled successfully for better performance")
+            except Exception as e:
+                logger.warning(f"Failed to compile model: {e}")
+
         # Setup optimizer with token-aware configuration
         self.setup_optimizer()
 
@@ -504,14 +515,20 @@ class TokenAwareTrainer:
         logger.info(f"  • Estimated avg tokens per batch: {avg_tokens_per_batch}")
         logger.info(f"  • Estimated total steps: {estimated_total_steps}")
 
-        # Create optimizer
+        # Create optimizer with fused option for better GPU utilization
+        use_fused = self.config['training'].get('use_fused_adam', False) and self.device.type == 'cuda'
+        
         self.optimizer = AdamW(
             self.model.parameters(),
             lr=self.config['training']['learning_rate'],
             weight_decay=self.config['training']['weight_decay'],
             betas=(0.9, 0.999),
-            eps=1e-8
+            eps=1e-8,
+            fused=use_fused  # Enable fused AdamW for CUDA
         )
+        
+        if use_fused:
+            logger.info("✅ Using fused AdamW for better GPU utilization")
 
         # Create scheduler with restarts
         scheduler_config = self.config['training'].get('scheduler_config', {})

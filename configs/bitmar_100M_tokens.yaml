@@ -76,10 +76,11 @@ data:
   token_counting_method: "gpt2" # Use GPT-2 tokenizer for counting
   
   # DataLoader settings (Optimized for large GPU memory - 49GB available)
-  batch_size: 128 # Increased from 32 to utilize more GPU memory
-  num_workers: 8 # Increased for better data loading
+  batch_size: 256 # Increased to better utilize 49GB GPU memory
+  num_workers: 12 # Increased for better data loading parallelism  
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
+  prefetch_factor: 4 # Prefetch more batches for better GPU utilization
   
   # Data mixing strategy (STRICT ALIGNMENT REQUIRED)
   mix_ratio: 0.5 # 50% captions (with images), 50% text-only
@@ -115,21 +116,22 @@ adaptive_training:
   similarity_smoothing_alpha: 0.15 # EMA smoothing for similarity
 
 training:
-  # Training configuration (Train on 100M token dataset for up to 10 epochs)
+  # Training configuration (Optimized for RTX A6000 49GB)
   max_epochs: 10 # Maximum 10 epochs as requested
-  accumulate_grad_batches: 4 # Simulate larger batch size
-  gradient_clip_val: 0.3 # Balanced gradient clipping
-  val_check_interval: 2000 # Check progress regularly
+  accumulate_grad_batches: 1 # Remove gradient accumulation for faster training
+  gradient_clip_val: 1.0 # Increase clip value for larger batches
+  val_check_interval: 1000 # Check progress more frequently
   scheduler: "cosine_with_restarts" # Cosine with restarts for better convergence
   min_lr: 0.00005 # Reasonable minimum learning rate
-  warmup_steps: 1000 # Proper warmup for stability
-  learning_rate: 0.0002 # Balanced learning rate for 100M tokens
-  weight_decay: 0.02 # Balanced regularization
+  warmup_steps: 500 # Reduce warmup steps for faster start
+  learning_rate: 0.0003 # Slightly higher LR for larger batches
+  weight_decay: 0.01 # Reduce weight decay for faster training
   optimizer: "adamw" # Stable optimizer choice
   
-  # Performance optimizations
+  # Performance optimizations (Enhanced for A6000)
   mixed_precision: true # Enable mixed precision for ~2x speedup
-  compile_model: false # PyTorch 2.0 compilation (experimental)
+  compile_model: true # Enable PyTorch 2.0 compilation for A6000
+  use_fused_adam: true # Use fused AdamW for better GPU utilization
   
   # Scheduler configuration
   scheduler_config:

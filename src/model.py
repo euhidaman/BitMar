@@ -494,9 +494,9 @@ class EpisodicMemory(nn.Module):
         self.direct_writing = direct_writing
         self.observation_noise_std = observation_noise_std
 
-        # Memory storage
-        self.register_buffer('memory', torch.zeros(memory_size, episode_dim))
-        self.register_buffer('memory_age', torch.zeros(memory_size))
+        # Memory storage - initialize with small random values instead of zeros
+        self.register_buffer('memory', torch.randn(memory_size, episode_dim) * 0.01)
+        self.register_buffer('memory_age', torch.arange(memory_size, dtype=torch.float32))
         self.register_buffer('memory_usage', torch.zeros(memory_size))
 
         # Memory access networks
@@ -505,13 +505,23 @@ class EpisodicMemory(nn.Module):
         self.value_net = BitNetLinear(episode_dim, episode_dim)
 
     def write_memory(self, episode: torch.Tensor) -> torch.Tensor:
-        """Write episode to memory"""
+        """Write episode to memory with NaN safety"""
         batch_size = episode.size(0)
+
+        # Check for NaN in input episode
+        if not torch.isfinite(episode).all():
+            episode = torch.where(torch.isfinite(episode), episode, torch.zeros_like(episode))
 
         if self.direct_writing:
             # Direct writing: find least recently used slots
             # Ensure we don't request more indices than available memory slots
             k = min(batch_size, self.memory_size)
+            
+            # Check for NaN in memory_age before topk
+            if not torch.isfinite(self.memory_age).all():
+                # Reset memory age if corrupted
+                self.memory_age.data = torch.arange(self.memory_size, dtype=self.memory_age.dtype, device=self.memory_age.device)
+            
             _, lru_indices = self.memory_age.topk(k, largest=False)
 
             # If batch_size > memory_size, we need to handle multiple batches
@@ -524,55 +534,133 @@ class EpisodicMemory(nn.Module):
                     # Get LRU indices for this chunk
                     _, chunk_lru_indices = self.memory_age.topk(chunk_size, largest=False)
 
-                    # Update memory slots with dtype consistency
+                    # Update memory slots with dtype consistency and NaN safety
                     episode_data = episode[i:end_idx].detach()
                     # Ensure same dtype as memory buffer
                     if episode_data.dtype != self.memory.dtype:
                         episode_data = episode_data.to(self.memory.dtype)
+                    
+                    # Check for NaN in episode data
+                    if not torch.isfinite(episode_data).all():
+                        episode_data = torch.where(
+                            torch.isfinite(episode_data), 
+                            episode_data, 
+                            torch.randn_like(episode_data) * 0.01
+                        )
+                    
                     self.memory[chunk_lru_indices] = episode_data
-                    self.memory_age[chunk_lru_indices] = self.memory_age.max() + 1 + i
+                    
+                    # Update age with safety
+                    max_age = self.memory_age.max()
+                    if not torch.isfinite(max_age):
+                        max_age = torch.tensor(0.0, device=self.memory_age.device)
+                    self.memory_age[chunk_lru_indices] = max_age + 1 + i
                     self.memory_usage[chunk_lru_indices] += 1
             else:
                 # Normal case: batch_size <= memory_size
-                # Update memory slots with dtype consistency
+                # Update memory slots with dtype consistency and NaN safety
                 episode_data = episode[:k].detach()
                 # Ensure same dtype as memory buffer
                 if episode_data.dtype != self.memory.dtype:
                     episode_data = episode_data.to(self.memory.dtype)
+                
+                # Check for NaN in episode data
+                if not torch.isfinite(episode_data).all():
+                    episode_data = torch.where(
+                        torch.isfinite(episode_data), 
+                        episode_data, 
+                        torch.randn_like(episode_data) * 0.01
+                    )
+                
                 self.memory[lru_indices] = episode_data
-                self.memory_age[lru_indices] = self.memory_age.max() + 1
+                
+                # Update age with safety
+                max_age = self.memory_age.max()
+                if not torch.isfinite(max_age):
+                    max_age = torch.tensor(0.0, device=self.memory_age.device)
+                self.memory_age[lru_indices] = max_age + 1
                 self.memory_usage[lru_indices] += 1
 
         return episode
 
     def read_memory(self, query: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Read from memory using attention mechanism"""
+        """Read from memory using attention mechanism with NaN safety"""
         batch_size = query.size(0)
 
         # Validate query dimensions
         if query.size(-1) != self.episode_dim:
             raise ValueError(f"Query dimension {query.size(-1)} doesn't match memory episode_dim {self.episode_dim}")
 
-        # Compute attention weights
+        # Check for NaN in input query
+        if not torch.isfinite(query).all():
+            query = torch.where(torch.isfinite(query), query, torch.zeros_like(query))
+
+        # Check if memory is properly initialized (not all zeros)
+        if self.memory.abs().sum() < 1e-8:
+            # Memory is essentially empty, initialize with small random values
+            self.memory.data = torch.randn_like(self.memory) * 0.01
+
+        # Compute attention weights with safety checks
         q = self.query_net(query)  # [batch_size, episode_dim]
         k = self.key_net(self.memory)  # [memory_size, episode_dim]
         v = self.value_net(self.memory)  # [memory_size, episode_dim]
 
-        # Attention scores
-        attention_scores = torch.matmul(
-            q, k.transpose(0, 1)) / math.sqrt(self.episode_dim)
+        # Check for NaN in query/key/value projections
+        if not torch.isfinite(q).all():
+            q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
+        if not torch.isfinite(k).all():
+            k = torch.where(torch.isfinite(k), k, torch.randn_like(k) * 0.01)
+        if not torch.isfinite(v).all():
+            v = torch.where(torch.isfinite(v), v, torch.randn_like(v) * 0.01)
+
+        # Attention scores with numerical stability
+        scale = math.sqrt(self.episode_dim) + 1e-8  # Add epsilon to prevent division by zero
+        attention_scores = torch.matmul(q, k.transpose(0, 1)) / scale
+        
         # [batch_size, memory_size]
+        # Check for NaN in attention scores
+        if not torch.isfinite(attention_scores).all():
+            attention_scores = torch.where(
+                torch.isfinite(attention_scores), 
+                attention_scores, 
+                torch.zeros_like(attention_scores)
+            )
+        
+        # Softmax with numerical stability
+        attention_scores = torch.clamp(attention_scores, min=-50, max=50)  # Prevent overflow
         attention_weights = F.softmax(attention_scores, dim=-1)
+
+        # Check for NaN in attention weights
+        if not torch.isfinite(attention_weights).all():
+            # Fallback to uniform attention
+            attention_weights = torch.ones_like(attention_weights) / attention_weights.size(-1)
 
         # Weighted memory retrieval
         # [batch_size, episode_dim]
         retrieved = torch.matmul(attention_weights, v)
+
+        # Check for NaN in retrieved memory
+        if not torch.isfinite(retrieved).all():
+            retrieved = torch.where(
+                torch.isfinite(retrieved), 
+                retrieved, 
+                torch.zeros_like(retrieved)
+            )
 
         # Update memory access statistics with dtype consistency
         access_counts = attention_weights.sum(0).detach()
         # Ensure same dtype as memory_usage buffer
         if access_counts.dtype != self.memory_usage.dtype:
             access_counts = access_counts.to(self.memory_usage.dtype)
+        
+        # Check for NaN in access counts
+        if not torch.isfinite(access_counts).all():
+            access_counts = torch.where(
+                torch.isfinite(access_counts), 
+                access_counts, 
+                torch.zeros_like(access_counts)
+            )
+        
         self.memory_usage += access_counts
 
         return retrieved, attention_weights
