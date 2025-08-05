@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class BitMarWandbLogger:
     """Comprehensive wandb logging for BitMar model with detailed visualizations"""
     
-    def __init__(self, project_name: str = "bitmar-babylm", config: Dict = None, run_name: str = None):
+    def __init__(self, project_name: str = "bitmar-babylm", config: Dict = None, run_name: str = None, entity: str = None):
         self.project_name = project_name
         self.step = 0
         self.config = config or {}
@@ -30,7 +30,8 @@ class BitMarWandbLogger:
         wandb.init(
             project=self.project_name,
             config=self.config,
-            name=run_name or f"bitmar_{wandb.util.generate_id()}"
+            name=run_name or f"bitmar_{wandb.util.generate_id()}",
+            entity=entity
         )
         
         # Define step metric to ensure proper ordering
