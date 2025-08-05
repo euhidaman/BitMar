@@ -75,9 +75,9 @@ data:
   target_text_tokens: 50000000 # Target text tokens
   token_counting_method: "gpt2" # Use GPT-2 tokenizer for counting
   
-  # DataLoader settings (Optimized for balanced training)
-  batch_size: 32 # Balanced batch size
-  num_workers: 6 # Efficient data loading
+  # DataLoader settings (Optimized for large GPU memory - 49GB available)
+  batch_size: 128 # Increased from 32 to utilize more GPU memory
+  num_workers: 8 # Increased for better data loading
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
   
@@ -126,6 +126,10 @@ training:
   learning_rate: 0.0002 # Balanced learning rate for 100M tokens
   weight_decay: 0.02 # Balanced regularization
   optimizer: "adamw" # Stable optimizer choice
+  
+  # Performance optimizations
+  mixed_precision: true # Enable mixed precision for ~2x speedup
+  compile_model: false # PyTorch 2.0 compilation (experimental)
   
   # Scheduler configuration
   scheduler_config:

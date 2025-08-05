@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.cuda.amp import GradScaler, autocast  # Mixed precision training
 import wandb
 from pathlib import Path
 from typing import Dict, Optional
@@ -138,6 +139,16 @@ class TokenAwareTrainer:
                 self.device = torch.device("cpu")
                 logger.warning(f"⚠️  No GPU available, using CPU (training will be very slow!)")
                 logger.warning(f"   Expected training time: 50+ hours on CPU")
+
+        # Setup mixed precision training (for GPU only)
+        self.use_mixed_precision = self.device.type == 'cuda' and self.config.get('training', {}).get('mixed_precision', True)
+        if self.use_mixed_precision:
+            self.scaler = GradScaler()
+            logger.info("🚀 Mixed precision training enabled - expect ~2x speedup!")
+        else:
+            self.scaler = None
+            if self.device.type == 'cuda':
+                logger.info("Mixed precision disabled in config")
 
         # Token tracking
         self.tokens_processed = 0
@@ -697,18 +708,33 @@ class TokenAwareTrainer:
                                     ], dim=1)
                                     logger.info(f"Padded {key} to {batch[key].shape}")
 
-                # Forward pass with detailed error tracking
+                # Forward pass with mixed precision and detailed error tracking
                 try:
                     logger.debug(f"Starting forward pass for step {self.global_step}")
-                    outputs = self.model(
-                        input_ids=batch['input_ids'],
-                        attention_mask=batch['attention_mask'],
-                        vision_features=batch['vision_features'],
-                        labels=batch['labels'],
-                        step=self.global_step,
-                        has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool)),
-                        adaptive_controller=self.adaptive_controller
-                    )
+                    
+                    # Use mixed precision if enabled
+                    if self.use_mixed_precision:
+                        with autocast():
+                            outputs = self.model(
+                                input_ids=batch['input_ids'],
+                                attention_mask=batch['attention_mask'],
+                                vision_features=batch['vision_features'],
+                                labels=batch['labels'],
+                                step=self.global_step,
+                                has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool)),
+                                adaptive_controller=self.adaptive_controller
+                            )
+                    else:
+                        outputs = self.model(
+                            input_ids=batch['input_ids'],
+                            attention_mask=batch['attention_mask'],
+                            vision_features=batch['vision_features'],
+                            labels=batch['labels'],
+                            step=self.global_step,
+                            has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool)),
+                            adaptive_controller=self.adaptive_controller
+                        )
+                    
                     logger.debug(f"Forward pass completed successfully for step {self.global_step}")
                 except Exception as forward_error:
                     logger.error(f"Forward pass failed at step {self.global_step}: {forward_error}")
@@ -735,18 +761,37 @@ class TokenAwareTrainer:
                     logger.warning(f"Invalid loss at step {self.global_step}: {loss.item()}")
                     continue
 
-                # Backward pass
+                # Backward pass with mixed precision support
                 self.optimizer.zero_grad()
-                loss.backward()
+                
+                if self.use_mixed_precision:
+                    # Mixed precision backward pass
+                    self.scaler.scale(loss).backward()
+                    
+                    # Gradient clipping with mixed precision
+                    if self.config['training']['gradient_clip_val'] > 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.config['training']['gradient_clip_val']
+                        )
+                    
+                    # Mixed precision optimizer step
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    # Standard precision backward pass
+                    loss.backward()
+                    
+                    # Gradient clipping
+                    if self.config['training']['gradient_clip_val'] > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.config['training']['gradient_clip_val']
+                        )
+                    
+                    self.optimizer.step()
 
-                # Gradient clipping
-                if self.config['training']['gradient_clip_val'] > 0:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config['training']['gradient_clip_val']
-                    )
-
-                self.optimizer.step()
                 self.scheduler.step()
 
                 # Update token count
@@ -781,7 +826,7 @@ class TokenAwareTrainer:
                 if self.global_step % self.token_log_frequency == 0:
                     self.log_token_progress()
 
-                # Enhanced wandb logging
+                # Enhanced wandb logging with GPU memory monitoring
                 if self.use_wandb and self.global_step % 100 == 0:
                     log_dict = {
                         'train/loss': loss.item(),
@@ -790,6 +835,17 @@ class TokenAwareTrainer:
                         'tokens/batch_size': batch_tokens,
                         'step': self.global_step
                     }
+                    
+                    # Add GPU memory usage if on GPU
+                    if self.device.type == 'cuda':
+                        log_dict['gpu/memory_allocated_gb'] = torch.cuda.memory_allocated(self.device) / 1024**3
+                        log_dict['gpu/memory_reserved_gb'] = torch.cuda.memory_reserved(self.device) / 1024**3
+                        log_dict['gpu/memory_utilization'] = torch.cuda.memory_allocated(self.device) / torch.cuda.get_device_properties(self.device).total_memory
+                    
+                    # Add mixed precision info
+                    if self.use_mixed_precision:
+                        log_dict['training/mixed_precision'] = True
+                        log_dict['training/grad_scaler_scale'] = self.scaler.get_scale()
                     
                     # Only add similarity if it was computed
                     if outputs.get('text_features') is not None and outputs.get('vision_latent') is not None:
