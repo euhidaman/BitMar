@@ -212,7 +212,15 @@ class TokenAwareTrainer:
             values = []
             for i, sample in enumerate(batch):
                 if key in sample:
-                    values.append(sample[key])
+                    value = sample[key]
+                    # Ensure tensor conversion for specific keys
+                    if key in ['vision_index', 'has_vision', 'index']:
+                        if not torch.is_tensor(value):
+                            if key == 'vision_index' or key == 'index':
+                                value = torch.tensor(value, dtype=torch.long)
+                            elif key == 'has_vision':
+                                value = torch.tensor(value, dtype=torch.bool)
+                    values.append(value)
                 else:
                     # Provide sensible defaults for missing keys
                     if key == 'vision_index':
@@ -236,13 +244,25 @@ class TokenAwareTrainer:
             # Stack tensors or keep as list
             if all(v is not None for v in values):
                 try:
-                    if torch.is_tensor(values[0]):
-                        result[key] = torch.stack(values)
+                    # Check if all values are tensors and can be stacked
+                    if all(torch.is_tensor(v) for v in values):
+                        # Ensure all tensors have the same shape for stackable keys
+                        if key in ['vision_index', 'has_vision', 'index'] or all(v.shape == values[0].shape for v in values):
+                            result[key] = torch.stack(values)
+                        else:
+                            # Different shapes, keep as list
+                            result[key] = values
                     else:
+                        # Mixed types or non-tensors, keep as list
                         result[key] = values
                 except Exception as e:
                     logger.warning(f"Failed to stack key '{key}': {e}")
                     result[key] = values
+            else:
+                # Some values are None, filter them out or handle specially
+                filtered_values = [v for v in values if v is not None]
+                if filtered_values:
+                    result[key] = filtered_values
         
         return result
 
@@ -479,13 +499,38 @@ class TokenAwareTrainer:
 
             try:
                 # Move batch to device and ensure all required keys exist
-                batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
+                processed_batch = {}
+                for k, v in batch.items():
+                    if torch.is_tensor(v):
+                        processed_batch[k] = v.to(self.device)
+                    elif isinstance(v, list):
+                        # Handle list of tensors or mixed types
+                        if all(torch.is_tensor(item) for item in v):
+                            # Try to stack if all are tensors
+                            try:
+                                processed_batch[k] = torch.stack(v).to(self.device)
+                            except:
+                                # If stacking fails, use first item or create default
+                                if k in ['vision_index', 'has_vision']:
+                                    if k == 'vision_index':
+                                        processed_batch[k] = torch.arange(len(v), device=self.device)
+                                    else:  # has_vision
+                                        processed_batch[k] = torch.ones(len(v), dtype=torch.bool, device=self.device)
+                                else:
+                                    processed_batch[k] = v[0].to(self.device) if v else None
+                        else:
+                            # Mixed types or non-tensors
+                            processed_batch[k] = v
+                    else:
+                        processed_batch[k] = v
                 
-                # Add missing keys if necessary for compatibility
-                if 'vision_index' not in batch:
+                batch = processed_batch
+                
+                # Ensure required keys exist and are properly formatted
+                if 'vision_index' not in batch or not torch.is_tensor(batch['vision_index']):
                     batch['vision_index'] = torch.arange(batch['input_ids'].size(0), device=self.device)
                 
-                if 'has_vision' not in batch:
+                if 'has_vision' not in batch or not torch.is_tensor(batch['has_vision']):
                     batch['has_vision'] = torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)
 
                 # Forward pass
