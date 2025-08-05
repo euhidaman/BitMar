@@ -269,13 +269,29 @@ class TokenAwareTrainer:
         original_train_dataloader = self.data_module.train_dataloader
         def custom_train_dataloader():
             from torch.utils.data import DataLoader
+            
+            # Get the dataset - handle different data module types
+            if hasattr(self.data_module, 'train_dataset'):
+                dataset = self.data_module.train_dataset
+            elif hasattr(self.data_module, 'dataset'):
+                dataset = self.data_module.dataset
+            else:
+                logger.error("No dataset found in data module")
+                raise AttributeError("Data module has no dataset attribute")
+            
+            # Get data module attributes safely
+            batch_size = getattr(self.data_module, 'batch_size', self.config['data']['batch_size'])
+            num_workers = getattr(self.data_module, 'num_workers', self.config['data']['num_workers'])
+            pin_memory = getattr(self.data_module, 'pin_memory', self.config['data'].get('pin_memory', True))
+            persistent_workers = getattr(self.data_module, 'persistent_workers', self.config['data'].get('persistent_workers', True))
+            
             return DataLoader(
-                self.data_module.train_dataset,
-                batch_size=self.data_module.batch_size,
+                dataset,
+                batch_size=batch_size,
                 shuffle=True,
-                num_workers=self.data_module.num_workers,
-                pin_memory=self.data_module.pin_memory,
-                persistent_workers=self.data_module.persistent_workers if self.data_module.num_workers > 0 else False,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                persistent_workers=persistent_workers if num_workers > 0 else False,
                 drop_last=True,
                 collate_fn=self.custom_collate_fn
             )
