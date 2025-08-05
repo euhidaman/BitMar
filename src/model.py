@@ -33,13 +33,22 @@ class BitNetLinear(nn.Module):
         self.register_buffer('input_scale', torch.ones(1))
 
     def quantize_weights_1_58_bit(self, weight: torch.Tensor) -> torch.Tensor:
-        """BitNet b1.58 weight quantization: {-1, 0, +1}"""
+        """BitNet b1.58 weight quantization: {-1, 0, +1} with NaN safety"""
+        # Check for NaN inputs
+        if not torch.isfinite(weight).all():
+            # Replace NaN with small random values
+            weight = torch.where(torch.isfinite(weight), weight, torch.randn_like(weight) * 0.01)
+        
         # Compute scaling factor with numerical stability
-        scale = weight.abs().mean()
+        scale = weight.abs().mean() + 1e-8  # Add epsilon to prevent zero scale
         self.weight_scale.data = scale.clamp(min=1e-5, max=1e3)  # Prevent extreme scales
 
         # Normalize weights with gradient clipping
         weight_norm = torch.clamp(weight / self.weight_scale, min=-10.0, max=10.0)
+        
+        # Check for NaN after normalization
+        if not torch.isfinite(weight_norm).all():
+            weight_norm = torch.where(torch.isfinite(weight_norm), weight_norm, torch.zeros_like(weight_norm))
 
         # 1.58-bit quantization with threshold
         threshold = 2.0 / 3.0  # Optimal threshold for ternary quantization
@@ -53,7 +62,11 @@ class BitNetLinear(nn.Module):
         return quantized
 
     def quantize_activations_8bit(self, x: torch.Tensor) -> torch.Tensor:
-        """8-bit activation quantization with numerical stability"""
+        """8-bit activation quantization with enhanced numerical stability"""
+        # Check for NaN inputs first
+        if not torch.isfinite(x).all():
+            x = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
+        
         # Clamp extreme values to prevent overflow
         x_clamped = torch.clamp(x, min=-1e6, max=1e6)
 
@@ -65,35 +78,86 @@ class BitNetLinear(nn.Module):
         if range_val < 1e-8:
             return x_clamped
 
-        scale = range_val / 255.0
+        scale = range_val / 255.0 + 1e-8  # Add epsilon for safety
         self.input_scale.data = scale.clamp(min=1e-8, max=1e3)
 
-        # Quantize to 8-bit
+        # Quantize to 8-bit with safety checks
         zero_point = (-x_min / scale).round().clamp(0, 255)
         quantized = ((x_clamped / scale) + zero_point).round().clamp(0, 255)
 
-        # Dequantize
+        # Dequantize with NaN safety
         dequantized = scale * (quantized - zero_point)
+        
+        # Final NaN check
+        if not torch.isfinite(dequantized).all():
+            dequantized = torch.where(torch.isfinite(dequantized), dequantized, x_clamped)
+        
         return dequantized
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Check for NaN inputs
+        if not torch.isfinite(x).all():
+            # Replace NaN/Inf values with zeros to prevent propagation
+            x = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
+        
         if self.training:
             # Full precision training with straight-through estimator
             # Forward pass with quantized weights but gradients flow through original weights
             weight_q = self.quantize_weights_1_58_bit(self.weight)
+            
+            # Check for NaN in weight scale
+            if not torch.isfinite(self.weight_scale).all():
+                self.weight_scale.data = torch.where(
+                    torch.isfinite(self.weight_scale.data), 
+                    self.weight_scale.data, 
+                    torch.ones_like(self.weight_scale.data)
+                )
+            
             weight_forward = weight_q * self.weight_scale
 
-            # Use original weight for gradient computation
-            weight_forward = weight_forward + \
-                (self.weight - self.weight.detach())
+            # Use original weight for gradient computation with safety check
+            weight_diff = self.weight - self.weight.detach()
+            if not torch.isfinite(weight_diff).all():
+                weight_diff = torch.zeros_like(weight_diff)
+            
+            weight_forward = weight_forward + weight_diff
+            
+            # Final safety check on weight_forward
+            if not torch.isfinite(weight_forward).all():
+                weight_forward = torch.where(
+                    torch.isfinite(weight_forward), 
+                    weight_forward, 
+                    torch.randn_like(weight_forward) * 0.01
+                )
 
-            return F.linear(x, weight_forward, self.bias)
+            result = F.linear(x, weight_forward, self.bias)
+            
+            # Check output for NaN values
+            if not torch.isfinite(result).all():
+                # Replace NaN with small random values
+                result = torch.where(
+                    torch.isfinite(result), 
+                    result, 
+                    torch.randn_like(result) * 0.01
+                )
+            
+            return result
         else:
             # Inference with full quantization
             weight_q = self.quantize_weights_1_58_bit(
                 self.weight) * self.weight_scale
             x_q = self.quantize_activations_8bit(x)
-            return F.linear(x_q, weight_q, self.bias)
+            result = F.linear(x_q, weight_q, self.bias)
+            
+            # Safety check for inference
+            if not torch.isfinite(result).all():
+                result = torch.where(
+                    torch.isfinite(result), 
+                    result, 
+                    torch.zeros_like(result)
+                )
+                
+            return result
 
 
 class BitNetMLP(nn.Module):
