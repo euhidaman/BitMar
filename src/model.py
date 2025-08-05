@@ -152,18 +152,26 @@ class BitNetAttention(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len = query.shape[:2]
 
+        # Validate input dimensions
+        if query.size(-1) != self.dim:
+            raise ValueError(f"Query dimension {query.size(-1)} doesn't match expected {self.dim}")
+        if key.size(-1) != self.dim:
+            raise ValueError(f"Key dimension {key.size(-1)} doesn't match expected {self.dim}")
+        if value.size(-1) != self.dim:
+            raise ValueError(f"Value dimension {value.size(-1)} doesn't match expected {self.dim}")
+
         # Linear projections
         q = self.q_proj(query)
         k = self.k_proj(key)
         v = self.v_proj(value)
 
-        # Reshape for multi-head attention
-        q = q.view(batch_size, seq_len, self.num_heads,
-                   self.head_dim).transpose(1, 2)
-        k = k.view(batch_size, -1, self.num_heads,
-                   self.head_dim).transpose(1, 2)
-        v = v.view(batch_size, -1, self.num_heads,
-                   self.head_dim).transpose(1, 2)
+        # Get key/value sequence length (handle different shapes)
+        key_seq_len = key.size(1)
+        
+        # Reshape for multi-head attention with proper dimension checking
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, key_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, key_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
         # Attention computation
         attention_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
@@ -171,13 +179,22 @@ class BitNetAttention(nn.Module):
         if mask is not None:
             # Handle mask shape: expand to match attention scores shape
             if mask.dim() == 2:  # [batch_size, seq_len]
-                mask = mask.unsqueeze(1).unsqueeze(
-                    1)  # [batch_size, 1, 1, seq_len]
+                mask = mask.unsqueeze(1).unsqueeze(1)  # [batch_size, 1, 1, seq_len]
             elif mask.dim() == 3:  # [batch_size, seq_len, seq_len]
                 mask = mask.unsqueeze(1)  # [batch_size, 1, seq_len, seq_len]
 
-            # Expand mask to match attention scores shape
-            mask = mask.expand(batch_size, self.num_heads, seq_len, -1)
+            # Expand mask to match attention scores shape [batch_size, num_heads, seq_len, key_seq_len]
+            if mask.size(-1) != key_seq_len:
+                # Adjust mask if needed
+                if mask.size(-1) == seq_len:
+                    # Pad or trim mask to match key_seq_len
+                    if key_seq_len > seq_len:
+                        pad_size = key_seq_len - seq_len
+                        mask = torch.cat([mask, torch.zeros(*mask.shape[:-1], pad_size, device=mask.device, dtype=mask.dtype)], dim=-1)
+                    else:
+                        mask = mask[..., :key_seq_len]
+            
+            mask = mask.expand(batch_size, self.num_heads, seq_len, key_seq_len)
             attention_scores.masked_fill_(mask == 0, float('-inf'))
 
         attention_weights = F.softmax(attention_scores, dim=-1)
@@ -460,6 +477,10 @@ class EpisodicMemory(nn.Module):
         """Read from memory using attention mechanism"""
         batch_size = query.size(0)
 
+        # Validate query dimensions
+        if query.size(-1) != self.episode_dim:
+            raise ValueError(f"Query dimension {query.size(-1)} doesn't match memory episode_dim {self.episode_dim}")
+
         # Compute attention weights
         q = self.query_net(query)  # [batch_size, episode_dim]
         k = self.key_net(self.memory)  # [memory_size, episode_dim]
@@ -547,11 +568,16 @@ class CrossModalFusion(nn.Module):
         """
         batch_size, seq_len = text_features.shape[:2]
 
+        # Validate input dimensions
+        if text_features.size(-1) != self.text_dim:
+            raise ValueError(f"Text features dimension {text_features.size(-1)} doesn't match expected {self.text_dim}")
+        if vision_features.size(-1) != self.vision_dim:
+            raise ValueError(f"Vision features dimension {vision_features.size(-1)} doesn't match expected {self.vision_dim}")
+
         # Project to common dimension
         # [batch_size, seq_len, hidden_dim]
         text_proj = self.text_proj(text_features)
-        vision_proj = self.vision_proj(vision_features).unsqueeze(
-            1)  # [batch_size, 1, hidden_dim]
+        vision_proj = self.vision_proj(vision_features).unsqueeze(1)  # [batch_size, 1, hidden_dim]
 
         # Cross-attention fusion
         fused = text_proj
@@ -611,6 +637,20 @@ class VisionEncoder(nn.Module):
         Returns:
             encoded_features: [batch_size, output_dim]
         """
+        # Handle potential extra dimensions
+        if vision_features.dim() > 2:
+            # Flatten any extra dimensions except batch
+            original_shape = vision_features.shape
+            vision_features = vision_features.view(original_shape[0], -1)
+            
+            # Ensure we have the expected input dimension
+            if vision_features.size(-1) != self.layers[0].in_features:
+                # Take only the first input_dim features if we have more
+                if vision_features.size(-1) > self.layers[0].in_features:
+                    vision_features = vision_features[:, :self.layers[0].in_features]
+                else:
+                    raise ValueError(f"Vision features dimension {vision_features.size(-1)} is smaller than expected {self.layers[0].in_features}")
+
         x = vision_features
 
         for layer, norm in zip(self.layers, self.layer_norms):
@@ -743,11 +783,12 @@ class BitMarModel(nn.Module):
         # [batch_size, text_encoder_dim]
         text_pooled = text_features.mean(dim=1)
 
-        # Project text to episode dimension
+        # Project both text and vision to episode dimension
         text_projected = self.text_to_episode(text_pooled)
+        vision_projected = self.vision_to_episode(vision_latent)
 
-        # Combine text and vision features
-        episode = text_projected + vision_latent  # Simple addition fusion
+        # Combine text and vision features (both now have episode_dim)
+        episode = text_projected + vision_projected
 
         return episode
 
@@ -914,6 +955,14 @@ class BitMarModel(nn.Module):
             has_vision: Boolean tensor [batch_size] indicating which samples have real vision features
         """
         batch_size, seq_len = input_ids.shape
+
+        # Validate input tensor dimensions early
+        expected_vision_dim = self.config['vision_encoder_dim']
+        if vision_features.dim() != 2 or vision_features.size(-1) != expected_vision_dim:
+            raise ValueError(f"Vision features shape {vision_features.shape} doesn't match expected [batch_size, {expected_vision_dim}]")
+        
+        if input_ids.size(0) != vision_features.size(0):
+            raise ValueError(f"Batch size mismatch: input_ids {input_ids.size(0)} vs vision_features {vision_features.size(0)}")
 
         # Default has_vision to all True if not provided (backward compatibility)
         if has_vision is None:

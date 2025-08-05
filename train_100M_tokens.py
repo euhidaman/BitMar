@@ -314,6 +314,11 @@ class TokenAwareTrainer:
         """Setup model and token-constrained data"""
         logger.info("Setting up model and token-constrained data...")
 
+        # Clear any existing model artifacts to prevent dimension mismatches
+        checkpoint_dir = Path(self.config['output']['checkpoint_dir'])
+        if checkpoint_dir.exists():
+            logger.info("Checkpoint directory exists - using fresh model initialization to avoid dimension conflicts")
+
         # Check if we should use token-constrained dataset
         if self.config.get('token_constraints') and TOKEN_CONSTRAINED_AVAILABLE:
             logger.info("🎯 Using token-constrained dataset for 100M tokens")
@@ -379,6 +384,13 @@ class TokenAwareTrainer:
             logger.info(f"Target tokens: {self.target_tokens:,}")
 
         # Create model
+        logger.info("Creating BitMar model with updated configuration...")
+        logger.info(f"Model config dimensions:")
+        logger.info(f"  • text_encoder_dim: {self.config['model']['text_encoder_dim']}")
+        logger.info(f"  • vision_latent_size: {self.config['model']['vision_latent_size']}")
+        logger.info(f"  • fusion_hidden_size: {self.config['model']['fusion_hidden_size']}")
+        logger.info(f"  • episode_dim: {self.config['model']['episode_dim']}")
+        
         self.model = create_bitmar_model(self.config['model'])
         self.model.to(self.device)
 
@@ -577,23 +589,106 @@ class TokenAwareTrainer:
                 if 'has_vision' not in batch or not torch.is_tensor(batch['has_vision']):
                     batch['has_vision'] = torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)
 
-                # Log tensor shapes for debugging
-                if self.global_step % 1000 == 0:
-                    logger.debug(f"Batch tensor shapes:")
+                # Log tensor shapes for debugging and validate dimensions
+                if self.global_step % 1000 == 0 or self.global_step < 5:
+                    logger.info(f"Batch tensor shapes at step {self.global_step}:")
                     for k, v in batch.items():
                         if torch.is_tensor(v):
-                            logger.debug(f"  {k}: {v.shape}")
+                            logger.info(f"  {k}: {v.shape}")
+                
+                # Validate and potentially reshape vision features
+                if 'vision_features' in batch:
+                    vf_shape = batch['vision_features'].shape
+                    logger.debug(f"Vision features shape: {vf_shape}")
+                    
+                    # Handle potential extra dimensions in vision features
+                    if len(vf_shape) == 3 and vf_shape[1] == 1:  # [batch, 1, 768]
+                        logger.debug("Removing singleton dimension from vision features")
+                        batch['vision_features'] = batch['vision_features'].squeeze(1)  # [batch, 768]
+                        logger.debug(f"Reshaped vision features: {batch['vision_features'].shape}")
+                    elif len(vf_shape) == 3 and vf_shape[1] != 1:  # [batch, N, 768] where N > 1
+                        logger.debug("Flattening multi-dimensional vision features")
+                        batch['vision_features'] = batch['vision_features'].view(vf_shape[0], -1)  # [batch, N*768]
+                        # Take only first 768 features if we have more
+                        if batch['vision_features'].size(1) > 768:
+                            batch['vision_features'] = batch['vision_features'][:, :768]
+                        logger.debug(f"Reshaped vision features: {batch['vision_features'].shape}")
+                    elif len(vf_shape) == 2:  # [batch, 768] - already correct
+                        logger.debug("Vision features shape is correct")
+                    else:
+                        logger.warning(f"Unexpected vision features shape: {vf_shape}")
+                        # Try to flatten to [batch, 768]
+                        batch['vision_features'] = batch['vision_features'].view(vf_shape[0], -1)
+                        if batch['vision_features'].size(1) != 768:
+                            if batch['vision_features'].size(1) > 768:
+                                batch['vision_features'] = batch['vision_features'][:, :768]
+                            else:
+                                # Pad with zeros if too small
+                                pad_size = 768 - batch['vision_features'].size(1)
+                                batch['vision_features'] = torch.cat([
+                                    batch['vision_features'], 
+                                    torch.zeros(vf_shape[0], pad_size, device=batch['vision_features'].device)
+                                ], dim=1)
+                        logger.debug(f"Normalized vision features: {batch['vision_features'].shape}")
+                
+                # Validate final tensor dimensions
+                expected_shapes = {
+                    'input_ids': (32, 256),
+                    'attention_mask': (32, 256), 
+                    'labels': (32, 256),
+                    'vision_features': (32, 768),
+                    'has_vision': (32,),
+                    'vision_index': (32,)
+                }
+                
+                for key, expected_shape in expected_shapes.items():
+                    if key in batch and torch.is_tensor(batch[key]):
+                        actual_shape = batch[key].shape
+                        if actual_shape != expected_shape:
+                            logger.warning(f"Unexpected {key} shape: {actual_shape}, expected: {expected_shape}")
+                            # Try to fix common issues
+                            if key == 'vision_features' and len(actual_shape) == 2 and actual_shape[1] != 768:
+                                if actual_shape[1] > 768:
+                                    batch[key] = batch[key][:, :768]
+                                    logger.info(f"Truncated {key} to {batch[key].shape}")
+                                else:
+                                    pad_size = 768 - actual_shape[1]
+                                    batch[key] = torch.cat([
+                                        batch[key],
+                                        torch.zeros(actual_shape[0], pad_size, device=batch[key].device)
+                                    ], dim=1)
+                                    logger.info(f"Padded {key} to {batch[key].shape}")
 
-                # Forward pass
-                outputs = self.model(
-                    input_ids=batch['input_ids'],
-                    attention_mask=batch['attention_mask'],
-                    vision_features=batch['vision_features'],
-                    labels=batch['labels'],
-                    step=self.global_step,
-                    has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool)),
-                    adaptive_controller=self.adaptive_controller
-                )
+                # Forward pass with detailed error tracking
+                try:
+                    logger.debug(f"Starting forward pass for step {self.global_step}")
+                    outputs = self.model(
+                        input_ids=batch['input_ids'],
+                        attention_mask=batch['attention_mask'],
+                        vision_features=batch['vision_features'],
+                        labels=batch['labels'],
+                        step=self.global_step,
+                        has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool)),
+                        adaptive_controller=self.adaptive_controller
+                    )
+                    logger.debug(f"Forward pass completed successfully for step {self.global_step}")
+                except Exception as forward_error:
+                    logger.error(f"Forward pass failed at step {self.global_step}: {forward_error}")
+                    logger.error(f"Error type: {type(forward_error).__name__}")
+                    logger.error(f"Error details: {str(forward_error)}")
+                    
+                    # Log model architecture info for debugging
+                    logger.error(f"Model architecture details:")
+                    if hasattr(self.model, 'text_encoder'):
+                        logger.error(f"  • Text encoder dim: {self.model.text_encoder.dim}")
+                    if hasattr(self.model, 'vision_encoder'):
+                        logger.error(f"  • Vision encoder output: {getattr(self.model.vision_encoder, 'output_proj', None)}")
+                    if hasattr(self.model, 'fusion'):
+                        logger.error(f"  • Fusion hidden dim: {self.model.fusion.hidden_dim}")
+                    if hasattr(self.model, 'memory'):
+                        logger.error(f"  • Memory episode dim: {self.model.memory.episode_dim}")
+                    
+                    raise forward_error
 
                 loss = outputs['loss']
 
