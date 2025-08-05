@@ -110,7 +110,7 @@ class TokenAwareTrainer:
                 if device.startswith('cuda'):
                     if not torch.cuda.is_available():
                         logger.error(f"❌ CUDA not available but {device} requested!")
-                        logger.error(f"   Training on CPU will take 50+ hours. Please install CUDA or use --device cpu explicitly")
+                        logger.error(f"   Training on CPU will take 15+ hours. Please install CUDA or use --device cpu explicitly")
                         raise RuntimeError(f"CUDA not available for {device}")
                     elif device != "cuda:0" and not torch.cuda.device_count() > int(device.split(':')[1]):
                         logger.warning(f"Device {device} not available, using cuda:0")
@@ -137,7 +137,7 @@ class TokenAwareTrainer:
             else:
                 self.device = torch.device("cpu")
                 logger.warning(f"⚠️  No GPU available, using CPU (training will be very slow!)")
-                logger.warning(f"   Expected training time: 50+ hours on CPU")
+                logger.warning(f"   Expected training time: 15+ hours on CPU with batch_size=96")
 
         # Token tracking
         self.tokens_processed = 0

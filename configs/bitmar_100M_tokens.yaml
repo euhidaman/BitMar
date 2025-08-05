@@ -76,7 +76,7 @@ data:
   token_counting_method: "gpt2" # Use GPT-2 tokenizer for counting
 
   # DataLoader settings (Optimized for balanced training)
-  batch_size: 32 # Balanced batch size
+  batch_size: 96 # Increased batch size for faster training
   num_workers: 6 # Efficient data loading
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
@@ -117,9 +117,9 @@ adaptive_training:
 training:
   # Training configuration (Train on 100M token dataset for up to 10 epochs)
   max_epochs: 10 # Maximum 10 epochs as requested
-  accumulate_grad_batches: 4 # Simulate larger batch size
+  accumulate_grad_batches: 2 # Reduced from 4 due to increased batch_size from 32 to 96
   gradient_clip_val: 0.3 # Balanced gradient clipping
-  val_check_interval: 2000 # Check progress regularly
+  val_check_interval: 1000 # Reduced from 2000 for faster training with batch_size=96
   scheduler: "cosine_with_restarts" # Cosine with restarts for better convergence
   min_lr: 0.00005 # Reasonable minimum learning rate
   warmup_steps: 1000 # Proper warmup for stability
@@ -129,7 +129,7 @@ training:
 
   # Scheduler configuration
   scheduler_config:
-    T_0: 2000 # Initial restart period
+    T_0: 1000 # Reduced from 2000 due to faster training with batch_size=96
     T_mult: 2 # Multiply restart period (must be integer >= 1)
     eta_min_ratio: 0.1 # Minimum LR ratio
 
