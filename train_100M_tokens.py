@@ -94,24 +94,50 @@ class TokenAwareTrainer:
         except Exception as e:
             raise ValueError(f"Failed to load config: {e}")
 
-        # Set device with better error handling
+        # Set device with enhanced GPU detection and error handling
+        logger.info(f"🔍 GPU Detection:")
+        logger.info(f"  • CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            logger.info(f"  • CUDA device count: {torch.cuda.device_count()}")
+            for i in range(torch.cuda.device_count()):
+                logger.info(f"  • GPU {i}: {torch.cuda.get_device_name(i)}")
+                logger.info(f"  • GPU {i} memory: {torch.cuda.get_device_properties(i).total_memory / 1024**3:.1f} GB")
+        
         if device:
             try:
                 self.device = torch.device(device)
                 # Test if device is available
                 if device.startswith('cuda'):
                     if not torch.cuda.is_available():
-                        logger.warning(f"CUDA not available, falling back to CPU")
-                        self.device = torch.device("cpu")
+                        logger.error(f"❌ CUDA not available but {device} requested!")
+                        logger.error(f"   Training on CPU will take 50+ hours. Please install CUDA or use --device cpu explicitly")
+                        raise RuntimeError(f"CUDA not available for {device}")
                     elif device != "cuda:0" and not torch.cuda.device_count() > int(device.split(':')[1]):
                         logger.warning(f"Device {device} not available, using cuda:0")
                         self.device = torch.device("cuda:0")
+                    else:
+                        # Test GPU by creating a small tensor
+                        test_tensor = torch.tensor([1.0], device=self.device)
+                        logger.info(f"✅ Successfully initialized {device}")
+                        logger.info(f"   GPU memory allocated: {torch.cuda.memory_allocated(self.device) / 1024**2:.1f} MB")
                 logger.info(f"Using device: {self.device}")
             except Exception as e:
-                logger.warning(f"Failed to set device {device}: {e}, using default")
-                self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+                logger.error(f"Failed to set device {device}: {e}")
+                logger.error(f"Available devices: {['cpu'] + [f'cuda:{i}' for i in range(torch.cuda.device_count())]}")
+                raise RuntimeError(f"Device setup failed: {e}")
         else:
-            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            # Auto-select best available device
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda:0")
+                # Test GPU
+                test_tensor = torch.tensor([1.0], device=self.device)
+                logger.info(f"✅ Auto-selected GPU: {self.device}")
+                logger.info(f"   GPU: {torch.cuda.get_device_name(0)}")
+                logger.info(f"   GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+            else:
+                self.device = torch.device("cpu")
+                logger.warning(f"⚠️  No GPU available, using CPU (training will be very slow!)")
+                logger.warning(f"   Expected training time: 50+ hours on CPU")
 
         # Token tracking
         self.tokens_processed = 0
@@ -394,6 +420,25 @@ class TokenAwareTrainer:
         self.model = create_bitmar_model(self.config['model'])
         self.model.to(self.device)
 
+        # Verify model is on correct device
+        logger.info(f"🎮 Device Verification:")
+        logger.info(f"  • Model device: {next(self.model.parameters()).device}")
+        logger.info(f"  • Expected device: {self.device}")
+        
+        if self.device.type == 'cuda':
+            logger.info(f"  • GPU memory before training: {torch.cuda.memory_allocated(self.device) / 1024**3:.2f} GB")
+            logger.info(f"  • GPU memory reserved: {torch.cuda.memory_reserved(self.device) / 1024**3:.2f} GB")
+            
+            # Test a forward pass to ensure everything works on GPU
+            try:
+                test_input = torch.randn(1, 10, device=self.device)
+                logger.info("  • GPU functionality test: ✅ Passed")
+                del test_input
+                torch.cuda.empty_cache()
+            except Exception as e:
+                logger.error(f"  • GPU functionality test: ❌ Failed - {e}")
+                raise RuntimeError(f"GPU test failed: {e}")
+
         # Log model info
         param_count = count_parameters(self.model)
         logger.info(f"Model created with {param_count['total_parameters']:,} total parameters")
@@ -589,13 +634,6 @@ class TokenAwareTrainer:
                 if 'has_vision' not in batch or not torch.is_tensor(batch['has_vision']):
                     batch['has_vision'] = torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)
 
-                # Log tensor shapes for debugging and validate dimensions (only first step and then every 1000 steps)
-                if self.global_step == 0 or (self.global_step > 0 and self.global_step % 1000 == 0):
-                    logger.info(f"Batch tensor shapes at step {self.global_step}:")
-                    for k, v in batch.items():
-                        if torch.is_tensor(v):
-                            logger.info(f"  {k}: {v.shape}")
-                
                 # Validate and potentially reshape vision features
                 if 'vision_features' in batch:
                     vf_shape = batch['vision_features'].shape
