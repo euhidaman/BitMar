@@ -899,12 +899,20 @@ class BitMarModel(nn.Module):
         labels: Optional[torch.Tensor] = None,
         mode: str = "train",
         step: int = 0,
+        has_vision: Optional[torch.Tensor] = None,  # NEW: Indicates which samples have real vision
         adaptive_controller=None  # NEW: Adaptive training controller
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass through BitMar model with adaptive training support
+        Forward pass through BitMar model with mixed vision/text batch support
+        
+        Args:
+            has_vision: Boolean tensor [batch_size] indicating which samples have real vision features
         """
         batch_size, seq_len = input_ids.shape
+
+        # Default has_vision to all True if not provided (backward compatibility)
+        if has_vision is None:
+            has_vision = torch.ones(batch_size, dtype=torch.bool, device=input_ids.device)
 
         # Apply adaptive encoder freezing if controller is provided
         freezing_status = {}
@@ -914,15 +922,23 @@ class BitMarModel(nn.Module):
             # Fallback to step-based freezing
             freezing_status = self.apply_encoder_freezing(step)
 
-        # Encode text and vision
+        # Encode text (always available)
         text_features, text_attention = self.encode_text(input_ids, attention_mask)
+        
+        # Encode vision (with masking for text-only samples)
         vision_latent = self.encode_vision(vision_features)
+        
+        # Mask vision features for text-only samples
+        vision_mask = has_vision.float().unsqueeze(-1)  # [batch_size, 1]
+        vision_latent_masked = vision_latent * vision_mask
 
-        # Cross-modal fusion
-        fused_features, cross_attention = self.fusion(text_features, vision_latent)
+        # Cross-modal fusion (will handle masked vision features)
+        fused_features, cross_attention = self.fusion(text_features, vision_latent_masked)
 
-        # Create multimodal episode
-        episode = self.create_episode(text_features, vision_latent, cross_attention)
+        # Create episodes (different handling for vision vs text-only)
+        episode = self.create_episode_mixed(
+            text_features, vision_latent_masked, cross_attention, has_vision
+        )
 
         # Episodic memory interaction
         if mode == "train":
@@ -948,25 +964,36 @@ class BitMarModel(nn.Module):
             # Primary decoder loss
             decoder_loss = decoder_outputs['loss']
 
-            # Cross-modal contrastive loss
-            text_pooled = text_features.mean(dim=1)  # Pool text features
-            cross_modal_loss = self.compute_cross_modal_contrastive_loss(
-                text_pooled, vision_latent, temperature=self.loss_scale_temperature
-            )
+            # Cross-modal contrastive loss (only for samples with vision)
+            cross_modal_loss = torch.tensor(0.0, device=input_ids.device)
+            if has_vision.any():
+                # Only compute cross-modal loss for samples with vision
+                vision_indices = has_vision.nonzero(as_tuple=True)[0]
+                if len(vision_indices) > 0:
+                    text_pooled = text_features[vision_indices].mean(dim=1)
+                    vision_for_loss = vision_latent[vision_indices]
+                    cross_modal_loss = self.compute_cross_modal_contrastive_loss(
+                        text_pooled, vision_for_loss, temperature=self.loss_scale_temperature
+                    )
 
             # Optional additional losses
             vision_loss = None
             if hasattr(self, 'vision_reconstruction') and self.config.get('use_vision_reconstruction', False):
-                reconstructed_vision = self.vision_reconstruction(vision_latent)
-                vision_loss = self.compute_vision_reconstruction_loss(vision_features, reconstructed_vision)
+                if has_vision.any():
+                    vision_indices = has_vision.nonzero(as_tuple=True)[0]
+                    reconstructed_vision = self.vision_reconstruction(vision_latent[vision_indices])
+                    vision_loss = self.compute_vision_reconstruction_loss(
+                        vision_features[vision_indices], reconstructed_vision
+                    )
 
             memory_loss = None
             if self.config.get('use_memory_consistency_loss', True):
                 memory_loss = self.compute_memory_consistency_loss(episode, retrieved_memory)
 
             # Compute balanced loss with adaptive controller support
-            loss_dict = self.compute_balanced_loss(
-                decoder_loss, cross_modal_loss, vision_loss, memory_loss, step, adaptive_controller
+            loss_dict = self.compute_balanced_loss_mixed(
+                decoder_loss, cross_modal_loss, vision_loss, memory_loss, 
+                step, adaptive_controller, has_vision
             )
 
             final_loss = loss_dict['total_loss']
@@ -978,7 +1005,7 @@ class BitMarModel(nn.Module):
             'loss': final_loss,
             'logits': decoder_outputs['logits'],
             'text_features': text_features,
-            'vision_latent': vision_latent,
+            'vision_latent': vision_latent_masked,  # Return masked version
             'fused_features': fused_features,
             'episode': episode,
             'retrieved_memory': retrieved_memory,
@@ -987,6 +1014,7 @@ class BitMarModel(nn.Module):
             'text_attention': text_attention,
             'decoder_attention': decoder_outputs.get('attention_patterns', None),
             'memory_usage': self.memory.memory_usage.clone(),
+            'has_vision': has_vision,  # Return for downstream analysis
         }
 
         # Add loss breakdown and freezing status
@@ -1098,6 +1126,99 @@ class BitMarModel(nn.Module):
             'attention_patterns': outputs['cross_attention'],
             'memory_patterns': outputs['memory_attention']
         }
+
+    def create_episode_mixed(
+        self,
+        text_features: torch.Tensor,
+        vision_latent: torch.Tensor,
+        attention_weights: Dict[str, torch.Tensor],
+        has_vision: torch.Tensor
+    ) -> torch.Tensor:
+        """Create episodes with different handling for vision vs text-only samples"""
+        batch_size = text_features.size(0)
+        
+        # Pool text features
+        text_pooled = text_features.mean(dim=1)  # [batch_size, text_dim]
+        
+        # Project to episode dimension
+        text_episode = self.text_to_episode(text_pooled)
+        vision_episode = self.vision_to_episode(vision_latent)
+        
+        # For text-only samples, use only text features
+        # For multimodal samples, combine text and vision
+        episode = torch.zeros_like(text_episode)
+        
+        # Text-only samples (has_vision == False)
+        text_only_mask = ~has_vision
+        if text_only_mask.any():
+            episode[text_only_mask] = text_episode[text_only_mask]
+        
+        # Multimodal samples (has_vision == True)
+        multimodal_mask = has_vision
+        if multimodal_mask.any():
+            # Combine text and vision for multimodal samples
+            combined = text_episode[multimodal_mask] + vision_episode[multimodal_mask]
+            episode[multimodal_mask] = combined
+            
+        return episode
+
+    def compute_balanced_loss_mixed(
+        self,
+        decoder_loss: torch.Tensor,
+        cross_modal_loss: torch.Tensor,
+        vision_loss: Optional[torch.Tensor],
+        memory_loss: Optional[torch.Tensor],
+        step: int,
+        adaptive_controller=None,
+        has_vision: torch.Tensor = None
+    ) -> Dict[str, torch.Tensor]:
+        """Compute balanced loss for mixed vision/text batches"""
+        
+        # Base loss weights from config
+        text_weight = self.config.get('text_generation_loss_weight', 1.0)
+        cross_modal_weight = self.config.get('cross_modal_loss_weight', 1.0)
+        memory_weight = self.config.get('memory_regularization_weight', 0.1)
+        
+        # Adjust cross-modal weight based on vision availability
+        if has_vision is not None:
+            vision_ratio = has_vision.float().mean().item()
+            # Scale cross-modal loss by the proportion of samples with vision
+            cross_modal_weight = cross_modal_weight * vision_ratio
+        
+        # Apply adaptive loss rebalancing if controller is available
+        if adaptive_controller is not None:
+            controller_info = adaptive_controller.get_loss_multipliers()
+            cross_modal_weight *= controller_info.get('cross_modal_weight_multiplier', 1.0)
+        
+        # Compute total loss
+        total_loss = text_weight * decoder_loss
+        
+        if cross_modal_loss is not None and cross_modal_loss.item() > 0:
+            total_loss = total_loss + cross_modal_weight * cross_modal_loss
+        
+        if vision_loss is not None:
+            vision_weight = self.config.get('vision_reconstruction_weight', 0.1)
+            total_loss = total_loss + vision_weight * vision_loss
+            
+        if memory_loss is not None:
+            total_loss = total_loss + memory_weight * memory_loss
+        
+        # Return loss breakdown
+        loss_dict = {
+            'total_loss': total_loss,
+            'decoder_loss': decoder_loss,
+            'cross_modal_loss': cross_modal_loss,
+            'text_weight': text_weight,
+            'cross_modal_weight': cross_modal_weight,
+            'memory_weight': memory_weight
+        }
+        
+        if vision_loss is not None:
+            loss_dict['vision_loss'] = vision_loss
+        if memory_loss is not None:
+            loss_dict['memory_loss'] = memory_loss
+            
+        return loss_dict
 
 
 def count_parameters(model: nn.Module) -> Dict[str, int]:

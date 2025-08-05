@@ -15,6 +15,13 @@ import random
 import os
 from pathlib import Path
 
+# Import token-constrained dataset
+try:
+    from .token_constrained_dataset import create_token_constrained_data_module
+    TOKEN_CONSTRAINED_AVAILABLE = True
+except ImportError:
+    TOKEN_CONSTRAINED_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -409,9 +416,16 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     return collated
 
 
-def create_data_module(config: Dict) -> BabyLMDataModule:
-    """Create data module from configuration"""
-    return BabyLMDataModule(config)
+def create_data_module(config: Dict) -> 'BabyLMDataModule':
+    """Create appropriate data module based on configuration"""
+    
+    # Check if token constraints are specified
+    if config.get('token_constraints') and TOKEN_CONSTRAINED_AVAILABLE:
+        logger.info("🎯 Creating token-constrained data module for 100M tokens")
+        return create_token_constrained_data_module(config)
+    else:
+        logger.info("📊 Creating standard BabyLM data module")
+        return BabyLMDataModule(config)
 
 
 def test_dataset(config: Dict, max_samples: int = 10):
