@@ -18,7 +18,13 @@ try:
     from torch.amp import autocast  # New PyTorch syntax
 except ImportError:
     from torch.cuda.amp import autocast  # Fallback for older PyTorch
-import wandb
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except (ImportError, AttributeError) as e:
+    WANDB_AVAILABLE = False
+    wandb = None
+    print(f"Warning: Weights & Biases not available: {e}")
 from pathlib import Path
 from typing import Dict, Optional
 import numpy as np
@@ -187,6 +193,12 @@ class TokenAwareTrainer:
     def setup_wandb(self):
         """Setup Weights & Biases logging"""
         wandb_config = self.config.get('wandb', {})
+        
+        if not WANDB_AVAILABLE:
+            logger.warning("⚠️  Weights & Biases not available - logging disabled")
+            self.use_wandb = False
+            self.wandb_logger = None
+            return
         
         if wandb_config.get('project'):
             try:
@@ -589,7 +601,7 @@ class TokenAwareTrainer:
         logger.info(f"   Dataset size: {self.target_tokens:,} tokens")
         
         # Log to wandb with error handling
-        if self.use_wandb:
+        if self.use_wandb and WANDB_AVAILABLE:
             try:
                 wandb.log({
                     'token_progress/processed': self.tokens_processed,
@@ -770,8 +782,6 @@ class TokenAwareTrainer:
                         if 'vision_features' in batch:
                             batch['vision_features'] = batch['vision_features'].float()
                     
-                # Enhanced forward pass with detailed debugging
-                try:
                     # Add detailed tensor debugging
                     logger.debug(f"Forward pass debug info for step {self.global_step}:")
                     logger.debug(f"  • input_ids shape: {batch['input_ids'].shape}")
@@ -834,13 +844,13 @@ class TokenAwareTrainer:
                         )
                     
                     logger.debug(f"Forward pass completed successfully for step {self.global_step}")
+                    
                 except Exception as forward_error:
                     logger.error(f"Forward pass failed at step {self.global_step}: {forward_error}")
                     logger.error(f"Error type: {type(forward_error).__name__}")
                     logger.error(f"Error details: {str(forward_error)}")
                     
                     # Enhanced debugging info
-                    import traceback
                     logger.error("Full traceback:")
                     logger.error(traceback.format_exc())
                     
@@ -855,7 +865,9 @@ class TokenAwareTrainer:
                     if hasattr(self.model, 'memory'):
                         logger.error(f"  • Memory episode dim: {self.model.memory.episode_dim}")
                     
-                    raise forward_error                loss = outputs['loss']
+                    raise forward_error
+                
+                loss = outputs['loss']
 
                 # Check for valid loss with enhanced debugging
                 if not torch.isfinite(loss):
@@ -975,7 +987,7 @@ class TokenAwareTrainer:
                     self.log_token_progress()
 
                 # Enhanced wandb logging with GPU memory monitoring
-                if self.use_wandb and self.global_step % 100 == 0:
+                if self.use_wandb and WANDB_AVAILABLE and self.global_step % 100 == 0:
                     log_dict = {
                         'train/loss': loss.item(),
                         'train/learning_rate': self.optimizer.param_groups[0]['lr'],
@@ -1099,7 +1111,7 @@ class TokenAwareTrainer:
                 self.save_token_checkpoint()
 
                 # Log epoch summary to wandb with error handling
-                if self.use_wandb:
+                if self.use_wandb and WANDB_AVAILABLE:
                     try:
                         wandb.log({
                             'epoch/train_loss': epoch_metrics['train_loss'],
@@ -1135,7 +1147,7 @@ class TokenAwareTrainer:
             logger.info(f"  • Completion: {(self.tokens_processed/self.target_tokens)*100:.2f}%")
             logger.info(f"  • Best cross-modal similarity: {self.best_similarity:.4f}")
 
-            if self.use_wandb:
+            if self.use_wandb and WANDB_AVAILABLE:
                 try:
                     wandb.finish()
                 except Exception as e:
