@@ -299,6 +299,14 @@ class AdaptiveTrainingController:
             'freeze_vision_encoder': self.vision_encoder_frozen
         }
 
+    def get_loss_multipliers(self) -> Dict[str, float]:
+        """Get current loss multipliers for adaptive training"""
+        return {
+            'cross_modal_weight_multiplier': self.current_cross_modal_weight_multiplier,
+            'text_weight_multiplier': 1.0,  # Can be extended for text loss adjustment
+            'vision_weight_multiplier': 1.0  # Can be extended for vision loss adjustment
+        }
+
 
 def compute_cross_modal_similarity(
     text_features: torch.Tensor,
