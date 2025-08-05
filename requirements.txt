@@ -22,7 +22,9 @@ requests
 psutil
 typing-extensions
 huggingface-hub
+lion-pytorch
 codecarbon
+h5py
 
 # Additional testing dependencies
 pytest
