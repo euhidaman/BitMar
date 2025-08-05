@@ -392,8 +392,15 @@ class TokenAwareTrainer:
             batch_tokens = self.count_tokens_in_batch(batch)
 
             try:
-                # Move batch to device
+                # Move batch to device and ensure all required keys exist
                 batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
+                
+                # Add missing keys if necessary for compatibility
+                if 'vision_index' not in batch:
+                    batch['vision_index'] = torch.arange(batch['input_ids'].size(0), device=self.device)
+                
+                if 'has_vision' not in batch:
+                    batch['has_vision'] = torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)
 
                 # Forward pass
                 outputs = self.model(

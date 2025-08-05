@@ -139,7 +139,9 @@ class CompleteBabyLMDataset(Dataset):
             'labels': labels,
             'vision_features': torch.tensor(vision_feature.copy(), dtype=torch.float32),
             'caption': caption,
-            'index': actual_idx
+            'index': actual_idx,
+            'vision_index': actual_idx,  # Add for compatibility
+            'has_vision': True  # Add for compatibility
         }
 
 
@@ -232,7 +234,9 @@ class HuggingFaceValidationDataset(Dataset):
             'labels': labels,
             'vision_features': torch.zeros(768, dtype=torch.float32),  # Dummy vision features
             'caption': text,
-            'index': idx
+            'index': idx,
+            'vision_index': idx,  # Add for compatibility
+            'has_vision': False  # Add for compatibility - text-only validation
         }
 
 

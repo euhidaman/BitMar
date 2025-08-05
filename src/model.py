@@ -699,6 +699,11 @@ class BitMarModel(nn.Module):
             config['episode_dim']
         )
         
+        self.vision_to_episode = BitNetLinear(
+            config['vision_latent_size'],
+            config['episode_dim']
+        )
+        
         self.memory_to_decoder = BitNetLinear(
             config['episode_dim'],
             config['fusion_hidden_size']
