@@ -486,14 +486,16 @@ class TokenAwareTrainer:
         logger.info(f"Trainable parameters: {param_count['trainable_parameters']:,}")
         logger.info(f"Non-trainable parameters: {param_count['non_trainable_parameters']:,}")
 
-        # Compile model for better performance (PyTorch 2.0+)
-        if self.config['training'].get('compile_model', False) and hasattr(torch, 'compile'):
+        # Compile model for better performance (PyTorch 2.0+) - TEMPORARILY DISABLED DUE TO COMPILATION ISSUES
+        if False and self.config['training'].get('compile_model', False) and hasattr(torch, 'compile'):
             try:
                 logger.info("🚀 Converting model for PyTorch compilation...")
                 self.model = torch.compile(self.model, mode='reduce-overhead')
                 logger.info("✅ Model compiled successfully for better performance")
             except Exception as e:
                 logger.warning(f"Failed to compile model: {e}")
+        else:
+            logger.info("⚠️  Model compilation disabled - using eager mode for compatibility")
 
         # Setup optimizer with token-aware configuration
         self.setup_optimizer()
