@@ -989,6 +989,28 @@ class BitMarModel(nn.Module):
         # Cross-modal fusion (will handle masked vision features)
         fused_features, cross_attention = self.fusion(text_features, vision_latent_masked)
 
+        # Update adaptive controller with cross-modal similarity if available
+        if mode == "train" and adaptive_controller is not None and has_vision.any():
+            try:
+                # Compute cross-modal similarity for samples with vision
+                vision_indices = has_vision.nonzero(as_tuple=True)[0]
+                if len(vision_indices) > 0:
+                    # Get features for samples with vision
+                    text_with_vision = text_features[vision_indices]  # [n_vision, seq_len, dim]
+                    vision_with_vision = vision_latent_masked[vision_indices]  # [n_vision, dim]
+                    
+                    # Pool text features
+                    text_pooled = text_with_vision.mean(dim=1)  # [n_vision, dim]
+                    
+                    # Compute cosine similarity
+                    similarity = F.cosine_similarity(text_pooled, vision_with_vision, dim=1)
+                    avg_similarity = similarity.mean().item()
+                    
+                    # Update adaptive controller
+                    adaptive_controller.update_similarity(avg_similarity, step)
+            except Exception as e:
+                logger.warning(f"Failed to update adaptive controller: {e}")
+
         # Create episodes (different handling for vision vs text-only)
         episode = self.create_episode_mixed(
             text_features, vision_latent_masked, cross_attention, has_vision
