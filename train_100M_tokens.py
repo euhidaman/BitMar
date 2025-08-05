@@ -193,7 +193,7 @@ class TokenAwareTrainer:
             self.carbon_tracker = None
 
     def custom_collate_fn(self, batch):
-        """Custom collate function that handles missing keys gracefully"""
+        """Custom collate function that handles missing keys gracefully and ensures proper padding"""
         if not batch:
             return {}
             
@@ -207,6 +207,9 @@ class TokenAwareTrainer:
         
         result = {}
         batch_size = len(batch)
+        
+        # Special handling for sequence-based tensors that need padding
+        sequence_keys = ['input_ids', 'attention_mask', 'labels']
         
         for key in all_keys:
             values = []
@@ -241,28 +244,69 @@ class TokenAwareTrainer:
                         else:
                             values.append(None)  # No valid sample found
             
-            # Stack tensors or keep as list
-            if all(v is not None for v in values):
+            # Handle sequence keys that need padding
+            if key in sequence_keys and all(v is not None for v in values):
                 try:
-                    # Check if all values are tensors and can be stacked
                     if all(torch.is_tensor(v) for v in values):
-                        # Ensure all tensors have the same shape for stackable keys
-                        if key in ['vision_index', 'has_vision', 'index'] or all(v.shape == values[0].shape for v in values):
-                            result[key] = torch.stack(values)
+                        # Find maximum sequence length
+                        if values[0].dim() > 0:
+                            max_len = max(v.size(0) if v.dim() > 0 else 1 for v in values)
+                            
+                            # Pad all sequences to max length
+                            padded_values = []
+                            for v in values:
+                                if v.dim() == 0:
+                                    # Scalar tensor, convert to sequence
+                                    padded = torch.full((max_len,), v.item(), dtype=v.dtype)
+                                elif v.size(0) < max_len:
+                                    # Pad sequence
+                                    pad_size = max_len - v.size(0)
+                                    if key == 'input_ids' or key == 'labels':
+                                        # Pad with pad_token_id or -100 for labels
+                                        pad_value = -100 if key == 'labels' else 0
+                                        padded = torch.cat([v, torch.full((pad_size,), pad_value, dtype=v.dtype)])
+                                    elif key == 'attention_mask':
+                                        # Pad attention mask with 0s
+                                        padded = torch.cat([v, torch.zeros(pad_size, dtype=v.dtype)])
+                                    else:
+                                        # Default padding with zeros
+                                        padded = torch.cat([v, torch.zeros(pad_size, dtype=v.dtype)])
+                                else:
+                                    padded = v
+                                padded_values.append(padded)
+                            
+                            result[key] = torch.stack(padded_values)
                         else:
-                            # Different shapes, keep as list
-                            result[key] = values
+                            # All scalars, just stack
+                            result[key] = torch.stack(values)
                     else:
-                        # Mixed types or non-tensors, keep as list
                         result[key] = values
                 except Exception as e:
-                    logger.warning(f"Failed to stack key '{key}': {e}")
+                    logger.warning(f"Failed to pad and stack key '{key}': {e}")
                     result[key] = values
             else:
-                # Some values are None, filter them out or handle specially
-                filtered_values = [v for v in values if v is not None]
-                if filtered_values:
-                    result[key] = filtered_values
+                # Non-sequence keys or regular handling
+                if all(v is not None for v in values):
+                    try:
+                        # Check if all values are tensors and can be stacked
+                        if all(torch.is_tensor(v) for v in values):
+                            # Ensure all tensors have the same shape for stackable keys
+                            if key in ['vision_index', 'has_vision', 'index'] or all(v.shape == values[0].shape for v in values):
+                                result[key] = torch.stack(values)
+                            else:
+                                # Different shapes, keep as list
+                                result[key] = values
+                        else:
+                            # Mixed types or non-tensors, keep as list
+                            result[key] = values
+                    except Exception as e:
+                        logger.warning(f"Failed to stack key '{key}': {e}")
+                        result[key] = values
+                else:
+                    # Some values are None, filter them out or handle specially
+                    filtered_values = [v for v in values if v is not None]
+                    if filtered_values:
+                        result[key] = filtered_values
         
         return result
 
@@ -533,6 +577,13 @@ class TokenAwareTrainer:
                 if 'has_vision' not in batch or not torch.is_tensor(batch['has_vision']):
                     batch['has_vision'] = torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)
 
+                # Log tensor shapes for debugging
+                if self.global_step % 1000 == 0:
+                    logger.debug(f"Batch tensor shapes:")
+                    for k, v in batch.items():
+                        if torch.is_tensor(v):
+                            logger.debug(f"  {k}: {v.shape}")
+
                 # Forward pass
                 outputs = self.model(
                     input_ids=batch['input_ids'],
@@ -630,7 +681,19 @@ class TokenAwareTrainer:
                     self.save_token_checkpoint()
 
             except Exception as e:
-                logger.error(f"Training step failed: {e}")
+                logger.error(f"Training step failed at step {self.global_step}: {e}")
+                
+                # Enhanced error logging for tensor size mismatches
+                if "size of tensor" in str(e) and "must match" in str(e):
+                    logger.error(f"Tensor size mismatch details:")
+                    logger.error(f"  Batch shapes:")
+                    for k, v in batch.items():
+                        if torch.is_tensor(v):
+                            logger.error(f"    {k}: {v.shape}")
+                    logger.error(f"  Model config:")
+                    logger.error(f"    Memory size: {self.config['model']['memory_size']}")
+                    logger.error(f"    Episode dim: {self.config['model']['episode_dim']}")
+                    logger.error(f"    Max seq length: {self.config['model']['max_seq_len']}")
                 
                 # Clear any gradients and free memory
                 if hasattr(self, 'optimizer'):
