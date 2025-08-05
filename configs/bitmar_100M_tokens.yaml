@@ -57,7 +57,7 @@ vision_feature_reduction:
   target_dim: 64 # Balanced compression
   spatial_pooling: true # Reduce spatial dimensions
   pool_method: "attention" # Attention-based pooling for better features
-  
+
   # Compression parameters
   hidden_dim: 128 # Intermediate compression layer
   learnable: true # Enable learning during training
@@ -68,19 +68,19 @@ data:
   dataset_dir: "../babylm_dataset"
   text_encoder_name: "gpt2"
   max_seq_length: 256 # Balanced sequence length
-  
+
   # Token counting parameters
   count_tokens: true # Enable precise token counting
   target_caption_tokens: 50000000 # Target caption tokens
   target_text_tokens: 50000000 # Target text tokens
   token_counting_method: "gpt2" # Use GPT-2 tokenizer for counting
-  
+
   # DataLoader settings (Optimized for balanced training)
   batch_size: 32 # Balanced batch size
   num_workers: 6 # Efficient data loading
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
-  
+
   # Data mixing strategy (STRICT ALIGNMENT REQUIRED)
   mix_ratio: 0.5 # 50% captions (with images), 50% text-only
   shuffle_datasets: true # Shuffle for better mixing
@@ -89,7 +89,7 @@ data:
   alignment_verification: "strict" # Strict alignment verification
   never_break_pairs: true # Never separate image-caption pairs
   alignment_check_frequency: 1000 # Check alignment every 1000 samples
-  
+
   # No validation split - use entire dataset for training
   use_validation: false
   train_only: true
@@ -125,25 +125,25 @@ training:
   warmup_steps: 1000 # Proper warmup for stability
   learning_rate: 0.0002 # Balanced learning rate for 100M tokens
   weight_decay: 0.02 # Balanced regularization
-  optimizer: "adamw" # Stable optimizer choice
-  
+  optimizer: "adamw8bit" # Stable optimizer choice
+
   # Scheduler configuration
   scheduler_config:
     T_0: 2000 # Initial restart period
     T_mult: 2 # Multiply restart period (must be integer >= 1)
     eta_min_ratio: 0.1 # Minimum LR ratio
-  
+
   # Balanced training objectives (Enhanced alignment focus)
   cross_modal_loss_weight: 1.5 # Higher weight for cross-modal alignment
   text_generation_loss_weight: 1.0 # Standard weight for text generation
   memory_regularization_weight: 0.1 # Light memory regularization
   alignment_consistency_weight: 0.5 # Additional loss for alignment consistency
-  
+
   # Token-aware training (no stopping at token limit)
   track_token_usage: true # Monitor token consumption for logging
   log_token_progress: true # Log token usage progress
   stop_at_token_limit: false # Don't stop at token limit - train full epochs
-  
+
   # Alignment-specific training parameters
   validate_alignment_every_n_steps: 500 # Validate alignment frequently
   log_alignment_metrics: true # Log alignment quality metrics
@@ -177,10 +177,16 @@ evaluation:
   max_generation_length: 32 # Reasonable generation length
   temperature: 0.8 # Balanced creativity
   top_p: 0.9 # Nucleus sampling
-  
+
   # Cross-modal evaluation (Enhanced alignment validation)
   evaluate_alignment: true # Test image-text alignment
-  alignment_metrics: ["cosine_similarity", "retrieval_accuracy", "caption_image_matching", "cross_modal_retrieval"]
+  alignment_metrics:
+    [
+      "cosine_similarity",
+      "retrieval_accuracy",
+      "caption_image_matching",
+      "cross_modal_retrieval",
+    ]
   alignment_threshold: 0.8 # Minimum alignment score required
   validate_pairs_during_eval: true # Validate image-caption pairs during evaluation
 
@@ -201,11 +207,11 @@ memory_optimization:
   empty_cache_frequency: 10 # Regular cache cleaning
   max_memory_slots_in_ram: 16 # Keep 16 slots in RAM
   compress_episodic_memory: true # Compress memory storage
-  
+
   # Vision processing optimization
   vision_feature_caching: false # Don't cache for memory saving
   vision_batch_processing: true # Process vision features in batches
-  
+
   # Model optimization
   tie_word_embeddings: true # Share input/output embeddings
   use_shared_attention: false # Don't share attention for quality
@@ -216,7 +222,7 @@ performance_targets:
   target_cross_modal_similarity: 0.75 # Target similarity score
   target_text_generation_quality: 0.6 # Target BLEU score
   memory_efficiency_threshold: 0.8 # Memory usage efficiency
-  
+
 # Token tracking and constraints (Enhanced alignment tracking)
 token_tracking:
   log_frequency: 1000 # Log token usage every 1000 steps
@@ -224,7 +230,7 @@ token_tracking:
   monitor_caption_text_ratio: true # Monitor 50/50 split
   enforce_token_limits: false # Don't enforce limits during training
   early_stopping_on_limit: false # Don't stop when limit reached - train full epochs
-  
+
   # Alignment-specific tracking
   track_alignment_quality: true # Track image-caption alignment quality
   log_misaligned_samples: true # Log samples with poor alignment
