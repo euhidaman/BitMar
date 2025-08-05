@@ -669,34 +669,6 @@ class TokenAwareTrainer:
                                 ], dim=1)
                         logger.debug(f"Normalized vision features: {batch['vision_features'].shape}")
                 
-                # Validate final tensor dimensions
-                expected_shapes = {
-                    'input_ids': (32, 256),
-                    'attention_mask': (32, 256), 
-                    'labels': (32, 256),
-                    'vision_features': (32, 768),
-                    'has_vision': (32,),
-                    'vision_index': (32,)
-                }
-                
-                for key, expected_shape in expected_shapes.items():
-                    if key in batch and torch.is_tensor(batch[key]):
-                        actual_shape = batch[key].shape
-                        if actual_shape != expected_shape:
-                            logger.warning(f"Unexpected {key} shape: {actual_shape}, expected: {expected_shape}")
-                            # Try to fix common issues
-                            if key == 'vision_features' and len(actual_shape) == 2 and actual_shape[1] != 768:
-                                if actual_shape[1] > 768:
-                                    batch[key] = batch[key][:, :768]
-                                    logger.info(f"Truncated {key} to {batch[key].shape}")
-                                else:
-                                    pad_size = 768 - actual_shape[1]
-                                    batch[key] = torch.cat([
-                                        batch[key],
-                                        torch.zeros(actual_shape[0], pad_size, device=batch[key].device)
-                                    ], dim=1)
-                                    logger.info(f"Padded {key} to {batch[key].shape}")
-
                 # Forward pass with detailed error tracking
                 try:
                     logger.debug(f"Starting forward pass for step {self.global_step}")

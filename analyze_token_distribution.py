@@ -420,8 +420,8 @@ class TokenAnalyzer:
             'dataset_analysis': analysis_results,
             'sampling_strategy': sampling_strategy,
             'recommendations': {
-                'optimal_batch_size': 32,
-                'estimated_training_steps': sampling_strategy['summary']['total_actual_tokens'] // (32 * 256),  # batch_size * seq_len
+                'optimal_batch_size': 96,
+                'estimated_training_steps': sampling_strategy['summary']['total_actual_tokens'] // (96 * 256),  # batch_size * seq_len
                 'estimated_epochs': 30,
                 'alignment_quality': 'Perfect (image-caption pairs maintained)',
                 'token_efficiency': f"{sampling_strategy['summary']['efficiency']:.2f}%"
