@@ -281,12 +281,27 @@ class TokenAwareTrainer:
 
         # Create scheduler with restarts
         scheduler_config = self.config['training'].get('scheduler_config', {})
+        
+        # Validate scheduler parameters
+        T_0 = int(scheduler_config.get('T_0', 2000))
+        T_mult = scheduler_config.get('T_mult', 2)
+        
+        # Ensure T_mult is an integer >= 1
+        if isinstance(T_mult, float):
+            T_mult = max(1, int(T_mult))
+            logger.warning(f"Converting T_mult from float to int: {T_mult}")
+        elif not isinstance(T_mult, int) or T_mult < 1:
+            T_mult = 2
+            logger.warning(f"Invalid T_mult, using default: {T_mult}")
+        
         self.scheduler = CosineAnnealingWarmRestarts(
             self.optimizer,
-            T_0=scheduler_config.get('T_0', 2000),
-            T_mult=scheduler_config.get('T_mult', 1.5),
+            T_0=T_0,
+            T_mult=T_mult,
             eta_min=self.config['training']['learning_rate'] * scheduler_config.get('eta_min_ratio', 0.1)
         )
+        
+        logger.info(f"Scheduler configured: T_0={T_0}, T_mult={T_mult}")
 
         logger.info(f"✅ Optimizer and scheduler configured for 100M token training")
 
