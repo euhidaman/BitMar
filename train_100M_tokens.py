@@ -192,6 +192,60 @@ class TokenAwareTrainer:
             logger.warning(f"Failed to setup carbon tracking: {e}")
             self.carbon_tracker = None
 
+    def custom_collate_fn(self, batch):
+        """Custom collate function that handles missing keys gracefully"""
+        if not batch:
+            return {}
+            
+        # Get all keys from first sample as baseline
+        first_sample = batch[0]
+        all_keys = set(first_sample.keys())
+        
+        # Add any missing keys from other samples
+        for sample in batch[1:]:
+            all_keys.update(sample.keys())
+        
+        result = {}
+        batch_size = len(batch)
+        
+        for key in all_keys:
+            values = []
+            for i, sample in enumerate(batch):
+                if key in sample:
+                    values.append(sample[key])
+                else:
+                    # Provide sensible defaults for missing keys
+                    if key == 'vision_index':
+                        values.append(torch.tensor(i, dtype=torch.long))  # Use batch index as default
+                    elif key == 'has_vision':
+                        values.append(torch.tensor(True, dtype=torch.bool))  # Default to having vision
+                    elif key == 'index':
+                        values.append(torch.tensor(i, dtype=torch.long))  # Use batch index
+                    else:
+                        # For other keys, use zero tensor with same shape as first valid sample
+                        for sample in batch:
+                            if key in sample and sample[key] is not None:
+                                if torch.is_tensor(sample[key]):
+                                    values.append(torch.zeros_like(sample[key]))
+                                else:
+                                    values.append(sample[key])  # Copy first valid value
+                                break
+                        else:
+                            values.append(None)  # No valid sample found
+            
+            # Stack tensors or keep as list
+            if all(v is not None for v in values):
+                try:
+                    if torch.is_tensor(values[0]):
+                        result[key] = torch.stack(values)
+                    else:
+                        result[key] = values
+                except Exception as e:
+                    logger.warning(f"Failed to stack key '{key}': {e}")
+                    result[key] = values
+        
+        return result
+
     def setup_model_and_data(self):
         """Setup model and token-constrained data"""
         logger.info("Setting up model and token-constrained data...")
@@ -210,6 +264,22 @@ class TokenAwareTrainer:
             self.data_module = create_data_module(self.config['data'])
         
         self.data_module.setup(rebuild_cache=getattr(self, 'rebuild_cache', False))
+
+        # Override train_dataloader to use custom collate function
+        original_train_dataloader = self.data_module.train_dataloader
+        def custom_train_dataloader():
+            from torch.utils.data import DataLoader
+            return DataLoader(
+                self.data_module.train_dataset,
+                batch_size=self.data_module.batch_size,
+                shuffle=True,
+                num_workers=self.data_module.num_workers,
+                pin_memory=self.data_module.pin_memory,
+                persistent_workers=self.data_module.persistent_workers if self.data_module.num_workers > 0 else False,
+                drop_last=True,
+                collate_fn=self.custom_collate_fn
+            )
+        self.data_module.train_dataloader = custom_train_dataloader
 
         # Get and log token statistics if available
         if hasattr(self.data_module, 'get_token_statistics'):
