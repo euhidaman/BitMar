@@ -44,6 +44,13 @@ class TokenConstrainedBabyLMDataset(Dataset):
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+            
+        # Ensure model max length is set correctly
+        if hasattr(self.tokenizer, 'model_max_length'):
+            if self.tokenizer.model_max_length > max_seq_length:
+                logger.warning(f"Tokenizer max_length ({self.tokenizer.model_max_length}) > dataset max_length ({max_seq_length})")
+                # Force the tokenizer to respect our max length
+                self.tokenizer.model_max_length = max_seq_length
 
         # Load and process data with token constraints
         self._load_token_constrained_data(rebuild_cache)
@@ -260,8 +267,17 @@ class TokenConstrainedBabyLMDataset(Dataset):
         # Check that vision features have correct shape
         expected_vision_dim = 768  # DiNOv2 features
         for i, vf in enumerate(self.vision_features[:5]):  # Check first 5 samples
-            if len(vf.shape) != 2 or vf.shape[1] != expected_vision_dim:
-                raise ValueError(f"Vision feature shape mismatch at index {i}: {vf.shape}")
+            # Handle both flattened (768,) and patch format (196, 768)
+            if len(vf.shape) == 1:
+                # Flattened format
+                if vf.shape[0] != expected_vision_dim:
+                    raise ValueError(f"Vision feature shape mismatch at index {i}: {vf.shape}, expected ({expected_vision_dim},)")
+            elif len(vf.shape) == 2:
+                # Patch format
+                if vf.shape[1] != expected_vision_dim:
+                    raise ValueError(f"Vision feature shape mismatch at index {i}: {vf.shape}, expected (N, {expected_vision_dim})")
+            else:
+                raise ValueError(f"Unexpected vision feature shape at index {i}: {vf.shape}")
         
         # Check that indices are properly preserved
         for i, sample in enumerate(self.caption_samples[:10]):  # Check first 10 samples
@@ -315,7 +331,7 @@ class TokenConstrainedBabyLMDataset(Dataset):
         sample_type = sample['type']
         vision_index = sample['vision_index']
 
-        # Tokenize text
+        # Tokenize text with strict length control
         encoded = self.tokenizer(
             text,
             max_length=self.max_seq_length,
@@ -326,6 +342,12 @@ class TokenConstrainedBabyLMDataset(Dataset):
 
         input_ids = encoded['input_ids'].squeeze(0)
         attention_mask = encoded['attention_mask'].squeeze(0)
+        
+        # Double-check sequence length (safety check)
+        if input_ids.size(0) > self.max_seq_length:
+            logger.warning(f"Sequence length {input_ids.size(0)} > max_length {self.max_seq_length}, truncating")
+            input_ids = input_ids[:self.max_seq_length]
+            attention_mask = attention_mask[:self.max_seq_length]
 
         # Create labels for text generation
         labels = input_ids.clone()
@@ -348,12 +370,26 @@ class TokenConstrainedBabyLMDataset(Dataset):
                 raise ValueError(f"ALIGNMENT ERROR: vision_index {vision_index} >= {len(self.vision_features)}")
             
             vision_feature = self.vision_features[vision_index]
-            result['vision_features'] = torch.tensor(vision_feature.copy(), dtype=torch.float32)
+            
+            # Handle both flattened and patch formats
+            if len(vision_feature.shape) == 1:
+                # Flattened format (768,) - reshape to patches if needed
+                if vision_feature.shape[0] == 768:
+                    # For compatibility, we'll keep it flattened but ensure it's 2D
+                    vision_tensor = torch.tensor(vision_feature.copy(), dtype=torch.float32).unsqueeze(0)  # (1, 768)
+                else:
+                    vision_tensor = torch.tensor(vision_feature.copy(), dtype=torch.float32)
+            else:
+                # Already in patch format
+                vision_tensor = torch.tensor(vision_feature.copy(), dtype=torch.float32)
+            
+            result['vision_features'] = vision_tensor
             result['has_vision'] = True
             result['vision_index'] = vision_index  # Track for debugging
         else:
             # Create dummy vision features for text-only samples
-            result['vision_features'] = torch.zeros(768, dtype=torch.float32)
+            # Match the expected format - use (1, 768) for consistency
+            result['vision_features'] = torch.zeros(1, 768, dtype=torch.float32)
             result['has_vision'] = False
 
         return result

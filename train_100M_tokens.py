@@ -23,6 +23,17 @@ import time
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
+# Setup logging first
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('training_100M_tokens.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Import components
 from src.dataset import create_data_module
 from src.model import create_bitmar_model, count_parameters
@@ -33,13 +44,16 @@ from src.attention_visualizer import AttentionHeadAnalyzer
 try:
     from src.token_constrained_dataset import create_token_constrained_data_module
     TOKEN_CONSTRAINED_AVAILABLE = True
+    logger.info("✅ Token-constrained dataset available")
 except ImportError:
     try:
         # Try importing without src prefix (in case running from different directory)
         from token_constrained_dataset import create_token_constrained_data_module
         TOKEN_CONSTRAINED_AVAILABLE = True
+        logger.info("✅ Token-constrained dataset available (direct import)")
     except ImportError:
         TOKEN_CONSTRAINED_AVAILABLE = False
+        logger.warning("⚠️  Token-constrained dataset not available")
 
 # Try to import optional components
 try:
@@ -53,17 +67,6 @@ try:
     ADAPTIVE_TRAINING_AVAILABLE = True
 except ImportError:
     ADAPTIVE_TRAINING_AVAILABLE = False
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('training_100M_tokens.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
 
 
 class TokenAwareTrainer:
@@ -167,14 +170,17 @@ class TokenAwareTrainer:
         # Check if we should use token-constrained dataset
         if self.config.get('token_constraints') and TOKEN_CONSTRAINED_AVAILABLE:
             logger.info("🎯 Using token-constrained dataset for 100M tokens")
-            self.data_module = create_token_constrained_data_module(self.config['data'])
+            # Pass the full data config including token constraints
+            data_config = self.config['data'].copy()
+            data_config['token_constraints'] = self.config['token_constraints']
+            self.data_module = create_token_constrained_data_module(data_config)
         else:
             if self.config.get('token_constraints') and not TOKEN_CONSTRAINED_AVAILABLE:
                 logger.warning("⚠️  Token constraints specified but token-constrained dataset not available")
             logger.info("📊 Using standard BabyLM dataset")
             self.data_module = create_data_module(self.config['data'])
         
-        self.data_module.setup()
+        self.data_module.setup(rebuild_cache=getattr(self, 'rebuild_cache', False))
 
         # Get and log token statistics if available
         if hasattr(self.data_module, 'get_token_statistics'):
@@ -535,11 +541,7 @@ def main():
     try:
         # Initialize trainer
         trainer = TokenAwareTrainer(args.config, device=args.device)
-        
-        # Rebuild cache if requested
-        if args.rebuild_cache:
-            logger.info("🔄 Rebuilding dataset cache...")
-            # This will be handled by the dataset module
+        trainer.rebuild_cache = args.rebuild_cache  # Pass rebuild_cache to trainer
         
         # Start training
         trainer.train()
