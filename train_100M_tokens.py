@@ -589,8 +589,8 @@ class TokenAwareTrainer:
                 if 'has_vision' not in batch or not torch.is_tensor(batch['has_vision']):
                     batch['has_vision'] = torch.ones(batch['input_ids'].size(0), dtype=torch.bool, device=self.device)
 
-                # Log tensor shapes for debugging and validate dimensions
-                if self.global_step % 1000 == 0 or self.global_step < 5:
+                # Log tensor shapes for debugging and validate dimensions (only first step and then every 1000 steps)
+                if self.global_step == 0 or (self.global_step > 0 and self.global_step % 1000 == 0):
                     logger.info(f"Batch tensor shapes at step {self.global_step}:")
                     for k, v in batch.items():
                         if torch.is_tensor(v):
