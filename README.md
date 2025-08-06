@@ -7,6 +7,15 @@ BitMar is a **Vision-Language Episodic Memory Transformer** that combines BitNet
 
 ## 🛠️ Recent Fixes & Enhancements
 
+### ✅ Enhanced Memory Visualization (NEW!)
+- **Memory Evolution Tracking**: Track how memory slots evolve over training epochs
+- **Memory Diversity Metrics**: Monitor memory slot specialization and diversity
+- **Access Pattern Analysis**: Visualize which memory slots are used most frequently
+- **Cross-Modal Memory Distribution**: Track text-only vs multimodal memory specialization
+- **Learning Trajectory Visualization**: 2D visualization of memory learning progress
+- **WandB Integration**: All visualizations automatically logged to Weights & Biases
+- **Configurable Frequency**: Customizable snapshot and visualization frequencies
+
 ### ✅ Fixed Training Issues
 - **Fixed NameError**: Resolved `input_ids` not defined error in training loop
 - **Enhanced Error Handling**: Added try-catch blocks for visualization and attention analysis
@@ -47,6 +56,7 @@ Vision Input → Quantized ViT → Vision Latent (768D)
 - **BitNet Quantization**: 1.58-bit quantized text encoder/decoder for efficient inference
 - **Vision Processing**: Quantized Vision Transformer using pre-computed DiNOv2 features
 - **Episodic Memory**: Larimar-inspired memory mechanism for cross-modal associations
+- **Memory Visualization**: Comprehensive tracking and visualization of episodic memory evolution
 - **Enhanced Logging**: Comprehensive wandb logging with proper axis labels and categorization
 - **Attention Analysis**: Lo-fit style attention head analysis and visualization
 - **BabyLM Optimized**: Trained within BabyLM constraints (10 epochs max)
@@ -466,7 +476,54 @@ The episodic memory mechanism aligns with cognitive theories of grounding, where
 - **Updates**: Gradient-based memory slot updates
 - **Retrieval**: Soft attention over memory slots
 
-## 🐛 Troubleshooting
+## � Memory Visualization
+
+BitMar includes comprehensive memory visualization capabilities that track and visualize episodic memory evolution throughout training.
+
+### Available Visualizations
+
+1. **Memory Evolution Heatmap**: Shows how individual memory slots change over training epochs
+2. **Memory Diversity & Specialization**: Tracks how memory slots become specialized for different types of content
+3. **Memory Access Patterns**: Visualizes which memory slots are accessed most frequently
+4. **Cross-Modal Memory Distribution**: Shows the balance between text-only and multimodal memory usage
+5. **Learning Trajectory**: 2D visualization of memory learning progress using PCA
+
+### Configuration
+
+Enable memory visualization in your config file:
+
+```yaml
+wandb:
+  log_memory_evolution: true
+  plot_memory_evolution_heatmap: true
+  plot_memory_diversity: true
+  plot_memory_access_patterns: true
+  memory_visualization_frequency: 500
+  memory_snapshot_frequency: 100
+  
+  track_memory_metrics:
+    - "memory_diversity_score"
+    - "memory_specialization_score"
+    - "memory_usage_entropy"
+    - "cross_modal_memory_ratio"
+```
+
+### Key Metrics Tracked
+
+- **Diversity Score**: How different memory slots are from each other (higher = more diverse)
+- **Specialization Score**: How concentrated each slot's activation is (higher = more specialized)
+- **Usage Entropy**: Distribution of memory slot usage (higher = more balanced usage)
+- **Cross-Modal Ratio**: Proportion of text-only vs multimodal memory specialization
+
+### Testing Memory Visualization
+
+```bash
+python test_memory_visualization.py
+```
+
+This will create test visualizations in the `test_memory_plots/` directory and validate the integration.
+
+## �🐛 Troubleshooting
 
 ### Common Issues
 1. **CUDA OOM**: Reduce batch size in config

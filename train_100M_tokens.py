@@ -40,6 +40,7 @@ from src.dataset import create_data_module
 from src.model import create_bitmar_model, count_parameters
 from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
+from src.memory_visualization_integration import setup_memory_visualization
 
 # Try to import token-constrained dataset
 try:
@@ -459,6 +460,14 @@ class TokenAwareTrainer:
 
         # Setup adaptive training if enabled
         self.setup_adaptive_training()
+        
+        # Setup memory visualization integration
+        try:
+            self.memory_viz = setup_memory_visualization(self.config, self.model)
+            logger.info("✅ Memory visualization integration initialized")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize memory visualization: {e}")
+            self.memory_viz = None
 
     def setup_optimizer(self):
         """Setup optimizer and scheduler for 100M token training"""
@@ -702,6 +711,18 @@ class TokenAwareTrainer:
 
                 loss = outputs['loss']
 
+                # Log memory visualization if available
+                if self.memory_viz is not None:
+                    try:
+                        self.memory_viz.log_training_step(
+                            batch=batch,
+                            epoch=epoch,
+                            step=self.global_step,
+                            model_outputs=outputs
+                        )
+                    except Exception as e:
+                        logger.warning(f"Memory visualization logging failed: {e}")
+
                 # Check for valid loss
                 if not torch.isfinite(loss):
                     logger.warning(f"Invalid loss at step {self.global_step}: {loss.item()}")
@@ -895,6 +916,14 @@ class TokenAwareTrainer:
 
             # Final checkpoint
             self.save_token_checkpoint()
+
+            # Generate final memory visualization report
+            if self.memory_viz is not None:
+                try:
+                    self.memory_viz.generate_final_report()
+                    logger.info("✅ Generated final memory visualization report")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to generate final memory report: {e}")
 
             # Final token summary
             logger.info("🎯 Final Token Summary:")

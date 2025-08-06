@@ -76,7 +76,7 @@ data:
   token_counting_method: "gpt2" # Use GPT-2 tokenizer for counting
 
   # DataLoader settings (Optimized for balanced training)
-  batch_size: 96 # Increased batch size for faster training
+  batch_size: 64 # Increased batch size for faster training
   num_workers: 6 # Efficient data loading
   pin_memory: true # Faster GPU transfers
   persistent_workers: true # Keep workers alive
@@ -168,6 +168,24 @@ wandb:
   plot_memory_usage: true
   plot_token_distribution: true # Track token usage distribution
   plot_alignment_metrics: true # Track alignment quality over time
+
+  # Enhanced Memory Visualization Settings
+  log_memory_evolution: true # Track memory slot evolution over time
+  plot_memory_evolution_heatmap: true # Memory slot evolution heatmaps
+  plot_memory_diversity: true # Track memory diversity and specialization
+  plot_memory_access_patterns: true # Visualize memory access patterns
+  memory_visualization_frequency: 500 # Log memory visualizations every 500 steps
+  memory_snapshot_frequency: 100 # Take memory snapshots every 100 steps
+
+  # Memory-specific metrics to track
+  track_memory_metrics:
+    - "memory_diversity_score" # How different memory slots are
+    - "memory_specialization_score" # How specialized each slot becomes
+    - "memory_usage_entropy" # Distribution of memory slot usage
+    - "cross_modal_memory_ratio" # Ratio of text-only vs multimodal specialization
+    - "memory_slot_utilization" # Percentage of actively used slots
+    - "memory_update_frequency" # How often memory slots are updated
+    - "memory_retrieval_accuracy" # Accuracy of memory retrievals
 
 # Evaluation (Comprehensive for balanced approach)
 evaluation:
