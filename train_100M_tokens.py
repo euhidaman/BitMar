@@ -42,6 +42,15 @@ from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
 from src.memory_visualization_integration import setup_memory_visualization
 
+# Try to import evaluation integration
+try:
+    from src.training_evaluation_integration import TrainingEvaluationIntegration
+    EVALUATION_INTEGRATION_AVAILABLE = True
+    logger.info("✅ Evaluation integration available")
+except ImportError:
+    EVALUATION_INTEGRATION_AVAILABLE = False
+    logger.warning("⚠️  Evaluation integration not available")
+
 # Try to import token-constrained dataset
 try:
     from src.token_constrained_dataset import create_token_constrained_data_module
@@ -469,6 +478,36 @@ class TokenAwareTrainer:
             logger.warning(f"⚠️  Failed to initialize memory visualization: {e}")
             self.memory_viz = None
 
+        # Setup evaluation integration
+        try:
+            if EVALUATION_INTEGRATION_AVAILABLE:
+                eval_config = self.config.get('evaluation', {})
+                self.evaluation_integration = TrainingEvaluationIntegration(
+                    pipeline_2024_path=eval_config.get('pipeline_2024_path', 'd:/BabyLM/evaluation-pipeline-2024'),
+                    pipeline_2025_path=eval_config.get('pipeline_2025_path', 'd:/BabyLM/evaluation-pipeline-2025'),
+                    results_dir=eval_config.get('results_dir', 'evaluation_results'),
+                    eval_frequency=eval_config.get('eval_frequency', 1),
+                    fast_eval_epochs=eval_config.get('fast_eval_epochs', list(range(1, 10))),
+                    full_eval_epochs=eval_config.get('full_eval_epochs', [10])
+                )
+                
+                # Setup evaluation with model and tokenizer
+                self.evaluation_integration.setup_evaluation(
+                    model=self.model,
+                    tokenizer=self.model.tokenizer,
+                    device=self.device
+                )
+                
+                logger.info("✅ BabyLM evaluation integration initialized")
+                logger.info(f"  • Fast eval epochs: {self.evaluation_integration.fast_eval_epochs}")
+                logger.info(f"  • Full eval epochs: {self.evaluation_integration.full_eval_epochs}")
+            else:
+                self.evaluation_integration = None
+                logger.info("⚠️  Evaluation integration not available")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize evaluation integration: {e}")
+            self.evaluation_integration = None
+
     def setup_optimizer(self):
         """Setup optimizer and scheduler for 100M token training"""
         # Calculate total training steps based on exact token count
@@ -887,6 +926,41 @@ class TokenAwareTrainer:
                 # Save checkpoint after each epoch
                 self.save_token_checkpoint()
 
+                # Run epoch evaluation if configured
+                if self.evaluation_integration is not None:
+                    try:
+                        eval_results = self.evaluation_integration.run_epoch_evaluation(
+                            epoch=epoch + 1,  # Use 1-indexed epochs for evaluation
+                            model_save_path=str(self.checkpoint_dir / "evaluation_models")
+                        )
+                        
+                        if eval_results is not None:
+                            logger.info(f"✅ Epoch {epoch + 1} evaluation completed")
+                            
+                            # Log evaluation summary to wandb
+                            if self.use_wandb and "error" not in eval_results:
+                                try:
+                                    eval_summary = {
+                                        f"evaluation/epoch": epoch + 1,
+                                        f"evaluation/completed": 1
+                                    }
+                                    
+                                    # Add status information if available
+                                    for eval_type, results in eval_results.items():
+                                        if isinstance(results, dict) and "status" in results:
+                                            eval_summary[f"evaluation/{eval_type}_success"] = 1 if results["status"] == "success" else 0
+                                    
+                                    wandb.log(eval_summary, step=self.global_step)
+                                    
+                                except Exception as e:
+                                    logger.warning(f"Failed to log evaluation results to wandb: {e}")
+                        else:
+                            logger.info(f"No evaluation scheduled for epoch {epoch + 1}")
+                    
+                    except Exception as e:
+                        logger.error(f"Evaluation failed for epoch {epoch + 1}: {e}")
+                        # Continue training even if evaluation fails
+                
                 # Log epoch summary to wandb with error handling
                 if self.use_wandb:
                     try:
@@ -924,6 +998,14 @@ class TokenAwareTrainer:
                     logger.info("✅ Generated final memory visualization report")
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to generate final memory report: {e}")
+
+            # Finalize evaluation integration
+            if self.evaluation_integration is not None:
+                try:
+                    self.evaluation_integration.finalize_evaluation()
+                    logger.info("✅ Finalized evaluation integration")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to finalize evaluation integration: {e}")
 
             # Final token summary
             logger.info("🎯 Final Token Summary:")
