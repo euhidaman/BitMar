@@ -126,13 +126,15 @@ class MemoryVisualizationIntegration:
     def _extract_memory_slots(self) -> Optional[torch.Tensor]:
         """Extract memory slots from the model"""
         try:
-            # Try different possible attribute names for memory slots
+            # Try different possible attribute names for memory slots based on actual BitMar structure
             possible_attrs = [
-                'memory_slots',
+                'memory.memory',  # BitMar structure: self.memory (EpisodicMemory) -> .memory (buffer)
+                'memory.memory_slots', 
+                'episodic_memory.memory',
                 'episodic_memory.memory_slots', 
                 'episodic_memory.slots',
+                'memory_slots',
                 'memory.slots',
-                'memory.memory_slots'
             ]
             
             for attr_path in possible_attrs:
@@ -143,10 +145,19 @@ class MemoryVisualizationIntegration:
                         obj = getattr(obj, attr)
                     
                     if isinstance(obj, torch.Tensor):
+                        logger.debug(f"Found memory slots at: {attr_path}, shape: {obj.shape}")
                         return obj.detach()
                     
                 except AttributeError:
                     continue
+            
+            # Debug: Print available attributes
+            if hasattr(self.model, 'memory'):
+                memory_attrs = [attr for attr in dir(self.model.memory) if not attr.startswith('_')]
+                logger.debug(f"Available memory attributes: {memory_attrs}")
+            
+            model_attrs = [attr for attr in dir(self.model) if not attr.startswith('_') and 'memory' in attr.lower()]
+            logger.debug(f"Available model attributes with 'memory': {model_attrs}")
             
             logger.warning("⚠️  Could not find memory slots in model")
             return None
@@ -186,24 +197,41 @@ class MemoryVisualizationIntegration:
     def _extract_access_counts(self, model_outputs: Dict) -> Optional[torch.Tensor]:
         """Extract memory slot access counts from model outputs"""
         try:
-            # Check for access counts in model outputs
+            # Check for access counts in model outputs (BitMar specific)
             access_keys = [
+                'memory_usage',  # BitMar outputs this directly
                 'memory_access_counts',
                 'slot_access_counts', 
-                'memory_usage',
                 'slot_usage'
             ]
             
             for key in access_keys:
                 if key in model_outputs:
-                    return model_outputs[key].detach()
+                    tensor = model_outputs[key]
+                    if isinstance(tensor, torch.Tensor):
+                        return tensor.detach()
             
-            # If not directly available, try to infer from attention weights
+            # If not directly available, try to infer from memory attention weights
             if 'memory_attention' in model_outputs:
                 attention_weights = model_outputs['memory_attention']  # [batch_size, memory_size]
-                # Convert attention to access counts (sum over batch)
-                access_counts = torch.sum(attention_weights, dim=0)
-                return access_counts.detach()
+                if isinstance(attention_weights, torch.Tensor) and attention_weights.dim() == 2:
+                    # Convert attention to access counts (sum over batch)
+                    access_counts = torch.sum(attention_weights, dim=0)  # [memory_size]
+                    return access_counts.detach()
+            
+            # Try alternative attention keys
+            attention_keys = ['cross_attention', 'memory_attn', 'episodic_attention']
+            for key in attention_keys:
+                if key in model_outputs:
+                    attention = model_outputs[key]
+                    if isinstance(attention, torch.Tensor) and attention.dim() >= 2:
+                        # Assume last dimension is memory_size
+                        if attention.dim() == 2:  # [batch_size, memory_size]
+                            access_counts = torch.sum(attention, dim=0)
+                            return access_counts.detach()
+                        elif attention.dim() == 3:  # [batch_size, seq_len, memory_size] or similar
+                            access_counts = torch.sum(attention, dim=(0, 1))
+                            return access_counts.detach()
             
             return None
             
