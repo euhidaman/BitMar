@@ -100,8 +100,14 @@ class BabyLMEvaluationPipeline:
         try:
             results = {}
             
-            # Determine which script to use
-            script_name = "eval_zero_shot_fast.sh" if fast else "eval_zero_shot.sh"
+            # Determine which script and data directory to use
+            if fast:
+                script_name = "eval_zero_shot_fast.sh"
+                eval_data_suffix = "fast_eval"  # Use fast_eval for quick evaluation
+            else:
+                script_name = "eval_zero_shot.sh"
+                eval_data_suffix = "full_eval"  # Use full_eval for comprehensive evaluation
+                
             script_path = self.pipeline_2025_path / script_name
             
             # Results directory for this epoch
@@ -113,18 +119,22 @@ class BabyLMEvaluationPipeline:
             os.chdir(self.pipeline_2025_path)
             
             try:
-                # Run zero-shot evaluations
+                # Run zero-shot evaluations with correct data path
+                eval_data_path = f"evaluation_data/{eval_data_suffix}"
+                
                 cmd = [
                     "bash", 
                     str(script_path),
                     model_path,
-                    "causal"  # Assume causal backend for BitMar
+                    "causal",  # Assume causal backend for BitMar
+                    eval_data_path  # Pass the evaluation data path
                 ]
                 
                 if fast:
                     cmd.append(f"epoch_{epoch}")  # revision name for fast eval
                 
                 logger.info(f"Running text evaluations 2025 (fast={fast}): {' '.join(cmd)}")
+                logger.info(f"Using evaluation data from: {eval_data_path}")
                 
                 result = subprocess.run(
                     cmd,
