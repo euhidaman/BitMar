@@ -146,7 +146,8 @@ class MemoryVisualizationIntegration:
                     
                     if isinstance(obj, torch.Tensor):
                         logger.debug(f"Found memory slots at: {attr_path}, shape: {obj.shape}")
-                        return obj.detach()
+                        # Ensure tensor is on CPU for visualization to avoid device conflicts
+                        return obj.detach().cpu()
                     
                 except AttributeError:
                     continue
@@ -209,7 +210,8 @@ class MemoryVisualizationIntegration:
                 if key in model_outputs:
                     tensor = model_outputs[key]
                     if isinstance(tensor, torch.Tensor):
-                        return tensor.detach()
+                        # Ensure tensor is on CPU to avoid device conflicts
+                        return tensor.detach().cpu()
             
             # If not directly available, try to infer from memory attention weights
             if 'memory_attention' in model_outputs:
@@ -217,7 +219,7 @@ class MemoryVisualizationIntegration:
                 if isinstance(attention_weights, torch.Tensor) and attention_weights.dim() == 2:
                     # Convert attention to access counts (sum over batch)
                     access_counts = torch.sum(attention_weights, dim=0)  # [memory_size]
-                    return access_counts.detach()
+                    return access_counts.detach().cpu()
             
             # Try alternative attention keys
             attention_keys = ['cross_attention', 'memory_attn', 'episodic_attention']
@@ -228,10 +230,10 @@ class MemoryVisualizationIntegration:
                         # Assume last dimension is memory_size
                         if attention.dim() == 2:  # [batch_size, memory_size]
                             access_counts = torch.sum(attention, dim=0)
-                            return access_counts.detach()
+                            return access_counts.detach().cpu()
                         elif attention.dim() == 3:  # [batch_size, seq_len, memory_size] or similar
                             access_counts = torch.sum(attention, dim=(0, 1))
-                            return access_counts.detach()
+                            return access_counts.detach().cpu()
             
             return None
             
