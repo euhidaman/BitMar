@@ -119,13 +119,9 @@ d:\BabyLM\
 │   ├── validate_evaluation_setup.py
 │   └── download_evaluation_data.py
 ├── evaluation-pipeline-2024/         # Multimodal evaluations
-│   ├── eval_multimodal.sh
+│   ├── eval_multimodal.sh            # VQA + Winoground (uses HF datasets)
 │   ├── eval_blimp.sh
 │   ├── eval_ewok.sh
-│   ├── evaluation_data/              # Downloaded from OSF
-│   │   ├── winoground_filtered/
-│   │   ├── vqa_filtered/
-│   │   └── ...
 │   ├── devbench/
 │   ├── ewok/
 │   └── requirements.txt
@@ -141,13 +137,25 @@ d:\BabyLM\
 │   │       ├── ewok_filtered/        # EWoK tasks
 │   │       ├── entity_tracking/      # Entity tracking tasks
 │   │       ├── glue_filtered/        # GLUE tasks for fine-tuning
-│   │       ├── winoground_filtered/  # Winoground tasks
-│   │       ├── vqa_filtered/         # VQA tasks
 │   │       ├── wug_adj_nominalization/ # Morphology tasks
 │   │       ├── wug_past_tense/       # Morphology tasks
 │   │       ├── comps/                # Property knowledge tasks
 │   │       ├── reading/              # Reading time tasks
 │   │       └── cdi_childes/          # CDI-CHILDES tasks
+```
+
+## 🎯 Multimodal Data Notes
+
+**Important**: Multimodal evaluations (VQA and Winoground) do **NOT** use local data files. Instead:
+
+- **VQA**: Downloads `HuggingFaceM4/VQAv2` dataset automatically during evaluation
+- **Winoground**: Downloads `facebook/winoground` dataset automatically during evaluation
+- **Pipeline**: Uses evaluation-pipeline-2024's `eval_multimodal.sh` with `lm_eval`
+- **No setup required**: The datasets are downloaded from HuggingFace automatically
+
+### Multimodal Pipeline Status
+- ✅ **2024 Pipeline**: Fully functional multimodal evaluation via `lm_eval`
+- ⏳ **2025 Pipeline**: Multimodal evaluation commands are "under construction"
 │   └── requirements.txt
 └── babylm_dataset/                   # Your training data
     ├── train_50M.zip

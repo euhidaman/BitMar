@@ -1,6 +1,12 @@
 """
 Evaluation Pipeline Integration for BabyLM Challenge 2025
 Integrates evaluation-pipeline-2024 and evaluation-pipeline-2025 for epoch-based evaluation
+
+Multimodal Data Notes:
+- VQA and Winoground tasks use HuggingFace datasets directly (no local data files needed)
+- 2024 pipeline: Uses lm_eval to run VQA (HuggingFaceM4/VQAv2) and Winoground (facebook/winoground)
+- 2025 pipeline: Has VQA/Winoground support but multimodal evaluation is "under construction"
+- No additional multimodal data beyond what's in HuggingFace datasets
 """
 
 import os
@@ -228,7 +234,14 @@ class BabyLMEvaluationPipeline:
         epoch: int, 
         model_path: str
     ) -> Dict[str, Any]:
-        """Run multimodal evaluations from pipeline 2024"""
+        """
+        Run multimodal evaluations from pipeline 2024 (VQA + Winoground)
+        
+        Note: Uses HuggingFace datasets directly:
+        - VQA: HuggingFaceM4/VQAv2 (validation split)
+        - Winoground: facebook/winoground (test split)
+        No additional local data files needed.
+        """
         try:
             results = {}
             
@@ -243,14 +256,15 @@ class BabyLMEvaluationPipeline:
             os.chdir(self.pipeline_2024_path)
             
             try:
-                # Run multimodal evaluations
+                # Run multimodal evaluations (downloads HF datasets automatically)
                 cmd = [
                     "bash", 
                     str(script_path),
                     model_path
                 ]
                 
-                logger.info(f"Running multimodal evaluations 2024: {' '.join(cmd)}")
+                logger.info(f"Running multimodal evaluations 2024 (VQA + Winoground via lm_eval): {' '.join(cmd)}")
+                logger.info("Note: This will download HuggingFace datasets automatically (VQAv2, Winoground)")
                 
                 result = subprocess.run(
                     cmd,
@@ -420,7 +434,9 @@ class BabyLMEvaluationPipeline:
                 all_results["finetune_2025"] = finetune_results_2025
             
             # Run multimodal evaluations from 2024 pipeline
-            logger.info("Running 2024 multimodal evaluations...")
+            # Note: 2025 pipeline multimodal evaluation is "under construction"
+            # VQA and Winoground use HuggingFace datasets directly (no local data needed)
+            logger.info("Running 2024 multimodal evaluations (VQA + Winoground)...")
             multimodal_results_2024 = self.run_multimodal_evaluations_2024(
                 epoch, hf_model_path
             )
