@@ -9,6 +9,7 @@ import numpy as np
 from pathlib import Path
 import yaml
 import logging
+from unittest.mock import Mock, patch
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
@@ -19,6 +20,17 @@ from src.memory_visualization_integration import MemoryVisualizationIntegration
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Mock wandb for testing
+class MockWandB:
+    def log(self, data, step=None):
+        logger.info(f"Mock wandb.log: {list(data.keys())} at step {step}")
+    
+    def Image(self, image_data):
+        return f"MockImage({type(image_data).__name__})"
+
+# Patch wandb globally
+sys.modules['wandb'] = MockWandB()
 
 
 class MockModel:

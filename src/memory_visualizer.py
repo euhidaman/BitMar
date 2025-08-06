@@ -154,15 +154,18 @@ class EpisodicMemoryVisualizer:
         self.utilization_history.append({'epoch': epoch, 'step': step, 'utilization': utilization})
         
         # 4. Log metrics to WandB
-        wandb.log({
-            "memory/diversity_score": diversity_score,
-            "memory/specialization_score": avg_specialization,
-            "memory/slot_utilization": utilization,
-            "memory/active_slots": active_slots,
-            "memory/max_slot_norm": np.max(slot_norms),
-            "memory/min_slot_norm": np.min(slot_norms),
-            "memory/avg_slot_norm": np.mean(slot_norms),
-        }, step=step)
+        try:
+            wandb.log({
+                "memory/diversity_score": diversity_score,
+                "memory/specialization_score": avg_specialization,
+                "memory/slot_utilization": utilization,
+                "memory/active_slots": active_slots,
+                "memory/max_slot_norm": np.max(slot_norms),
+                "memory/min_slot_norm": np.min(slot_norms),
+                "memory/avg_slot_norm": np.mean(slot_norms),
+            }, step=step)
+        except Exception as e:
+            logger.warning(f"Failed to log memory metrics to wandb: {e}")
     
     def _generate_and_log_visualizations(self, epoch: int, step: int):
         """Generate and log all visualization plots to WandB"""
@@ -223,7 +226,10 @@ class EpisodicMemoryVisualizer:
         plt.tight_layout()
         
         # Log to WandB
-        wandb.log({f"memory/evolution_heatmap": wandb.Image(plt)}, step=step)
+        try:
+            wandb.log({f"memory/evolution_heatmap": wandb.Image(plt)}, step=step)
+        except Exception as e:
+            logger.warning(f"Failed to log evolution heatmap to wandb: {e}")
         plt.close()
     
     def _plot_diversity_specialization(self, epoch: int, step: int):
@@ -256,7 +262,10 @@ class EpisodicMemoryVisualizer:
         plt.tight_layout()
         
         # Log to WandB
-        wandb.log({f"memory/diversity_specialization": wandb.Image(plt)}, step=step)
+        try:
+            wandb.log({f"memory/diversity_specialization": wandb.Image(plt)}, step=step)
+        except Exception as e:
+            logger.warning(f"Failed to log diversity/specialization to wandb: {e}")
         plt.close()
     
     def _plot_access_patterns(self, epoch: int, step: int):
@@ -303,13 +312,19 @@ class EpisodicMemoryVisualizer:
         plt.tight_layout()
         
         # Log to WandB
-        wandb.log({f"memory/access_patterns": wandb.Image(plt)}, step=step)
+        try:
+            wandb.log({f"memory/access_patterns": wandb.Image(plt)}, step=step)
+        except Exception as e:
+            logger.warning(f"Failed to log access patterns to wandb: {e}")
         
         # Also log usage entropy
         if len(slot_totals) > 0 and np.sum(slot_totals) > 0:
             normalized_usage = slot_totals / np.sum(slot_totals)
             usage_entropy = entropy(normalized_usage + 1e-8)
-            wandb.log({"memory/usage_entropy": usage_entropy}, step=step)
+            try:
+                wandb.log({"memory/usage_entropy": usage_entropy}, step=step)
+            except Exception as e:
+                logger.warning(f"Failed to log usage entropy to wandb: {e}")
         
         plt.close()
     
@@ -354,14 +369,20 @@ class EpisodicMemoryVisualizer:
         plt.tight_layout()
         
         # Log to WandB
-        wandb.log({f"memory/modal_distribution": wandb.Image(plt)}, step=step)
+        try:
+            wandb.log({f"memory/modal_distribution": wandb.Image(plt)}, step=step)
+        except Exception as e:
+            logger.warning(f"Failed to log modal distribution to wandb: {e}")
         
         # Log current ratios
         if len(total_counts) > 0 and total_counts[-1] > 0:
-            wandb.log({
-                "memory/text_only_ratio": text_ratio[-1],
-                "memory/multimodal_ratio": multimodal_ratio[-1]
-            }, step=step)
+            try:
+                wandb.log({
+                    "memory/text_only_ratio": text_ratio[-1],
+                    "memory/multimodal_ratio": multimodal_ratio[-1]
+                }, step=step)
+            except Exception as e:
+                logger.warning(f"Failed to log modal ratios to wandb: {e}")
         
         plt.close()
     
@@ -407,7 +428,10 @@ class EpisodicMemoryVisualizer:
         ax.grid(True, alpha=0.3)
         
         # Log to WandB
-        wandb.log({f"memory/learning_trajectory": wandb.Image(plt)}, step=step)
+        try:
+            wandb.log({f"memory/learning_trajectory": wandb.Image(plt)}, step=step)
+        except Exception as e:
+            logger.warning(f"Failed to log learning trajectory to wandb: {e}")
         plt.close()
     
     def log_memory_update(self, 
@@ -468,7 +492,10 @@ class EpisodicMemoryVisualizer:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
         # Log final report to WandB
-        wandb.log({"memory/final_report": wandb.Image(str(save_path))})
+        try:
+            wandb.log({"memory/final_report": wandb.Image(str(save_path))})
+        except Exception as e:
+            logger.warning(f"Failed to log final report to wandb: {e}")
         plt.close()
         
         logger.info(f"📋 Generated final memory report: {save_path}")
