@@ -270,6 +270,64 @@ class TrainingEvaluationIntegration:
             logger.error(f"Error in epoch {epoch} evaluation: {e}")
             return {"error": str(e), "epoch": epoch}
     
+    def run_step_evaluation(self, model, epoch: int, step: int, tokenizer, device, model_save_path: str = None) -> Optional[dict]:
+        """
+        Run a lightweight evaluation at a specific training step
+        
+        Args:
+            model: The BitMar model to evaluate
+            epoch: Current training epoch
+            step: Current training step
+            tokenizer: Model tokenizer
+            device: Device model is on
+            model_save_path: Optional path to save model for evaluation
+            
+        Returns:
+            Evaluation results dictionary or None if evaluation failed
+        """
+        if self.evaluation_pipeline is None:
+            logger.warning(f"Evaluation pipeline not setup, skipping step {step}")
+            return None
+        
+        try:
+            logger.info(f"Starting step evaluation at step {step} (epoch {epoch})")
+            
+            # Create temporary model wrapper for this step
+            step_wrapper = BitMarEvaluationWrapper(model, tokenizer, device)
+            
+            # Create HF-compatible model for evaluation
+            if model_save_path is None:
+                model_save_path = Path(self.results_dir) / "temp_models" / "step_evals"
+                
+            hf_model_path = step_wrapper.save_hf_compatible_model(model_save_path, f"step_{step}")
+            
+            # Update evaluation pipeline model path
+            self.evaluation_pipeline.model_path = hf_model_path
+            
+            # Run a fast/lightweight evaluation
+            # For step evaluations, we typically run only a subset of tasks
+            results = self.evaluation_pipeline.run_step_evaluation(
+                step=step,
+                epoch=epoch,
+                use_fast_eval=True  # Always use fast evaluation for steps
+            )
+            
+            # Cleanup temporary files immediately for step evaluations
+            try:
+                import shutil
+                step_model_dir = Path(hf_model_path)
+                if step_model_dir.exists():
+                    shutil.rmtree(step_model_dir)
+            except Exception as cleanup_e:
+                logger.warning(f"Failed to cleanup step evaluation files: {cleanup_e}")
+            
+            logger.info(f"Completed step {step} evaluation")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in step {step} evaluation: {e}")
+            return {"error": str(e), "step": step, "epoch": epoch}
+    
     def finalize_evaluation(self):
         """Clean up evaluation pipeline resources"""
         try:

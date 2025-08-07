@@ -1,0 +1,210 @@
+# BitMar Configuration for 100M Tokens with Optimized Memory Management
+# Memory Pattern Issues Fixed:
+# 1. Diversity Score Recovery: Enhanced memory alpha and regularization
+# 2. Memory Slot Utilization: Added diversity preservation mechanisms
+# 3. Specialization Balance: Improved training dynamics
+
+model:
+  # Text encoder configuration (Optimized efficiency)
+  text_encoder_name: "gpt2"
+  text_hidden_size: 128 # Reduced for efficiency
+  text_num_heads: 4 # Increased from 2 for better attention
+  text_num_layers: 4 # Optimal for complexity-efficiency balance
+  text_max_len: 256 # Balanced sequence length
+
+  # Vision encoder configuration (Lightweight but effective)
+  vision_encoder_name: "dinov2_vits14"
+  vision_hidden_size: 64 # Intermediate processing
+  vision_compression_method: "learned_compression" # Best for cross-modal alignment
+  vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
+  vision_pool_size: 2 # 2x2 pooling
+
+  # Cross-modal fusion (Enhanced for better alignment)
+  fusion_hidden_size: 128 # Match text encoder dim for consistency
+  fusion_num_heads: 6 # Increased for better cross-modal attention
+  fusion_num_layers: 3 # Deeper fusion for better understanding
+
+  # OPTIMIZED EPISODIC MEMORY - Addresses Memory Pattern Issues
+  memory_size: 48 # Increased from 32 - more slots for better utilization
+  episode_dim: 128 # Match fusion dimension
+  memory_alpha: 0.15 # Reduced from 0.2 - slower adaptation prevents collapse
+  direct_writing: true
+  memory_compression: true
+  enable_adaptive_training: true
+  
+  # NEW MEMORY PRESERVATION PARAMETERS
+  memory_diversity_regularization: 0.05 # Encourages slot diversity
+  memory_utilization_penalty: 0.02 # Penalizes under-utilization
+  memory_entropy_weight: 0.03 # Maintains entropy in memory usage
+  memory_temperature: 1.2 # Higher temp for more diverse access patterns
+  prevent_memory_collapse: true # Actively prevent slot consolidation
+  min_memory_utilization: 0.75 # Require at least 75% slot usage
+
+  # Model configuration
+  max_seq_len: 256 # Balanced sequence length
+  dropout: 0.12 # Reduced dropout for better memory retention
+
+# Vision feature configuration (Enhanced)
+vision_feature_reduction:
+  enabled: true
+  method: "learned_compression"
+  target_dim: 64
+  spatial_pooling: true
+  pool_method: "attention"
+  hidden_dim: 128
+  learnable: true
+  preserve_spatial_info: true
+
+data:
+  # Dataset configuration
+  dataset_dir: "/workspace/babylm_dataset"
+  text_encoder_name: "gpt2"
+  max_seq_length: 256
+
+  # Token counting parameters
+  count_tokens: true
+  target_caption_tokens: 50000000
+  target_text_tokens: 50000000
+  token_counting_method: "gpt2"
+
+  # DataLoader settings (Optimized)
+  batch_size: 48 # Reduced for memory stability
+  num_workers: 6
+  shuffle: true
+  pin_memory: true
+  preserve_image_caption_pairs: true
+  strict_alignment_validation: true
+
+# ENHANCED ADAPTIVE TRAINING - Addresses Memory Consolidation
+adaptive_training:
+  enabled: true
+  similarity_window_size: 100 # Faster response to changes
+  drop_threshold: 0.08 # Lower threshold for earlier intervention
+  min_steps_between_interventions: 500 # More frequent interventions allowed
+  freeze_duration_steps: 800 # Shorter freeze periods
+  loss_rebalance_factor: 2.5 # Stronger rebalancing
+  similarity_smoothing_alpha: 0.1 # More responsive smoothing
+  
+  # NEW MEMORY-SPECIFIC ADAPTIVE PARAMETERS
+  memory_diversity_threshold: 0.3 # Trigger intervention if diversity drops
+  memory_utilization_threshold: 0.6 # Trigger if utilization drops below 60%
+  memory_intervention_strength: 1.5 # How strongly to intervene
+  enable_memory_diversity_recovery: true # Enable diversity recovery mechanisms
+
+training:
+  # OPTIMIZED TRAINING CONFIGURATION
+  max_epochs: 10
+  accumulate_grad_batches: 2
+  gradient_clip_val: 0.25 # Tighter clipping for stability
+  val_check_interval: 800 # More frequent validation
+  scheduler: "cosine_with_restarts"
+  min_lr: 0.00003 # Lower minimum LR
+  warmup_steps: 1500 # Longer warmup for stability
+  learning_rate: 0.00015 # Slightly lower LR for stability
+  weight_decay: 0.015 # Reduced weight decay
+  optimizer: "adamw8bit"
+
+  # Scheduler configuration
+  scheduler_config:
+    T_0: 800
+    T_mult: 2
+    eta_min_ratio: 0.1
+
+  # REBALANCED LOSS WEIGHTS - Prioritizes Memory Health
+  cross_modal_loss_weight: 1.3 # Slightly reduced for balance
+  text_generation_loss_weight: 1.0
+  memory_regularization_weight: 0.15 # Increased memory regularization
+  alignment_consistency_weight: 0.4
+  
+  # NEW MEMORY-SPECIFIC LOSS TERMS
+  memory_diversity_loss_weight: 0.08 # Encourage diverse memory usage
+  memory_utilization_loss_weight: 0.06 # Prevent under-utilization
+  memory_entropy_loss_weight: 0.04 # Maintain usage entropy
+
+  # Token-aware training
+  track_token_usage: true
+  log_token_progress: true
+  stop_at_token_limit: false
+
+  # ENHANCED ALIGNMENT PARAMETERS
+  validate_alignment_every_n_steps: 300 # More frequent alignment checks
+  log_alignment_metrics: true
+  alignment_loss_scaling: "adaptive"
+
+# COMPREHENSIVE MEMORY MONITORING
+logging:
+  log_every_n_steps: 100
+  viz_every_n_epochs: 2 # More frequent visualization
+  save_head_patterns: true
+  analyze_memory_attention: true
+  analyze_cross_modal: true
+  track_token_alignment: true
+  
+  # ENHANCED MEMORY LOGGING
+  log_memory_diversity_evolution: true
+  log_memory_utilization_trends: true
+  log_memory_specialization_metrics: true
+  memory_analysis_frequency: 200 # Every 200 steps
+
+# Weights & Biases (Enhanced Memory Monitoring)
+wandb:
+  project: "bitmar-100M-optimized-memory"
+  entity: "babylm-ntust"
+  api_key: null
+  log_every_n_steps: 50 # More frequent logging
+  log_attention: true
+  log_memory: true
+  log_gradients: true
+  log_token_usage: true
+  log_cross_modal_similarity: true
+  log_alignment_quality: true
+  log_caption_image_matching: true
+  save_code: true
+  create_plots: true
+  plot_attention_heatmaps: true
+  plot_memory_usage: true
+  plot_token_distribution: true
+  plot_alignment_metrics: true
+
+  # ENHANCED MEMORY VISUALIZATION
+  log_memory_evolution: true
+  plot_memory_evolution_heatmap: true
+  plot_memory_diversity: true
+  plot_memory_access_patterns: true
+  memory_visualization_frequency: 25000 # More frequent memory viz
+  memory_snapshot_frequency: 5000 # More frequent snapshots
+
+  # COMPREHENSIVE MEMORY METRICS
+  track_memory_metrics:
+    - "memory_diversity_score"
+    - "memory_specialization_score"
+    - "memory_usage_entropy"
+    - "cross_modal_memory_ratio"
+    - "memory_slot_utilization"
+    - "memory_update_frequency"
+    - "memory_retrieval_accuracy"
+    - "memory_consolidation_index" # NEW: Tracks memory consolidation
+    - "memory_diversity_trend" # NEW: Tracks diversity trends
+    - "memory_utilization_stability" # NEW: Tracks utilization stability
+
+# Evaluation
+evaluation:
+  metrics: ["bleu", "rouge", "cross_modal_similarity", "memory_efficiency"]
+  generate_samples: true
+  num_samples: 20
+  max_generation_length: 32
+  temperature: 0.8
+  top_p: 0.9
+  evaluate_alignment: true
+  
+  # MEMORY-SPECIFIC EVALUATION
+  evaluate_memory_diversity: true
+  evaluate_memory_utilization: true
+  memory_evaluation_frequency: 2000 # Every 2000 steps
+
+# Hardware optimization
+hardware:
+  use_mixed_precision: true
+  enable_checkpointing: true
+  optimize_memory_usage: true
+  pin_memory: true

@@ -457,6 +457,85 @@ class BabyLMEvaluationPipeline:
         
         return all_results
     
+    def run_step_evaluation(
+        self, 
+        step: int,
+        epoch: int
+    ) -> Dict[str, Any]:
+        """
+        Run lightweight evaluation for a specific training step
+        
+        Args:
+            step: Current training step
+            epoch: Current training epoch
+        
+        Returns:
+            Dictionary containing step evaluation results
+        """
+        logger.info(f"Starting step {step} evaluation (epoch {epoch})")
+        
+        step_results = {
+            "step": step,
+            "epoch": epoch,
+            "timestamp": wandb.util.timestamp() if self.use_wandb else None
+        }
+        
+        try:
+            # For step evaluations, only run a subset of lightweight tasks
+            # Use the existing model path (should be set by training integration)
+            if not self.model_path:
+                logger.warning("Model path not set for step evaluation")
+                step_results["error"] = "Model path not set"
+                return step_results
+            
+            # Run only a subset of text evaluations for efficiency
+            logger.info("Running lightweight text evaluations for step...")
+            
+            # Run a minimal subset of 2025 text evaluations (fastest tasks only)
+            minimal_tasks = ["blimp"]  # Run only BLIMP for step evaluation
+            try:
+                text_results = self.run_text_evaluations_2025(
+                    epoch, self.model_path, fast=True
+                )
+                step_results["text_minimal"] = text_results
+            except Exception as text_e:
+                logger.warning(f"Text evaluation failed in step evaluation: {text_e}")
+                step_results["text_minimal"] = {"error": str(text_e)}
+            
+            # Log to WandB if enabled
+            if self.use_wandb:
+                try:
+                    wandb_log = {
+                        "step_eval/step": step,
+                        "step_eval/epoch": epoch
+                    }
+                    if "text_minimal" in step_results and "error" not in step_results["text_minimal"]:
+                        wandb_log["step_eval/text_status"] = 1
+                    else:
+                        wandb_log["step_eval/text_status"] = 0
+                    
+                    wandb.log(wandb_log, step=step)
+                    logger.info(f"Logged step {step} evaluation to WandB")
+                except Exception as wandb_e:
+                    logger.warning(f"Failed to log step evaluation to WandB: {wandb_e}")
+            
+            # Save step results
+            try:
+                step_results_file = self.results_base_dir / f"step_{step}_epoch_{epoch}_results.json"
+                with open(step_results_file, 'w') as f:
+                    json.dump(step_results, f, indent=2)
+                logger.info(f"Saved step {step} results to {step_results_file}")
+            except Exception as save_e:
+                logger.warning(f"Failed to save step results: {save_e}")
+            
+            logger.info(f"Step {step} evaluation completed successfully")
+            return step_results
+            
+        except Exception as e:
+            logger.error(f"Error in step {step} evaluation: {e}")
+            step_results["error"] = str(e)
+            return step_results
+    
     def _log_to_wandb(self, epoch: int, results: Dict[str, Any], fast_eval: bool):
         """Log evaluation results to WandB"""
         try:

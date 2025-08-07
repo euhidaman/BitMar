@@ -160,6 +160,12 @@ class TokenAwareTrainer:
         self.best_similarity = 0.0
         self.token_exhausted = False
 
+        # Evaluation control (will be set by main function)
+        self.eval_mode = "epoch"  # Default to epoch-based evaluation
+        self.eval_steps = 5000    # Default evaluation frequency for step-based
+        self.eval_epochs = "all"  # Default to evaluate all epochs
+        self.eval_start_step = 0  # Default to start evaluation from beginning
+
         # Setup directories
         self.setup_directories()
         
@@ -480,7 +486,7 @@ class TokenAwareTrainer:
 
         # Setup evaluation integration
         try:
-            if EVALUATION_INTEGRATION_AVAILABLE:
+            if EVALUATION_INTEGRATION_AVAILABLE and hasattr(self, 'eval_mode') and self.eval_mode != "disabled":
                 eval_config = self.config.get('evaluation', {})
                 self.evaluation_integration = TrainingEvaluationIntegration(
                     pipeline_2024_path=eval_config.get('pipeline_2024_path', 'd:/BabyLM/evaluation-pipeline-2024'),
@@ -499,11 +505,19 @@ class TokenAwareTrainer:
                 )
                 
                 logger.info("✅ BabyLM evaluation integration initialized")
-                logger.info(f"  • Fast eval epochs: {self.evaluation_integration.fast_eval_epochs}")
-                logger.info(f"  • Full eval epochs: {self.evaluation_integration.full_eval_epochs}")
+                logger.info(f"  • Evaluation mode: {getattr(self, 'eval_mode', 'epoch')}")
+                if hasattr(self, 'eval_mode') and self.eval_mode == "steps":
+                    logger.info(f"  • Evaluation every {getattr(self, 'eval_steps', 5000)} steps")
+                    logger.info(f"  • Evaluation starts after step {getattr(self, 'eval_start_step', 0)}")
+                else:
+                    logger.info(f"  • Fast eval epochs: {self.evaluation_integration.fast_eval_epochs}")
+                    logger.info(f"  • Full eval epochs: {self.evaluation_integration.full_eval_epochs}")
             else:
                 self.evaluation_integration = None
-                logger.info("⚠️  Evaluation integration not available")
+                if hasattr(self, 'eval_mode') and self.eval_mode == "disabled":
+                    logger.info("⚠️  Evaluation explicitly disabled")
+                else:
+                    logger.info("⚠️  Evaluation integration not available")
         except Exception as e:
             logger.warning(f"⚠️  Failed to initialize evaluation integration: {e}")
             self.evaluation_integration = None
@@ -603,6 +617,74 @@ class TokenAwareTrainer:
                 logger.warning(f"Failed to log to wandb: {e}")
                 # Disable wandb if it keeps failing
                 self.use_wandb = False
+
+    def should_run_evaluation_at_step(self) -> bool:
+        """Check if evaluation should run at current step for step-based evaluation"""
+        if self.eval_mode != "steps" or self.evaluation_integration is None:
+            return False
+        
+        # Don't evaluate before start step
+        if self.global_step < self.eval_start_step:
+            return False
+        
+        # Run evaluation every eval_steps after start_step
+        return (self.global_step - self.eval_start_step) % self.eval_steps == 0 and self.global_step > 0
+
+    def should_run_evaluation_at_epoch(self, epoch: int) -> bool:
+        """Check if evaluation should run at current epoch for epoch-based evaluation"""
+        if self.eval_mode != "epoch" or self.evaluation_integration is None:
+            return False
+        
+        # Parse eval_epochs setting
+        if self.eval_epochs == "all":
+            return True
+        elif self.eval_epochs == "last":
+            return epoch == (self.config['training']['max_epochs'] - 1)
+        elif self.eval_epochs == "none":
+            return False
+        else:
+            # Comma-separated list of epochs (1-indexed)
+            try:
+                target_epochs = [int(e.strip()) - 1 for e in self.eval_epochs.split(',')]  # Convert to 0-indexed
+                return epoch in target_epochs
+            except:
+                logger.warning(f"Invalid eval_epochs format: {self.eval_epochs}, defaulting to all epochs")
+                return True
+
+    def run_step_evaluation(self):
+        """Run evaluation at current step"""
+        if self.evaluation_integration is None:
+            return
+        
+        try:
+            logger.info(f"🧪 Running step-based evaluation at step {self.global_step}")
+            
+            # Save current model state for evaluation
+            eval_results = self.evaluation_integration.run_step_evaluation(
+                model=self.model,
+                epoch=self.current_epoch,
+                step=self.global_step,
+                tokenizer=self.model.tokenizer,
+                device=self.device
+            )
+            
+            # Log results to wandb
+            if self.use_wandb and eval_results:
+                try:
+                    wandb_log = {}
+                    for task, metrics in eval_results.items():
+                        if isinstance(metrics, dict):
+                            for metric, value in metrics.items():
+                                wandb_log[f"eval_step/{task}_{metric}"] = value
+                    wandb.log(wandb_log, step=self.global_step)
+                except Exception as e:
+                    logger.warning(f"Failed to log step evaluation to wandb: {e}")
+            
+            logger.info(f"✅ Step-based evaluation completed at step {self.global_step}")
+            
+        except Exception as e:
+            logger.error(f"❌ Step-based evaluation failed at step {self.global_step}: {e}")
+            # Don't stop training on evaluation failure
 
     def save_token_checkpoint(self):
         """Save checkpoint with token information"""
@@ -841,6 +923,10 @@ class TokenAwareTrainer:
 
                 self.global_step += 1
 
+                # Run step-based evaluation if configured
+                if self.should_run_evaluation_at_step():
+                    self.run_step_evaluation()
+
                 # Save checkpoint periodically
                 if self.global_step % 5000 == 0:
                     self.save_token_checkpoint()
@@ -927,8 +1013,9 @@ class TokenAwareTrainer:
                 self.save_token_checkpoint()
 
                 # Run epoch evaluation if configured
-                if self.evaluation_integration is not None:
+                if self.should_run_evaluation_at_epoch(epoch):
                     try:
+                        logger.info(f"🧪 Running epoch-based evaluation for epoch {epoch + 1}")
                         eval_results = self.evaluation_integration.run_epoch_evaluation(
                             epoch=epoch + 1,  # Use 1-indexed epochs for evaluation
                             model_save_path=str(self.checkpoint_dir / "evaluation_models")
@@ -1031,12 +1118,30 @@ def main():
     parser.add_argument("--rebuild_cache", action="store_true",
                        help="Rebuild token-constrained dataset cache")
     
+    # Evaluation control arguments
+    parser.add_argument("--eval_mode", type=str, choices=["epoch", "steps", "disabled"], 
+                       default="epoch", help="When to run evaluation: 'epoch' (after each epoch), 'steps' (after N steps), or 'disabled'")
+    parser.add_argument("--eval_steps", type=int, default=5000,
+                       help="Run evaluation every N steps (only used when --eval_mode=steps)")
+    parser.add_argument("--eval_epochs", type=str, default="all",
+                       help="Which epochs to evaluate: 'all', 'last', or comma-separated list like '1,5,10'")
+    parser.add_argument("--eval_start_step", type=int, default=0,
+                       help="Start evaluation after this many steps (useful for testing)")
+    parser.add_argument("--disable_eval", action="store_true",
+                       help="Completely disable evaluation (equivalent to --eval_mode=disabled)")
+    
     args = parser.parse_args()
     
     try:
         # Initialize trainer
         trainer = TokenAwareTrainer(args.config, device=args.device)
         trainer.rebuild_cache = args.rebuild_cache  # Pass rebuild_cache to trainer
+        
+        # Pass evaluation control arguments to trainer
+        trainer.eval_mode = args.eval_mode if not args.disable_eval else "disabled"
+        trainer.eval_steps = args.eval_steps
+        trainer.eval_epochs = args.eval_epochs
+        trainer.eval_start_step = args.eval_start_step
         
         # Start training
         trainer.train()
