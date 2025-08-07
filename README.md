@@ -79,10 +79,9 @@ git clone https://github.com/babylm/evaluation-pipeline-2024.git
 cd evaluation-pipeline-2025
 pip install -r requirements.txt
 
-# Download evaluation data from OSF
 curl -L "https://files.osf.io/v1/resources/ryjfm/providers/osfstorage/6819fcae32b1521c270a7df8/?zip=" -o full_eval.zip
 
-# Extract evaluation data using Python
+# Extract using Python
 python3 -c "
 import zipfile
 import os
@@ -93,15 +92,22 @@ print('✅ Evaluation data extracted!')
 "
 rm full_eval.zip
 
-# Setup 2024 pipeline
-cd ../evaluation-pipeline-2024
+# Create empty evaluation_data directory for 2024 pipeline (not actually needed)
+mkdir -p evaluation-pipeline-2024/evaluation_data
+
+# 5. Try to download EWoK data (optional - may not be needed)
+python -m evaluation_pipeline.ewok.dl_and_filter || echo "⚠️  EWoK download failed - this is OK, will be handled during evaluation"
+
+# 6. Install dependencies for 2025 pipeline
 pip install -r requirements.txt
-
-# Create evaluation_data directory for 2024 pipeline
-mkdir -p evaluation_data
-
-# Return to parent directory
 cd ..
+
+# 7. Install dependencies for 2024 pipeline
+cd evaluation-pipeline-2024
+pip install -e .
+pip install minicons lm_eval[all]
+cd ..
+
 ```
 
 ### Step 2: Clone BitMar Repository
@@ -109,14 +115,12 @@ cd ..
 ```bash
 # Clone BitMar repository
 git clone https://github.com/euhidaman/BitMar.git
+git checkout stable1
 cd BitMar
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install BitMar requirements
 pip install -r requirements.txt
+
 ```
 
 ### Step 3: Download BabyLM Dataset
@@ -126,7 +130,7 @@ pip install -r requirements.txt
 python download_babylm_data.py
 ```
 
-### Step 4: Verify Setup
+### Step 4: Verify Setup (Eval part may fail right now)
 
 ```bash
 # Validate evaluation setup
