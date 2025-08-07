@@ -1,8 +1,9 @@
-# BitMar Configuration for 100M Tokens with Optimized Memory Management
-# Memory Pattern Issues Fixed:
-# 1. Diversity Score Recovery: Enhanced memory alpha and regularization
-# 2. Memory Slot Utilization: Added diversity preservation mechanisms
-# 3. Specialization Balance: Improved training dynamics
+# BitMar Configuration for 100M Tokens with SD Card Optimized Episodic Memory
+# Episodic Memory Optimizations:
+# 1. Enhanced capacity: 1024 slots × 1024 dimensions (~4MB episodic memory)
+# 2. Fast fact editing: Optimized for rapid knowledge updates without retraining
+# 3. SD card deployment: Memory size suitable for edge device deployment
+# 4. Stable episodic learning: Reduced interference and improved consolidation
 
 model:
   # Text encoder configuration (Optimized efficiency)
@@ -19,26 +20,31 @@ model:
   vision_spatial_pooling: true # 14x14 -> 7x7 spatial reduction
   vision_pool_size: 2 # 2x2 pooling
 
-  # Cross-modal fusion (Enhanced for better alignment)
-  fusion_hidden_size: 128 # Match text encoder dim for consistency
-  fusion_num_heads: 6 # Increased for better cross-modal attention
+  # Cross-modal fusion (Enhanced for episodic memory compatibility)
+  fusion_hidden_size: 1024 # Match episode dimension for optimal episodic learning
+  fusion_num_heads: 16 # Increased for enhanced cross-modal attention with larger dimensions
   fusion_num_layers: 3 # Deeper fusion for better understanding
 
-  # OPTIMIZED EPISODIC MEMORY - Addresses Memory Pattern Issues
-  memory_size: 48 # Increased from 32 - more slots for better utilization
-  episode_dim: 128 # Match fusion dimension
-  memory_alpha: 0.12 # Reduced from 0.2 - slower, more stable adaptation
+  # OPTIMIZED EPISODIC MEMORY FOR SD CARD DEPLOYMENT - Enhanced Fast Fact Editing
+  memory_size: 1024 # Optimized for SD card deployment and fast fact editing (1024 slots × 1024 dims = ~4MB)
+  episode_dim: 1024 # Enhanced episodic learning capacity for complex fact representations
+  memory_alpha: 0.08 # Optimized for stable episodic learning with larger memory
   direct_writing: true
   memory_compression: true
   enable_adaptive_training: true
   
-  # ENHANCED MEMORY PRESERVATION PARAMETERS  
-  memory_diversity_regularization: 0.03 # Reduced - less aggressive diversity forcing
-  memory_utilization_penalty: 0.01 # Reduced - gentler utilization enforcement
-  memory_entropy_weight: 0.02 # Reduced - less entropy forcing
-  memory_temperature: 1.1 # Reduced from 1.2 - more focused access patterns
-  prevent_memory_collapse: true # Actively prevent slot consolidation
-  min_memory_utilization: 0.70 # Reduced from 0.75 - more realistic target
+  # ENHANCED MEMORY PRESERVATION FOR LARGE EPISODIC MEMORY
+  memory_diversity_regularization: 0.005 # Lower for 1024 slots - avoid over-regularization
+  memory_utilization_penalty: 0.002 # Gentle utilization with large memory capacity
+  memory_entropy_weight: 0.003 # Reduced for stable large-scale episodic learning
+  memory_temperature: 1.05 # Lower temperature for more focused episodic access
+  prevent_memory_collapse: true # Critical for large episodic memory stability
+  min_memory_utilization: 0.60 # Realistic target for 1024 slots
+  
+  # EPISODIC LEARNING OPTIMIZATION PARAMETERS
+  episodic_consolidation_rate: 0.02 # Slow consolidation for stable fact storage
+  episodic_interference_threshold: 0.85 # Prevent episodic interference
+  fast_fact_editing_mode: true # Enable optimized fast fact editing capabilities
   
   # STABILITY PARAMETERS
   memory_diversity_smoothing: 0.95 # High smoothing for stable diversity score
@@ -218,6 +224,138 @@ evaluation:
   evaluate_memory_diversity: true
   evaluate_memory_utilization: true
   memory_evaluation_frequency: 2000 # Every 2000 steps
+  
+  # COMPREHENSIVE BENCHMARK EVALUATIONS
+  benchmark_evaluations:
+    enabled: true
+    eval_frequency_steps: 5000 # Run benchmarks every 5000 steps
+    eval_frequency_epochs: 2 # Run benchmarks every 2 epochs
+    max_samples_per_task: 500 # Limit samples for efficiency
+    few_shot_examples: 3 # Few-shot learning examples
+    use_episodic_analysis: true # Analyze episodic memory impact
+    
+    # tinyBenchmarks Suite
+    evaluate_tiny_mmlu: true # tinyMMLU - Massive Multitask Language Understanding (subset)
+    evaluate_tiny_helm: true # tinyHELM - Holistic Evaluation of Language Models (subset)
+    
+    # Conversational Benchmarks
+    evaluate_wildchat: true # WildChat-50M subset for conversational abilities
+    
+    # Episodic Memory Specialized Benchmarks
+    evaluate_episodic_benchmarks: true # Custom episodic memory tests
+    
+    # Benchmark-specific configurations
+    tiny_mmlu_config:
+      subjects: ["abstract_algebra", "anatomy", "astronomy", "business_ethics", "clinical_knowledge", 
+                "college_biology", "college_chemistry", "college_computer_science", "college_mathematics", 
+                "college_medicine", "college_physics", "computer_security", "conceptual_physics", 
+                "econometrics", "electrical_engineering", "elementary_mathematics", "formal_logic", 
+                "global_facts", "high_school_biology", "high_school_chemistry", "high_school_computer_science",
+                "high_school_european_history", "high_school_geography", "high_school_government_and_politics",
+                "high_school_macroeconomics", "high_school_mathematics", "high_school_microeconomics",
+                "high_school_physics", "high_school_psychology", "high_school_statistics", "high_school_us_history",
+                "high_school_world_history", "human_aging", "human_sexuality", "international_law", "jurisprudence",
+                "logical_fallacies", "machine_learning", "management", "marketing", "medical_genetics",
+                "miscellaneous", "moral_disputes", "moral_scenarios", "nutrition", "philosophy",
+                "prehistory", "professional_accounting", "professional_law", "professional_medicine",
+                "professional_psychology", "public_relations", "security_studies", "sociology", "us_foreign_policy",
+                "virology", "world_religions"]
+      sample_per_subject: 10 # Sample 10 questions per subject for efficiency
+      
+    tiny_helm_config:
+      tasks: ["boolq", "piqa", "hellaswag", "winogrande", "arc_easy", "openbookqa"]
+      use_few_shot: true
+      few_shot_k: 3
+      
+    wildchat_config:
+      conversation_types: ["factual_question", "explanation", "instruction", "assistance", "general"]
+      max_conversation_length: 200 # Token limit per conversation
+      evaluate_knowledge_recall: true
+      evaluate_response_coherence: true
+      
+    episodic_benchmarks_config:
+      # Fast fact learning tests
+      fact_learning_speed:
+        enabled: true
+        num_facts: 20
+        fact_complexity: "simple" # simple, medium, complex
+        test_immediate_recall: true
+        test_delayed_recall: true
+        
+      # Knowledge interference tests
+      knowledge_interference:
+        enabled: true
+        interference_type: "similar_facts" # similar_facts, contradictory_facts, random_facts
+        num_interference_facts: 10
+        test_retention_after_interference: true
+        
+      # Memory consolidation tests
+      memory_consolidation:
+        enabled: true
+        consolidation_period_steps: 1000
+        test_consolidation_quality: true
+        test_memory_stability: true
+        
+      # Cross-modal episodic learning
+      cross_modal_episodic:
+        enabled: true
+        test_text_to_vision_transfer: true
+        test_vision_to_text_transfer: true
+        test_multimodal_fact_learning: true
+        
+    # Performance optimization for benchmarks
+    optimization:
+      use_model_cache: true # Cache model states for efficiency
+      parallel_evaluation: false # Set to true if you have multiple GPUs
+      early_stopping: true # Stop evaluation early if performance is very poor
+      memory_efficient_mode: true # Use memory-efficient evaluation strategies
+  
+  # TINY MODEL-SPECIFIC EVALUATIONS
+  tiny_model_evaluations:
+    enabled: true
+    eval_frequency_steps: 2000 # Same as memory evaluation frequency
+    eval_frequency_epochs: 1 # Every epoch
+    
+    # Core tiny model metrics
+    evaluate_parameter_efficiency: true # Parameters vs performance ratio
+    evaluate_memory_efficiency: true # Memory usage vs accuracy
+    evaluate_inference_speed: true # Speed benchmarks for tiny models
+    evaluate_convergence_speed: true # How fast the model learns
+    
+    # Episodic learning specific for tiny models
+    evaluate_episodic_efficiency: true # Episodic memory effectiveness
+    evaluate_fast_fact_learning: true # How quickly new facts are learned
+    evaluate_knowledge_retention: true # How well knowledge is retained
+    evaluate_interference_resistance: true # Resistance to catastrophic forgetting
+    
+    # Cross-modal efficiency for tiny models
+    evaluate_cross_modal_efficiency: true # Text-vision alignment efficiency
+    evaluate_modality_balance: true # Balance between text and vision learning
+    evaluate_fusion_effectiveness: true # How well cross-modal fusion works
+    
+    # Deployment readiness metrics
+    evaluate_sd_card_readiness: true # Metrics for SD card deployment
+    evaluate_edge_device_metrics: true # Edge device performance metrics
+    evaluate_low_resource_performance: true # Performance under resource constraints
+    
+    # BabyLM-specific tiny model evaluations
+    babylm_tiny_evaluations:
+      enabled: true
+      # Focus on tasks most relevant for tiny models
+      priority_tasks: ["blimp_simple", "glue_subset", "simple_qa", "basic_reasoning"]
+      # Reduced evaluation set for efficiency
+      quick_eval_tasks: ["cola", "sst2", "mrpc"] # Lightweight GLUE tasks
+      full_eval_tasks: ["all"] # Full evaluation when needed
+      
+      # Evaluation strategies optimized for tiny models
+      use_few_shot: true # Few-shot evaluation suitable for tiny models
+      few_shot_examples: 5 # Small number of examples
+      use_lightweight_metrics: true # Focus on key metrics
+      skip_heavy_tasks: true # Skip computationally expensive tasks
+      
+      # Episodic memory evaluation on BabyLM tasks
+      test_episodic_on_babylm: true # Test episodic learning on BabyLM tasks
+      episodic_learning_tasks: ["fact_recall", "simple_qa", "basic_reasoning"]
 
 # Hardware optimization
 hardware:

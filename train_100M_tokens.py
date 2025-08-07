@@ -57,6 +57,15 @@ from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
 from src.memory_visualization_integration import setup_memory_visualization
 
+# Try to import tiny model evaluator
+try:
+    from src.tiny_model_evaluator import TinyModelEvaluator
+    TINY_MODEL_EVALUATOR_AVAILABLE = True
+    logger.info("✅ Tiny model evaluator available")
+except ImportError:
+    TINY_MODEL_EVALUATOR_AVAILABLE = False
+    logger.warning("⚠️  Tiny model evaluator not available")
+
 # Try to import evaluation integration
 try:
     from src.training_evaluation_integration import TrainingEvaluationIntegration
@@ -65,6 +74,24 @@ try:
 except ImportError:
     EVALUATION_INTEGRATION_AVAILABLE = False
     logger.warning("⚠️  Evaluation integration not available")
+
+# Try to import tiny model evaluation
+try:
+    from src.tiny_model_evaluator import TinyModelEvaluator, TinyModelBabyLMEvaluator
+    TINY_MODEL_EVAL_AVAILABLE = True
+    logger.info("✅ Tiny model evaluation available")
+except ImportError:
+    TINY_MODEL_EVAL_AVAILABLE = False
+    logger.warning("⚠️  Tiny model evaluation not available")
+
+# Try to import benchmark evaluator
+try:
+    from src.benchmark_evaluator import BenchmarkEvaluator
+    BENCHMARK_EVALUATOR_AVAILABLE = True
+    logger.info("✅ Benchmark evaluator available")
+except ImportError:
+    BENCHMARK_EVALUATOR_AVAILABLE = False
+    logger.warning("⚠️  Benchmark evaluator not available")
 
 # Try to import token-constrained dataset
 try:
@@ -197,6 +224,10 @@ class TokenAwareTrainer:
             'convergence_rate': []  # How fast text and vision are converging
         }
         self.cross_modal_smoothing_alpha = 0.1  # EMA smoothing factor
+
+        # Tiny model evaluation tracking
+        self.loss_history = []  # For convergence analysis
+        self.tiny_model_eval_results = {}
 
         # Evaluation control (will be set by main function)
         self.eval_mode = "epoch"  # Default to epoch-based evaluation
@@ -560,6 +591,84 @@ class TokenAwareTrainer:
             logger.warning(f"⚠️  Failed to initialize evaluation integration: {e}")
             self.evaluation_integration = None
 
+        # Setup tiny model evaluation
+        try:
+            if TINY_MODEL_EVALUATOR_AVAILABLE:
+                self.tiny_model_evaluator = TinyModelEvaluator(
+                    config=self.config,
+                    model=self.model,
+                    tokenizer=self.model.tokenizer,
+                    device=self.device
+                )
+                logger.info("✅ Tiny model evaluator initialized")
+            else:
+                self.tiny_model_evaluator = None
+                logger.info("⚠️  Tiny model evaluator not available")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize tiny model evaluator: {e}")
+            self.tiny_model_evaluator = None
+
+        # Setup tiny model evaluation integration
+        try:
+            if TINY_MODEL_EVAL_AVAILABLE:
+                tiny_eval_config = self.config.get('evaluation', {}).get('tiny_model_evaluations', {})
+                if tiny_eval_config.get('enabled', False):
+                    self.tiny_model_evaluator = TinyModelEvaluator(
+                        model=self.model,
+                        tokenizer=self.model.tokenizer,
+                        device=str(self.device),
+                        save_dir=str(self.memory_dir / "tiny_model_eval"),
+                        config=self.config
+                    )
+                    
+                    # Setup BabyLM tiny model evaluator if configured
+                    babylm_config = tiny_eval_config.get('babylm_tiny_evaluations', {})
+                    if babylm_config.get('enabled', False):
+                        self.tiny_babylm_evaluator = TinyModelBabyLMEvaluator(
+                            base_evaluator=self.evaluation_integration,
+                            tiny_eval_config=babylm_config
+                        )
+                    else:
+                        self.tiny_babylm_evaluator = None
+                    
+                    logger.info("✅ Tiny model evaluation integration successful")
+                else:
+                    self.tiny_model_evaluator = None
+                    self.tiny_babylm_evaluator = None
+                    logger.info("ℹ️  Tiny model evaluation disabled in config")
+            else:
+                self.tiny_model_evaluator = None
+                self.tiny_babylm_evaluator = None
+                logger.warning("⚠️  Tiny model evaluation not available")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to setup tiny model evaluation: {e}")
+            self.tiny_model_evaluator = None
+            self.tiny_babylm_evaluator = None
+
+        # Setup benchmark evaluation integration  
+        try:
+            if BENCHMARK_EVALUATOR_AVAILABLE:
+                benchmark_config = self.config.get('evaluation', {}).get('benchmark_evaluations', {})
+                if benchmark_config.get('enabled', False):
+                    benchmark_save_dir = self.results_dir / "benchmark_results"
+                    self.benchmark_evaluator = BenchmarkEvaluator(
+                        model=self.model,
+                        tokenizer=self.model.tokenizer,
+                        device=self.device,
+                        config=self.config,
+                        save_dir=str(benchmark_save_dir)
+                    )
+                    logger.info("✅ Benchmark evaluator integrated")
+                else:
+                    self.benchmark_evaluator = None
+                    logger.info("ℹ️  Benchmark evaluation disabled in config")
+            else:
+                self.benchmark_evaluator = None
+                logger.warning("⚠️  Benchmark evaluator not available")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to setup benchmark evaluator: {e}")
+            self.benchmark_evaluator = None
+
     def setup_optimizer(self):
         """Setup optimizer and scheduler for 100M token training"""
         # Calculate total training steps based on exact token count
@@ -855,6 +964,158 @@ class TokenAwareTrainer:
             logger.error(f"❌ Step-based evaluation failed at step {self.global_step}: {e}")
             # Don't stop training on evaluation failure
 
+    def should_run_tiny_model_evaluation_at_step(self) -> bool:
+        """Check if tiny model evaluation should run at current step"""
+        if self.tiny_model_evaluator is None:
+            return False
+        
+        tiny_eval_config = self.config.get('evaluation', {}).get('tiny_model_evaluations', {})
+        eval_frequency = tiny_eval_config.get('eval_frequency_steps', 2000)
+        
+        return self.global_step > 0 and self.global_step % eval_frequency == 0
+
+    def should_run_tiny_model_evaluation_at_epoch(self, epoch: int) -> bool:
+        """Check if tiny model evaluation should run at current epoch"""
+        if self.tiny_model_evaluator is None:
+            return False
+        
+        tiny_eval_config = self.config.get('evaluation', {}).get('tiny_model_evaluations', {})
+        eval_frequency = tiny_eval_config.get('eval_frequency_epochs', 1)
+        
+        return (epoch + 1) % eval_frequency == 0
+
+    def run_tiny_model_evaluation(self, performance_score: float = None):
+        """Run tiny model evaluation"""
+        if self.tiny_model_evaluator is None:
+            return
+        
+        try:
+            logger.info(f"🔬 Running tiny model evaluation at step {self.global_step}")
+            
+            # Calculate performance score if not provided (use recent loss as proxy)
+            if performance_score is None:
+                performance_score = max(0.1, 1.0 / (1.0 + self.best_similarity))  # Convert similarity to performance
+            
+            # Prepare sample inputs for evaluation
+            sample_inputs = {
+                'input_ids': torch.randint(0, 1000, (2, 32), device=self.device),
+                'attention_mask': torch.ones(2, 32, device=self.device),
+                'vision_features': torch.randn(2, 768, device=self.device),
+                'labels': torch.randint(0, 1000, (2, 32), device=self.device)
+            }
+            
+            # Run tiny model step evaluation
+            tiny_results = self.tiny_model_evaluator.run_step_evaluation(
+                step=self.global_step,
+                loss=self.loss_history[-1] if self.loss_history else 1.0,
+                outputs={'loss': torch.tensor(self.loss_history[-1] if self.loss_history else 1.0)},
+                sample_inputs=sample_inputs,
+                loss_history=self.loss_history
+            )
+            
+            # Run BabyLM tiny model evaluation if available
+            if self.tiny_babylm_evaluator is not None:
+                babylm_results = self.tiny_babylm_evaluator.run_tiny_babylm_evaluation(
+                    step=self.global_step,
+                    epoch=self.current_epoch
+                )
+                
+                # Log BabyLM results to wandb
+                if self.use_wandb and babylm_results:
+                    try:
+                        wandb_babylm = {f"tiny_babylm/{k}": v for k, v in babylm_results.items()}
+                        self.wandb_logger.log(wandb_babylm, step=self.global_step)
+                    except Exception as e:
+                        logger.warning(f"Failed to log BabyLM tiny results to wandb: {e}")
+            
+            logger.info(f"✅ Tiny model evaluation completed at step {self.global_step}")
+            
+            return tiny_results
+            
+        except Exception as e:
+            logger.error(f"❌ Tiny model evaluation failed at step {self.global_step}: {e}")
+            return {}
+
+    def should_run_benchmark_evaluation_at_step(self) -> bool:
+        """Check if benchmark evaluation should run at current step"""
+        if self.benchmark_evaluator is None:
+            return False
+        
+        benchmark_config = self.config.get('evaluation', {}).get('benchmark_evaluations', {})
+        eval_frequency = benchmark_config.get('eval_frequency_steps', 5000)
+        
+        return self.global_step > 0 and self.global_step % eval_frequency == 0
+
+    def should_run_benchmark_evaluation_at_epoch(self, epoch: int) -> bool:
+        """Check if benchmark evaluation should run at current epoch"""
+        if self.benchmark_evaluator is None:
+            return False
+        
+        benchmark_config = self.config.get('evaluation', {}).get('benchmark_evaluations', {})
+        eval_frequency = benchmark_config.get('eval_frequency_epochs', 2)
+        
+        return (epoch + 1) % eval_frequency == 0
+
+    def run_benchmark_evaluation(self):
+        """Run comprehensive benchmark evaluation"""
+        if self.benchmark_evaluator is None:
+            return {}
+        
+        try:
+            logger.info(f"🎯 Running comprehensive benchmark evaluation at step {self.global_step}")
+            
+            # Run benchmark evaluation
+            benchmark_results = self.benchmark_evaluator.run_comprehensive_benchmark_evaluation(
+                step=self.global_step,
+                epoch=self.current_epoch
+            )
+            
+            # Log key results to wandb if available
+            if self.use_wandb and benchmark_results and 'benchmarks' in benchmark_results:
+                wandb_metrics = {}
+                
+                # Log tinyMMLU results
+                if 'tiny_mmlu' in benchmark_results['benchmarks']:
+                    mmlu_results = benchmark_results['benchmarks']['tiny_mmlu']
+                    if 'overall_accuracy' in mmlu_results:
+                        wandb_metrics['benchmark/tiny_mmlu_accuracy'] = mmlu_results['overall_accuracy']
+                
+                # Log tinyHELM results  
+                if 'tiny_helm' in benchmark_results['benchmarks']:
+                    helm_results = benchmark_results['benchmarks']['tiny_helm']
+                    if 'average_score' in helm_results:
+                        wandb_metrics['benchmark/tiny_helm_score'] = helm_results['average_score']
+                
+                # Log WildChat results
+                if 'wildchat_50m' in benchmark_results['benchmarks']:
+                    wildchat_results = benchmark_results['benchmarks']['wildchat_50m']
+                    if 'response_quality' in wildchat_results:
+                        wandb_metrics['benchmark/wildchat_quality'] = wildchat_results['response_quality']['average_score']
+                
+                # Log overall benchmark score
+                if 'overall_benchmark_score' in benchmark_results:
+                    wandb_metrics['benchmark/overall_score'] = benchmark_results['overall_benchmark_score']
+                
+                # Log episodic memory impact analysis
+                for benchmark_name, results in benchmark_results.get('benchmarks', {}).items():
+                    if 'episodic_memory_impact' in results or 'episodic_analysis' in results:
+                        episodic_data = results.get('episodic_memory_impact') or results.get('episodic_analysis', {})
+                        if 'activation_correctness_correlation' in episodic_data:
+                            wandb_metrics[f'benchmark/{benchmark_name}_episodic_correlation'] = episodic_data['activation_correctness_correlation']
+                
+                try:
+                    self.wandb_logger.log(wandb_metrics, step=self.global_step)
+                    logger.info(f"📊 Benchmark metrics logged to wandb")
+                except Exception as e:
+                    logger.warning(f"Failed to log benchmark metrics to wandb: {e}")
+            
+            logger.info(f"✅ Benchmark evaluation completed at step {self.global_step}")
+            return benchmark_results
+            
+        except Exception as e:
+            logger.error(f"❌ Benchmark evaluation failed at step {self.global_step}: {e}")
+            return {'error': str(e)}
+
     def save_token_checkpoint(self):
         """Save checkpoint with token information"""
         checkpoint = {
@@ -1022,6 +1283,11 @@ class TokenAwareTrainer:
                     raise forward_error
 
                 loss = outputs['loss']
+
+                # Track loss history for tiny model convergence analysis
+                self.loss_history.append(loss.item())
+                if len(self.loss_history) > 1000:  # Keep last 1000 losses
+                    self.loss_history.pop(0)
 
                 # Log memory visualization if available
                 if self.memory_viz is not None:
@@ -1225,6 +1491,16 @@ class TokenAwareTrainer:
                 # Run step-based evaluation if configured
                 if self.should_run_evaluation_at_step():
                     self.run_step_evaluation()
+
+                # Run tiny model evaluation if configured
+                if self.should_run_tiny_model_evaluation_at_step():
+                    # Use current loss as performance indicator
+                    current_performance = max(0.1, 1.0 / (1.0 + loss.item()))
+                    self.run_tiny_model_evaluation(performance_score=current_performance)
+
+                # Run benchmark evaluation if configured
+                if self.should_run_benchmark_evaluation_at_step():
+                    self.run_benchmark_evaluation()
 
                 # Save checkpoint periodically
                 if self.global_step % 5000 == 0:
@@ -1589,8 +1865,34 @@ class TokenAwareTrainer:
                                         f"evaluation/epoch": epoch + 1,
                                         f"evaluation/completed": 1
                                     }
-                                    
-                                    # Add status information if available
+                                    self.wandb_logger.log(eval_summary, step=self.global_step)
+                                except Exception as e:
+                                    logger.warning(f"Failed to log evaluation results to wandb: {e}")
+                    except Exception as e:
+                        logger.error(f"Epoch evaluation failed: {e}")
+
+                # Run tiny model epoch evaluation if configured  
+                if self.should_run_tiny_model_evaluation_at_epoch(epoch):
+                    current_performance = max(0.1, 1.0 / (1.0 + epoch_metrics['train_loss']))
+                    self.run_tiny_model_evaluation(performance_score=current_performance)
+
+                # Run benchmark evaluation if configured
+                if self.should_run_benchmark_evaluation_at_epoch(epoch):
+                    self.run_benchmark_evaluation()
+
+                # Run tiny model evaluation at epoch end if configured
+                if self.should_run_tiny_model_evaluation_at_epoch(epoch):
+                    try:
+                        logger.info(f"🔬 Running tiny model evaluation for epoch {epoch + 1}")
+                        # Use epoch metrics for performance score
+                        epoch_performance = epoch_metrics.get('cross_modal_similarity', 0.5)
+                        tiny_metrics = self.run_tiny_model_evaluation(performance_score=epoch_performance)
+                        
+                        if tiny_metrics:
+                            logger.info(f"✅ Epoch {epoch + 1} tiny model evaluation completed")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Epoch tiny model evaluation failed: {e}")
                                     for eval_type, results in eval_results.items():
                                         if isinstance(results, dict) and "status" in results:
                                             eval_summary[f"evaluation/{eval_type}_success"] = 1 if results["status"] == "success" else 0
