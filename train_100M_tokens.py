@@ -1074,23 +1074,42 @@ class TokenAwareTrainer:
             if self.use_wandb and benchmark_results and 'benchmarks' in benchmark_results:
                 wandb_metrics = {}
                 
-                # Log tinyMMLU results
+                # Log official tinyBenchmarks results
+                if 'tiny_benchmarks' in benchmark_results['benchmarks']:
+                    tb_results = benchmark_results['benchmarks']['tiny_benchmarks']
+                    if 'overall_score' in tb_results:
+                        wandb_metrics['benchmark/tinybenchmarks_overall_score'] = tb_results['overall_score']
+                    
+                    # Log individual dataset scores
+                    for dataset_name, dataset_results in tb_results.get('datasets', {}).items():
+                        if isinstance(dataset_results, dict) and 'score' in dataset_results:
+                            wandb_metrics[f'benchmark/tinybenchmarks_{dataset_name.lower()}_score'] = dataset_results['score']
+                
+                # Log WildChat TinyLLM results
+                if 'wildchat_tinyllm' in benchmark_results['benchmarks']:
+                    wildchat_results = benchmark_results['benchmarks']['wildchat_tinyllm']
+                    if 'conversation_quality' in wildchat_results:
+                        wandb_metrics['benchmark/wildchat_tinyllm_quality'] = wildchat_results['conversation_quality']['average_score']
+                    if 'instruction_following' in wildchat_results:
+                        wandb_metrics['benchmark/wildchat_tinyllm_instruction'] = wildchat_results['instruction_following']['average_score']
+                    if 'knowledge_grounding' in wildchat_results:
+                        wandb_metrics['benchmark/wildchat_tinyllm_knowledge'] = wildchat_results['knowledge_grounding']['average_score']
+                
+                # Log legacy benchmark results if still present
                 if 'tiny_mmlu' in benchmark_results['benchmarks']:
                     mmlu_results = benchmark_results['benchmarks']['tiny_mmlu']
                     if 'overall_accuracy' in mmlu_results:
-                        wandb_metrics['benchmark/tiny_mmlu_accuracy'] = mmlu_results['overall_accuracy']
+                        wandb_metrics['benchmark/legacy_tiny_mmlu_accuracy'] = mmlu_results['overall_accuracy']
                 
-                # Log tinyHELM results  
                 if 'tiny_helm' in benchmark_results['benchmarks']:
                     helm_results = benchmark_results['benchmarks']['tiny_helm']
                     if 'average_score' in helm_results:
-                        wandb_metrics['benchmark/tiny_helm_score'] = helm_results['average_score']
+                        wandb_metrics['benchmark/legacy_tiny_helm_score'] = helm_results['average_score']
                 
-                # Log WildChat results
                 if 'wildchat_50m' in benchmark_results['benchmarks']:
                     wildchat_results = benchmark_results['benchmarks']['wildchat_50m']
                     if 'response_quality' in wildchat_results:
-                        wandb_metrics['benchmark/wildchat_quality'] = wildchat_results['response_quality']['average_score']
+                        wandb_metrics['benchmark/legacy_wildchat_quality'] = wildchat_results['response_quality']['average_score']
                 
                 # Log overall benchmark score
                 if 'overall_benchmark_score' in benchmark_results:
@@ -1102,6 +1121,12 @@ class TokenAwareTrainer:
                         episodic_data = results.get('episodic_memory_impact') or results.get('episodic_analysis', {})
                         if 'activation_correctness_correlation' in episodic_data:
                             wandb_metrics[f'benchmark/{benchmark_name}_episodic_correlation'] = episodic_data['activation_correctness_correlation']
+                    
+                    # Log episodic memory utilization patterns
+                    if 'episodic_memory_utilization' in results:
+                        utilization_data = results['episodic_memory_utilization']
+                        if 'correlation_with_quality' in utilization_data:
+                            wandb_metrics[f'benchmark/{benchmark_name}_episodic_quality_correlation'] = utilization_data['correlation_with_quality']
                 
                 try:
                     self.wandb_logger.log(wandb_metrics, step=self.global_step)
@@ -1865,39 +1890,12 @@ class TokenAwareTrainer:
                                         f"evaluation/epoch": epoch + 1,
                                         f"evaluation/completed": 1
                                     }
-                                    self.wandb_logger.log(eval_summary, step=self.global_step)
-                                except Exception as e:
-                                    logger.warning(f"Failed to log evaluation results to wandb: {e}")
-                    except Exception as e:
-                        logger.error(f"Epoch evaluation failed: {e}")
-
-                # Run tiny model epoch evaluation if configured  
-                if self.should_run_tiny_model_evaluation_at_epoch(epoch):
-                    current_performance = max(0.1, 1.0 / (1.0 + epoch_metrics['train_loss']))
-                    self.run_tiny_model_evaluation(performance_score=current_performance)
-
-                # Run benchmark evaluation if configured
-                if self.should_run_benchmark_evaluation_at_epoch(epoch):
-                    self.run_benchmark_evaluation()
-
-                # Run tiny model evaluation at epoch end if configured
-                if self.should_run_tiny_model_evaluation_at_epoch(epoch):
-                    try:
-                        logger.info(f"🔬 Running tiny model evaluation for epoch {epoch + 1}")
-                        # Use epoch metrics for performance score
-                        epoch_performance = epoch_metrics.get('cross_modal_similarity', 0.5)
-                        tiny_metrics = self.run_tiny_model_evaluation(performance_score=epoch_performance)
-                        
-                        if tiny_metrics:
-                            logger.info(f"✅ Epoch {epoch + 1} tiny model evaluation completed")
-                        
-                    except Exception as e:
-                        logger.error(f"❌ Epoch tiny model evaluation failed: {e}")
+                                    
                                     for eval_type, results in eval_results.items():
                                         if isinstance(results, dict) and "status" in results:
                                             eval_summary[f"evaluation/{eval_type}_success"] = 1 if results["status"] == "success" else 0
                                     
-                                    wandb.log(eval_summary, step=self.global_step)
+                                    self.wandb_logger.log(eval_summary, step=self.global_step)
                                     
                                 except Exception as e:
                                     logger.warning(f"Failed to log evaluation results to wandb: {e}")
@@ -1907,6 +1905,15 @@ class TokenAwareTrainer:
                     except Exception as e:
                         logger.error(f"Evaluation failed for epoch {epoch + 1}: {e}")
                         # Continue training even if evaluation fails
+
+                # Run tiny model epoch evaluation if configured  
+                if self.should_run_tiny_model_evaluation_at_epoch(epoch):
+                    current_performance = max(0.1, 1.0 / (1.0 + epoch_metrics['train_loss']))
+                    self.run_tiny_model_evaluation(performance_score=current_performance)
+
+                # Run benchmark evaluation if configured
+                if self.should_run_benchmark_evaluation_at_epoch(epoch):
+                    self.run_benchmark_evaluation()
                 
                 # Log epoch summary to wandb with error handling
                 if self.use_wandb:

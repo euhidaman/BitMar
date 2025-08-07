@@ -234,12 +234,35 @@ evaluation:
     few_shot_examples: 3 # Few-shot learning examples
     use_episodic_analysis: true # Analyze episodic memory impact
     
-    # tinyBenchmarks Suite
-    evaluate_tiny_mmlu: true # tinyMMLU - Massive Multitask Language Understanding (subset)
-    evaluate_tiny_helm: true # tinyHELM - Holistic Evaluation of Language Models (subset)
+    # tinyBenchmarks Suite - Official package evaluation using IRT
+    evaluate_tiny_benchmarks: true # Use official tinyBenchmarks package
+    tiny_benchmarks:
+      datasets:
+        - 'tinyMMLU'          # Multiple choice questions
+        - 'tinyTruthfulQA'    # Truthfulness evaluation
+        - 'tinyGSM8K'         # Math word problems
+        - 'tinyWinogrande'    # Commonsense reasoning
+        - 'tinyARC'           # Abstract reasoning
+        - 'tinyHellaSwag'     # Commonsense NLI
+        - 'tinyAlpacaEval'    # Instruction following
+      use_irt_estimates: true    # Use IRT-based scoring from official package
+      max_samples_per_dataset: 100  # Full tiny dataset (100 samples each)
     
-    # Conversational Benchmarks
-    evaluate_wildchat: true # WildChat-50M subset for conversational abilities
+    # Legacy tinyBenchmarks evaluation (deprecated in favor of official package)
+    evaluate_tiny_mmlu: false # Disabled - use official tinyBenchmarks instead
+    evaluate_tiny_helm: false # Disabled - use official tinyBenchmarks instead
+    
+    # WildChat for conversational evaluation optimized for TinyLLM
+    evaluate_wildchat_tinyllm: true # WildChat subset optimized for tiny language models
+    wildchat_tinyllm:
+      max_conversations: 50  # Reduced for tiny model evaluation
+      conversation_types: ["factual", "instructional", "explanatory"]
+      evaluate_conversation_quality: true
+      evaluate_instruction_following: true
+      evaluate_knowledge_grounding: true
+    
+    # Conversational Benchmarks (legacy)
+    evaluate_wildchat: false # Disabled in favor of TinyLLM-optimized version
     
     # Episodic Memory Specialized Benchmarks
     evaluate_episodic_benchmarks: true # Custom episodic memory tests
