@@ -186,6 +186,10 @@ wandb:
     - "memory_consolidation_index" # NEW: Tracks memory consolidation
     - "memory_diversity_trend" # NEW: Tracks diversity trends
     - "memory_utilization_stability" # NEW: Tracks utilization stability
+    - "text_learning_trajectory" # NEW: Text learning progression
+    - "vision_learning_trajectory" # NEW: Vision learning progression
+    - "trajectory_convergence_rate" # NEW: How fast text/vision converge
+    - "cross_modal_alignment_quality" # NEW: Quality of text-vision alignment
 
 # Evaluation
 evaluation:

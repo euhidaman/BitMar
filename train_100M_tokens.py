@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional
 import numpy as np
 from tqdm import tqdm
+import traceback
 import time
 import traceback
 
@@ -159,6 +160,21 @@ class TokenAwareTrainer:
         self.current_epoch = 0
         self.best_similarity = 0.0
         self.token_exhausted = False
+
+        # Enhanced cross-modal tracking
+        self.cross_modal_history = {
+            'steps': [],
+            'cross_modal_similarity': [],
+            'text_consistency': [],
+            'vision_consistency': [],
+            'text_learning_strength': [],
+            'vision_learning_strength': [],
+            'alignment_convergence': [],
+            'text_learning_trajectory': [],  # Smoothed text learning progression
+            'vision_learning_trajectory': [],  # Smoothed vision learning progression
+            'convergence_rate': []  # How fast text and vision are converging
+        }
+        self.cross_modal_smoothing_alpha = 0.1  # EMA smoothing factor
 
         # Evaluation control (will be set by main function)
         self.eval_mode = "epoch"  # Default to epoch-based evaluation
@@ -870,26 +886,53 @@ class TokenAwareTrainer:
                 # Update metrics
                 epoch_losses.append(loss.item())
 
-                # Compute cross-modal similarity if available
+                # Enhanced cross-modal metrics computation and tracking
                 if outputs.get('text_features') is not None and outputs.get('vision_latent') is not None:
                     try:
-                        similarity = self._compute_cross_modal_similarity(
+                        # Compute enhanced cross-modal metrics
+                        cross_modal_metrics = self._compute_enhanced_cross_modal_metrics(
                             outputs['text_features'], outputs['vision_latent']
                         )
-                        epoch_metrics['cross_modal_similarity'] += similarity
+                        
+                        # Update trajectory tracking
+                        self._update_cross_modal_trajectories(cross_modal_metrics)
+                        
+                        # Update epoch metrics (for backward compatibility)
+                        epoch_metrics['cross_modal_similarity'] += cross_modal_metrics['cross_modal_similarity']
                         
                         # Update best similarity
-                        if similarity > self.best_similarity:
-                            self.best_similarity = similarity
+                        if cross_modal_metrics['cross_modal_similarity'] > self.best_similarity:
+                            self.best_similarity = cross_modal_metrics['cross_modal_similarity']
+                            
                     except Exception as e:
-                        logger.warning(f"Cross-modal similarity computation failed: {e}")
+                        logger.warning(f"Enhanced cross-modal metrics computation failed: {e}")
+                        # Fallback to simple computation
+                        try:
+                            similarity = self._compute_cross_modal_similarity(
+                                outputs['text_features'], outputs['vision_latent']
+                            )
+                            epoch_metrics['cross_modal_similarity'] += similarity
+                            if similarity > self.best_similarity:
+                                self.best_similarity = similarity
+                        except Exception as e2:
+                            logger.warning(f"Fallback cross-modal similarity computation failed: {e2}")
 
-                # Update progress bar
-                progress_bar.set_postfix({
+                # Update progress bar with enhanced cross-modal info
+                progress_bar_info = {
                     'loss': f"{loss.item():.4f}",
                     'tokens': f"{self.tokens_processed:,}",
                     'epoch': f"{self.current_epoch + 1}/{self.config['training']['max_epochs']}"
-                })
+                }
+                
+                # Add trajectory convergence info if available
+                if (len(self.cross_modal_history['text_learning_trajectory']) > 0 and 
+                    len(self.cross_modal_history['vision_learning_trajectory']) > 0):
+                    text_traj = self.cross_modal_history['text_learning_trajectory'][-1]
+                    vision_traj = self.cross_modal_history['vision_learning_trajectory'][-1]
+                    convergence = 1.0 / (1.0 + abs(text_traj - vision_traj))
+                    progress_bar_info['T↔V'] = f"{convergence:.3f}"  # Text-Vision convergence
+                
+                progress_bar.set_postfix(progress_bar_info)
 
                 # Log token progress periodically
                 if self.global_step % self.token_log_frequency == 0:
@@ -905,16 +948,50 @@ class TokenAwareTrainer:
                         'step': self.global_step
                     }
                     
-                    # Only add similarity if it was computed
-                    if outputs.get('text_features') is not None and outputs.get('vision_latent') is not None:
+                    # Add enhanced cross-modal trajectory metrics
+                    if (outputs.get('text_features') is not None and 
+                        outputs.get('vision_latent') is not None and 
+                        len(self.cross_modal_history['steps']) > 0):
+                        
                         try:
-                            current_similarity = self._compute_cross_modal_similarity(
-                                outputs['text_features'], outputs['vision_latent']
-                            )
-                            log_dict['train/cross_modal_similarity'] = current_similarity
+                            # Add current cross-modal metrics
+                            if len(self.cross_modal_history['cross_modal_similarity']) > 0:
+                                log_dict['cross_modal/similarity'] = self.cross_modal_history['cross_modal_similarity'][-1]
+                                log_dict['cross_modal/text_consistency'] = self.cross_modal_history['text_consistency'][-1]
+                                log_dict['cross_modal/vision_consistency'] = self.cross_modal_history['vision_consistency'][-1]
+                                log_dict['cross_modal/alignment_convergence'] = self.cross_modal_history['alignment_convergence'][-1]
+                            
+                            # Add learning trajectories (the key visualization you requested)
+                            if len(self.cross_modal_history['text_learning_trajectory']) > 0:
+                                log_dict['learning_trajectories/text_learning'] = self.cross_modal_history['text_learning_trajectory'][-1]
+                                log_dict['learning_trajectories/vision_learning'] = self.cross_modal_history['vision_learning_trajectory'][-1]
+                                log_dict['learning_trajectories/convergence_rate'] = self.cross_modal_history['convergence_rate'][-1]
+                                
+                                # Distance between text and vision trajectories (should decrease over time)
+                                trajectory_distance = abs(self.cross_modal_history['text_learning_trajectory'][-1] - 
+                                                        self.cross_modal_history['vision_learning_trajectory'][-1])
+                                log_dict['learning_trajectories/trajectory_distance'] = trajectory_distance
+                                
+                                # Convergence indicator (how well aligned the trajectories are)
+                                log_dict['learning_trajectories/trajectory_alignment'] = 1.0 / (1.0 + trajectory_distance)
+                            
+                            # Add learning strength indicators
+                            if len(self.cross_modal_history['text_learning_strength']) > 0:
+                                log_dict['learning_strength/text_strength'] = self.cross_modal_history['text_learning_strength'][-1]
+                                log_dict['learning_strength/vision_strength'] = self.cross_modal_history['vision_learning_strength'][-1]
+                                
                         except Exception as e:
-                            logger.warning(f"Failed to compute similarity for wandb: {e}")
-
+                            logger.warning(f"Failed to log enhanced cross-modal metrics to wandb: {e}")
+                            # Fallback to simple cross-modal similarity
+                            try:
+                                current_similarity = self._compute_cross_modal_similarity(
+                                    outputs['text_features'], outputs['vision_latent']
+                                )
+                                log_dict['train/cross_modal_similarity'] = current_similarity
+                            except Exception as e2:
+                                logger.warning(f"Failed to compute fallback similarity for wandb: {e2}")
+                    
+                    # Log to WandB
                     try:
                         wandb.log(log_dict, step=self.global_step)
                     except Exception as e:
@@ -970,7 +1047,7 @@ class TokenAwareTrainer:
         return epoch_metrics
 
     def _compute_cross_modal_similarity(self, text_features: torch.Tensor, vision_features: torch.Tensor) -> float:
-        """Compute cross-modal similarity"""
+        """Compute cross-modal similarity - maintained for backward compatibility"""
         try:
             # Pool text features if needed
             if text_features.dim() == 3:  # [batch, seq, dim]
@@ -990,6 +1067,209 @@ class TokenAwareTrainer:
         except Exception as e:
             logger.warning(f"Cross-modal similarity computation failed: {e}")
             return 0.0
+
+    def _compute_enhanced_cross_modal_metrics(self, text_features: torch.Tensor, vision_features: torch.Tensor) -> Dict[str, float]:
+        """Compute enhanced cross-modal metrics showing text and vision learning trajectories"""
+        try:
+            # Pool text features if needed
+            if text_features.dim() == 3:  # [batch, seq, dim]
+                text_pooled = text_features.mean(dim=1)  # [batch, dim]
+            else:
+                text_pooled = text_features
+
+            # Ensure same dimensions
+            if text_pooled.size(-1) != vision_features.size(-1):
+                min_dim = min(text_pooled.size(-1), vision_features.size(-1))
+                text_pooled = text_pooled[:, :min_dim]
+                vision_features = vision_features[:, :min_dim]
+
+            # Normalize features for better analysis
+            text_normalized = torch.nn.functional.normalize(text_pooled, p=2, dim=1)
+            vision_normalized = torch.nn.functional.normalize(vision_features, p=2, dim=1)
+
+            # 1. Cross-modal similarity (how well text and vision align)
+            cross_modal_similarity = torch.cosine_similarity(text_normalized, vision_normalized, dim=1).mean().item()
+
+            # 2. Text representation quality (intra-text consistency)
+            # Measure how consistent text representations are with themselves
+            text_self_similarity = torch.mm(text_normalized, text_normalized.t())
+            # Remove diagonal (self-similarity) and compute mean
+            text_mask = ~torch.eye(text_self_similarity.size(0), dtype=torch.bool, device=text_self_similarity.device)
+            text_consistency = text_self_similarity[text_mask].mean().item()
+
+            # 3. Vision representation quality (intra-vision consistency)
+            # Measure how consistent vision representations are with themselves
+            vision_self_similarity = torch.mm(vision_normalized, vision_normalized.t())
+            vision_mask = ~torch.eye(vision_self_similarity.size(0), dtype=torch.bool, device=vision_self_similarity.device)
+            vision_consistency = vision_self_similarity[vision_mask].mean().item()
+
+            # 4. Text learning trajectory (how much text representations are improving)
+            # Measure variance in text features (higher variance = more diverse/learned representations)
+            text_variance = torch.var(text_normalized, dim=0).mean().item()
+            
+            # 5. Vision learning trajectory (how much vision representations are improving)
+            # Measure variance in vision features (higher variance = more diverse/learned representations)
+            vision_variance = torch.var(vision_normalized, dim=0).mean().item()
+
+            # 6. Alignment convergence (how close text and vision trajectories are)
+            # Measure the difference in representation spaces
+            feature_distance = torch.norm(text_normalized.mean(dim=0) - vision_normalized.mean(dim=0)).item()
+            alignment_convergence = 1.0 / (1.0 + feature_distance)  # Convert distance to similarity
+
+            # 7. Cross-modal learning rate (how fast alignment is improving)
+            # This will be computed using historical data in the calling function
+
+            return {
+                'cross_modal_similarity': cross_modal_similarity,
+                'text_consistency': text_consistency,
+                'vision_consistency': vision_consistency,
+                'text_learning_strength': text_variance,
+                'vision_learning_strength': vision_variance,
+                'alignment_convergence': alignment_convergence,
+                'feature_distance': feature_distance
+            }
+
+        except Exception as e:
+            logger.warning(f"Enhanced cross-modal metrics computation failed: {e}")
+            return {
+                'cross_modal_similarity': 0.0,
+                'text_consistency': 0.0,
+                'vision_consistency': 0.0,
+                'text_learning_strength': 0.0,
+                'vision_learning_strength': 0.0,
+                'alignment_convergence': 0.0,
+                'feature_distance': 1.0
+            }
+
+    def _update_cross_modal_trajectories(self, metrics: Dict[str, float]):
+        """Update cross-modal learning trajectories with smoothing"""
+        try:
+            # Store current step
+            self.cross_modal_history['steps'].append(self.global_step)
+            
+            # Store raw metrics
+            for key in ['cross_modal_similarity', 'text_consistency', 'vision_consistency', 
+                       'text_learning_strength', 'vision_learning_strength', 'alignment_convergence']:
+                self.cross_modal_history[key].append(metrics[key])
+            
+            # Compute smoothed learning trajectories
+            alpha = self.cross_modal_smoothing_alpha
+            
+            # Text learning trajectory (combination of consistency and learning strength)
+            text_trajectory = 0.7 * metrics['text_consistency'] + 0.3 * metrics['text_learning_strength']
+            if self.cross_modal_history['text_learning_trajectory']:
+                # Apply exponential moving average
+                prev_text = self.cross_modal_history['text_learning_trajectory'][-1]
+                text_trajectory = alpha * text_trajectory + (1 - alpha) * prev_text
+            self.cross_modal_history['text_learning_trajectory'].append(text_trajectory)
+            
+            # Vision learning trajectory (combination of consistency and learning strength)
+            vision_trajectory = 0.7 * metrics['vision_consistency'] + 0.3 * metrics['vision_learning_strength']
+            if self.cross_modal_history['vision_learning_trajectory']:
+                # Apply exponential moving average
+                prev_vision = self.cross_modal_history['vision_learning_trajectory'][-1]
+                vision_trajectory = alpha * vision_trajectory + (1 - alpha) * prev_vision
+            self.cross_modal_history['vision_learning_trajectory'].append(vision_trajectory)
+            
+            # Compute convergence rate (how fast text and vision trajectories are converging)
+            if len(self.cross_modal_history['text_learning_trajectory']) >= 2:
+                text_diff = abs(self.cross_modal_history['text_learning_trajectory'][-1] - 
+                              self.cross_modal_history['text_learning_trajectory'][-2])
+                vision_diff = abs(self.cross_modal_history['vision_learning_trajectory'][-1] - 
+                                self.cross_modal_history['vision_learning_trajectory'][-2])
+                trajectory_distance = abs(text_trajectory - vision_trajectory)
+                
+                # Convergence rate: high when trajectories are getting closer, low when diverging
+                convergence_rate = 1.0 / (1.0 + trajectory_distance)
+                self.cross_modal_history['convergence_rate'].append(convergence_rate)
+            else:
+                self.cross_modal_history['convergence_rate'].append(0.5)  # Neutral starting point
+            
+            # Keep only recent history (last 1000 steps) to avoid memory issues
+            max_history = 1000
+            if len(self.cross_modal_history['steps']) > max_history:
+                for key in self.cross_modal_history:
+                    self.cross_modal_history[key] = self.cross_modal_history[key][-max_history:]
+            
+        except Exception as e:
+            logger.warning(f"Failed to update cross-modal trajectories: {e}")
+
+    def _generate_cross_modal_summary(self) -> Dict[str, any]:
+        """Generate a summary of cross-modal learning trajectories"""
+        try:
+            if not self.cross_modal_history['steps']:
+                return {"status": "no_data", "message": "No cross-modal data collected"}
+            
+            # Calculate trajectory statistics
+            text_trajectory = self.cross_modal_history['text_learning_trajectory']
+            vision_trajectory = self.cross_modal_history['vision_learning_trajectory']
+            convergence_rates = self.cross_modal_history['convergence_rate']
+            similarities = self.cross_modal_history['cross_modal_similarity']
+            
+            summary = {
+                "status": "success",
+                "total_steps": len(self.cross_modal_history['steps']),
+                "text_learning": {
+                    "initial": text_trajectory[0] if text_trajectory else 0,
+                    "final": text_trajectory[-1] if text_trajectory else 0,
+                    "improvement": (text_trajectory[-1] - text_trajectory[0]) if len(text_trajectory) > 0 else 0,
+                    "stability": np.std(text_trajectory[-100:]) if len(text_trajectory) >= 100 else np.std(text_trajectory)
+                },
+                "vision_learning": {
+                    "initial": vision_trajectory[0] if vision_trajectory else 0,
+                    "final": vision_trajectory[-1] if vision_trajectory else 0,
+                    "improvement": (vision_trajectory[-1] - vision_trajectory[0]) if len(vision_trajectory) > 0 else 0,
+                    "stability": np.std(vision_trajectory[-100:]) if len(vision_trajectory) >= 100 else np.std(vision_trajectory)
+                },
+                "convergence": {
+                    "initial_rate": convergence_rates[0] if convergence_rates else 0,
+                    "final_rate": convergence_rates[-1] if convergence_rates else 0,
+                    "average_rate": np.mean(convergence_rates) if convergence_rates else 0,
+                    "trajectory_distance": {
+                        "initial": abs(text_trajectory[0] - vision_trajectory[0]) if len(text_trajectory) > 0 and len(vision_trajectory) > 0 else 1.0,
+                        "final": abs(text_trajectory[-1] - vision_trajectory[-1]) if len(text_trajectory) > 0 and len(vision_trajectory) > 0 else 1.0
+                    }
+                },
+                "cross_modal_similarity": {
+                    "initial": similarities[0] if similarities else 0,
+                    "final": similarities[-1] if similarities else 0,
+                    "peak": max(similarities) if similarities else 0,
+                    "improvement": (similarities[-1] - similarities[0]) if len(similarities) > 0 else 0
+                }
+            }
+            
+            # Add interpretation
+            trajectory_convergence = 1.0 - summary["convergence"]["trajectory_distance"]["final"]
+            if trajectory_convergence > 0.8:
+                interpretation = "Excellent: Text and vision learning trajectories are highly aligned"
+            elif trajectory_convergence > 0.6:
+                interpretation = "Good: Text and vision learning trajectories are well aligned"
+            elif trajectory_convergence > 0.4:
+                interpretation = "Fair: Text and vision learning trajectories show some alignment"
+            else:
+                interpretation = "Poor: Text and vision learning trajectories are not well aligned"
+            
+            summary["interpretation"] = {
+                "trajectory_convergence_score": trajectory_convergence,
+                "assessment": interpretation,
+                "recommendations": []
+            }
+            
+            # Add recommendations based on patterns
+            if summary["text_learning"]["improvement"] < 0.1:
+                summary["interpretation"]["recommendations"].append("Consider increasing text learning rate or regularization")
+            if summary["vision_learning"]["improvement"] < 0.1:
+                summary["interpretation"]["recommendations"].append("Consider adjusting vision encoder parameters")
+            if summary["convergence"]["final_rate"] < 0.5:
+                summary["interpretation"]["recommendations"].append("Consider stronger cross-modal loss weighting")
+            if summary["cross_modal_similarity"]["improvement"] < 0.1:
+                summary["interpretation"]["recommendations"].append("Consider architectural changes for better alignment")
+            
+            return summary
+            
+        except Exception as e:
+            logger.warning(f"Failed to generate cross-modal summary: {e}")
+            return {"status": "error", "message": str(e)}
 
     def train(self):
         """Main training loop with token awareness"""
@@ -1093,6 +1373,68 @@ class TokenAwareTrainer:
                     logger.info("✅ Finalized evaluation integration")
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to finalize evaluation integration: {e}")
+
+            # Generate and log cross-modal trajectory summary
+            try:
+                cross_modal_summary = self._generate_cross_modal_summary()
+                logger.info("📊 Cross-Modal Learning Trajectory Summary:")
+                
+                if cross_modal_summary["status"] == "success":
+                    text_learning = cross_modal_summary["text_learning"]
+                    vision_learning = cross_modal_summary["vision_learning"]
+                    convergence = cross_modal_summary["convergence"]
+                    similarity = cross_modal_summary["cross_modal_similarity"]
+                    
+                    logger.info(f"  🔤 Text Learning Trajectory:")
+                    logger.info(f"    • Initial: {text_learning['initial']:.4f}")
+                    logger.info(f"    • Final: {text_learning['final']:.4f}")
+                    logger.info(f"    • Improvement: {text_learning['improvement']:.4f}")
+                    logger.info(f"    • Stability: {text_learning['stability']:.4f}")
+                    
+                    logger.info(f"  👁️  Vision Learning Trajectory:")
+                    logger.info(f"    • Initial: {vision_learning['initial']:.4f}")
+                    logger.info(f"    • Final: {vision_learning['final']:.4f}")
+                    logger.info(f"    • Improvement: {vision_learning['improvement']:.4f}")
+                    logger.info(f"    • Stability: {vision_learning['stability']:.4f}")
+                    
+                    logger.info(f"  🤝 Trajectory Convergence:")
+                    logger.info(f"    • Initial distance: {convergence['trajectory_distance']['initial']:.4f}")
+                    logger.info(f"    • Final distance: {convergence['trajectory_distance']['final']:.4f}")
+                    logger.info(f"    • Convergence rate: {convergence['final_rate']:.4f}")
+                    
+                    logger.info(f"  ⭐ Cross-Modal Similarity:")
+                    logger.info(f"    • Initial: {similarity['initial']:.4f}")
+                    logger.info(f"    • Final: {similarity['final']:.4f}")
+                    logger.info(f"    • Peak: {similarity['peak']:.4f}")
+                    logger.info(f"    • Overall improvement: {similarity['improvement']:.4f}")
+                    
+                    # Log interpretation
+                    interpretation = cross_modal_summary["interpretation"]
+                    logger.info(f"  🎯 Assessment: {interpretation['assessment']}")
+                    logger.info(f"    • Convergence score: {interpretation['trajectory_convergence_score']:.4f}")
+                    
+                    if interpretation["recommendations"]:
+                        logger.info(f"  💡 Recommendations:")
+                        for rec in interpretation["recommendations"]:
+                            logger.info(f"    • {rec}")
+                    
+                    # Log to WandB final summary
+                    if self.use_wandb:
+                        try:
+                            wandb.log({
+                                "final_summary/cross_modal_summary": cross_modal_summary,
+                                "final_summary/text_trajectory_improvement": text_learning['improvement'],
+                                "final_summary/vision_trajectory_improvement": vision_learning['improvement'],
+                                "final_summary/trajectory_convergence_score": interpretation['trajectory_convergence_score'],
+                                "final_summary/final_cross_modal_similarity": similarity['final']
+                            })
+                        except Exception as e:
+                            logger.warning(f"Failed to log final cross-modal summary to wandb: {e}")
+                else:
+                    logger.warning(f"  ⚠️  Cross-modal summary: {cross_modal_summary.get('message', 'Unknown issue')}")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to generate cross-modal trajectory summary: {e}")
 
             # Final token summary
             logger.info("🎯 Final Token Summary:")
