@@ -121,6 +121,9 @@ cd BitMar
 # Install BitMar requirements
 pip install -r requirements.txt
 
+# Fix pytorch issues,if any exists- PyTorch (make sure to match your CUDA version)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
 ```
 
 ### Step 3: Download BabyLM Dataset
