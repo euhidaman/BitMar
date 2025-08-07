@@ -109,6 +109,10 @@ training:
   weight_decay: 0.015 # Reduced weight decay
   optimizer: "adamw8bit"
 
+  # FLOPS tracking configuration
+  track_flops: true # Enable FLOPS computation and logging
+  flops_log_frequency: 1000 # Log FLOPS every N steps
+
   # Scheduler configuration
   scheduler_config:
     T_0: 800
@@ -164,6 +168,7 @@ wandb:
   log_cross_modal_similarity: true
   log_alignment_quality: true
   log_caption_image_matching: true
+  log_flops: true # NEW: Enable FLOPS logging to wandb
   save_code: true
   create_plots: true
   plot_attention_heatmaps: true
@@ -195,6 +200,9 @@ wandb:
     - "vision_learning_trajectory" # NEW: Vision learning progression
     - "trajectory_convergence_rate" # NEW: How fast text/vision converge
     - "cross_modal_alignment_quality" # NEW: Quality of text-vision alignment
+    - "total_gflops" # NEW: Total FLOPS consumption
+    - "avg_gflops_per_step" # NEW: Average FLOPS per training step
+    - "flops_per_token" # NEW: FLOPS consumed per token processed
 
 # Evaluation
 evaluation:

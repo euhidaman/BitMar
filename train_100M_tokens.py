@@ -20,7 +20,21 @@ import numpy as np
 from tqdm import tqdm
 import traceback
 import time
-import traceback
+from collections import defaultdict
+
+# FLOPS computation utilities
+try:
+    from fvcore.nn import FlopCountMode, flop_count
+    FLOPS_AVAILABLE = True
+    logger.info("✅ FLOPS computation available via fvcore")
+except ImportError:
+    try:
+        from ptflops import get_model_complexity_info
+        FLOPS_AVAILABLE = True
+        logger.info("✅ FLOPS computation available via ptflops")
+    except ImportError:
+        FLOPS_AVAILABLE = False
+        logger.warning("⚠️  No FLOPS computation library available. Install fvcore or ptflops for FLOPS tracking")
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
@@ -160,6 +174,14 @@ class TokenAwareTrainer:
         self.current_epoch = 0
         self.best_similarity = 0.0
         self.token_exhausted = False
+
+        # FLOPS tracking
+        self.total_flops = 0
+        self.flops_per_step = 0
+        self.flops_history = []
+        self.flops_estimation_samples = 0
+        self.avg_flops_per_forward = 0
+        self.flops_tracking_enabled = FLOPS_AVAILABLE and self.config.get('training', {}).get('track_flops', True)
 
         # Enhanced cross-modal tracking
         self.cross_modal_history = {
@@ -617,6 +639,137 @@ class TokenAwareTrainer:
         attention_mask = batch['attention_mask']
         return attention_mask.sum().item()
 
+    def estimate_model_flops(self, sample_batch: Dict) -> float:
+        """Estimate FLOPS for one forward pass using a sample batch"""
+        if not self.flops_tracking_enabled:
+            return 0.0
+        
+        try:
+            # Use fvcore if available
+            if 'fvcore' in globals():
+                from fvcore.nn import FlopCountMode, flop_count
+                
+                # Create input tuple for fvcore
+                flop_inputs = (
+                    sample_batch['input_ids'],
+                    sample_batch['attention_mask'], 
+                    sample_batch['vision_features'],
+                    sample_batch['labels']
+                )
+                
+                with flop_count(self.model, flop_inputs) as flops:
+                    _ = self.model(
+                        input_ids=sample_batch['input_ids'],
+                        attention_mask=sample_batch['attention_mask'],
+                        vision_features=sample_batch['vision_features'],
+                        labels=sample_batch['labels'],
+                        step=self.global_step,
+                        has_vision=sample_batch.get('has_vision', torch.ones(sample_batch['input_ids'].size(0), dtype=torch.bool)),
+                        adaptive_controller=None  # Don't use adaptive controller for FLOPS estimation
+                    )
+                
+                total_flops = sum(flops.values())
+                return total_flops
+            
+            else:
+                # Fallback: Manual FLOPS estimation based on model parameters
+                # This is a rough estimation
+                batch_size = sample_batch['input_ids'].size(0)
+                seq_len = sample_batch['input_ids'].size(1)
+                
+                # Get model parameter count
+                param_count = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+                
+                # Rough estimation: 2 * params * batch_size * seq_len
+                # This is a very rough approximation for transformer models
+                estimated_flops = 2 * param_count * batch_size * seq_len
+                
+                logger.info(f"Using rough FLOPS estimation: {estimated_flops:,} FLOPS per forward pass")
+                return estimated_flops
+                
+        except Exception as e:
+            logger.warning(f"FLOPS estimation failed: {e}")
+            return 0.0
+
+    def update_flops_tracking(self, batch_flops: float):
+        """Update FLOPS tracking with new measurement"""
+        if not self.flops_tracking_enabled or batch_flops == 0:
+            return
+        
+        # Update total FLOPS
+        self.total_flops += batch_flops
+        
+        # Update history for averaging
+        self.flops_history.append(batch_flops)
+        if len(self.flops_history) > 100:  # Keep last 100 measurements
+            self.flops_history.pop(0)
+        
+        # Update average FLOPS per forward pass
+        self.flops_estimation_samples += 1
+        self.avg_flops_per_forward = sum(self.flops_history) / len(self.flops_history)
+
+    def log_flops_progress(self):
+        """Log FLOPS consumption progress"""
+        if not self.flops_tracking_enabled:
+            return
+        
+        # Calculate FLOPS metrics
+        total_gflops = self.total_flops / 1e9
+        avg_gflops_per_step = self.avg_flops_per_forward / 1e9
+        
+        # Estimate remaining FLOPS if we have token estimates
+        if self.tokens_processed > 0 and self.target_tokens > 0:
+            progress_ratio = self.tokens_processed / self.target_tokens
+            estimated_total_flops = self.total_flops / progress_ratio if progress_ratio > 0 else 0
+            remaining_flops = estimated_total_flops - self.total_flops
+            remaining_gflops = remaining_flops / 1e9
+        else:
+            estimated_total_flops = 0
+            remaining_gflops = 0
+        
+        logger.info(f"💻 FLOPS Progress:")
+        logger.info(f"   • Total FLOPS: {total_gflops:.2f} GFLOPS")
+        logger.info(f"   • Avg FLOPS per step: {avg_gflops_per_step:.2f} GFLOPS")
+        logger.info(f"   • Estimated remaining: {remaining_gflops:.2f} GFLOPS")
+        if estimated_total_flops > 0:
+            logger.info(f"   • Estimated total training: {estimated_total_flops/1e9:.2f} GFLOPS")
+        
+        # Log to wandb
+        if self.use_wandb:
+            try:
+                wandb.log({
+                    "flops/total_gflops": total_gflops,
+                    "flops/avg_gflops_per_step": avg_gflops_per_step,
+                    "flops/remaining_gflops": remaining_gflops,
+                    "flops/step": self.global_step,
+                    "flops/tokens_processed": self.tokens_processed
+                }, step=self.global_step)
+            except Exception as e:
+                logger.warning(f"Failed to log FLOPS to wandb: {e}")
+
+    def get_flops_summary(self) -> Dict[str, any]:
+        """Get a summary of FLOPS consumption"""
+        if not self.flops_tracking_enabled:
+            return {"flops_tracking": False}
+        
+        total_gflops = self.total_flops / 1e9
+        avg_gflops_per_step = self.avg_flops_per_forward / 1e9
+        
+        # Calculate FLOPS per token if we have token data
+        flops_per_token = self.total_flops / self.tokens_processed if self.tokens_processed > 0 else 0
+        
+        return {
+            "flops_tracking": True,
+            "total_flops": self.total_flops,
+            "total_gflops": total_gflops,
+            "avg_flops_per_forward": self.avg_flops_per_forward,
+            "avg_gflops_per_step": avg_gflops_per_step,
+            "flops_per_token": flops_per_token,
+            "flops_estimation_samples": self.flops_estimation_samples,
+            "tokens_processed": self.tokens_processed,
+            "global_step": self.global_step
+        }
+
     def log_token_progress(self):
         """Log token consumption progress"""        
         logger.info(f"🎯 Tokens processed so far: {self.tokens_processed:,}")
@@ -815,9 +968,26 @@ class TokenAwareTrainer:
                                 ], dim=1)
                         logger.debug(f"Normalized vision features: {batch['vision_features'].shape}")
                 
-                # Forward pass with detailed error tracking
+                # Forward pass with detailed error tracking and FLOPS measurement
+                batch_flops = 0.0
                 try:
                     logger.debug(f"Starting forward pass for step {self.global_step}")
+                    
+                    # FLOPS measurement for forward pass
+                    if self.flops_tracking_enabled and self.global_step < 5:
+                        # Estimate FLOPS for first few steps to get average
+                        try:
+                            batch_flops = self.estimate_model_flops(batch)
+                            if batch_flops > 0:
+                                logger.info(f"📊 Estimated FLOPS for step {self.global_step}: {batch_flops/1e9:.2f} GFLOPS")
+                        except Exception as flops_error:
+                            logger.warning(f"FLOPS estimation failed: {flops_error}")
+                            batch_flops = 0.0
+                    elif self.flops_tracking_enabled and self.avg_flops_per_forward > 0:
+                        # Use average FLOPS for subsequent steps
+                        batch_flops = self.avg_flops_per_forward
+                    
+                    # Forward pass
                     outputs = self.model(
                         input_ids=batch['input_ids'],
                         attention_mask=batch['attention_mask'],
@@ -827,6 +997,11 @@ class TokenAwareTrainer:
                         has_vision=batch.get('has_vision', torch.ones(batch['input_ids'].size(0), dtype=torch.bool)),
                         adaptive_controller=self.adaptive_controller
                     )
+                    
+                    # Update FLOPS tracking
+                    if batch_flops > 0:
+                        self.update_flops_tracking(batch_flops)
+                    
                     logger.debug(f"Forward pass completed successfully for step {self.global_step}")
                 except Exception as forward_error:
                     logger.error(f"Forward pass failed at step {self.global_step}: {forward_error}")
@@ -958,6 +1133,7 @@ class TokenAwareTrainer:
                 # Log token progress periodically
                 if self.global_step % self.token_log_frequency == 0:
                     self.log_token_progress()
+                    self.log_flops_progress()  # Add FLOPS logging
 
                 # Enhanced wandb logging
                 if self.use_wandb and self.global_step % 100 == 0:
@@ -1544,6 +1720,30 @@ class TokenAwareTrainer:
             logger.info(f"  • Processed tokens: {self.tokens_processed:,}")
             logger.info(f"  • Completion: {(self.tokens_processed/self.target_tokens)*100:.2f}%")
             logger.info(f"  • Best cross-modal similarity: {self.best_similarity:.4f}")
+
+            # Final FLOPS summary
+            flops_summary = self.get_flops_summary()
+            if flops_summary["flops_tracking"]:
+                logger.info("💻 Final FLOPS Summary:")
+                logger.info(f"  • Total FLOPS: {flops_summary['total_gflops']:.2f} GFLOPS")
+                logger.info(f"  • Average FLOPS per step: {flops_summary['avg_gflops_per_step']:.2f} GFLOPS")
+                if flops_summary['flops_per_token'] > 0:
+                    logger.info(f"  • FLOPS per token: {flops_summary['flops_per_token']:.2f}")
+                logger.info(f"  • FLOPS estimation samples: {flops_summary['flops_estimation_samples']}")
+                
+                # Log to WandB final summary
+                if self.use_wandb:
+                    try:
+                        wandb.log({
+                            "final_summary/total_gflops": flops_summary['total_gflops'],
+                            "final_summary/avg_gflops_per_step": flops_summary['avg_gflops_per_step'],
+                            "final_summary/flops_per_token": flops_summary['flops_per_token'],
+                            "final_summary/tokens_processed": flops_summary['tokens_processed']
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to log final FLOPS summary to wandb: {e}")
+            else:
+                logger.info("💻 FLOPS tracking was disabled or unavailable")
 
             if self.use_wandb:
                 try:
