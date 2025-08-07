@@ -65,7 +65,7 @@ vision_feature_reduction:
 
 data:
   # Dataset configuration (100M Token Constrained)
-  dataset_dir: "../babylm_dataset"
+  dataset_dir: "/workspace/babylm_dataset" # Updated for Linux/Docker environment
   text_encoder_name: "gpt2"
   max_seq_length: 256 # Balanced sequence length
 
@@ -258,8 +258,8 @@ token_tracking:
 # BabyLM Challenge 2025 Evaluation Integration
 evaluation:
   enabled: true # Enable evaluation pipeline integration
-  pipeline_2024_path: "d:/BabyLM/evaluation-pipeline-2024" # Path to 2024 pipeline
-  pipeline_2025_path: "d:/BabyLM/evaluation-pipeline-2025" # Path to 2025 pipeline
+  pipeline_2024_path: "/workspace/evaluation-pipeline-2024" # Path to 2024 pipeline (Linux/Docker)
+  pipeline_2025_path: "/workspace/evaluation-pipeline-2025" # Path to 2025 pipeline (Linux/Docker)
   results_dir: "evaluation_results" # Directory to save evaluation results
   eval_frequency: 1 # Evaluate every N epochs (1 = every epoch)
   
