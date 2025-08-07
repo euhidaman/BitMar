@@ -27,18 +27,23 @@ model:
   # OPTIMIZED EPISODIC MEMORY - Addresses Memory Pattern Issues
   memory_size: 48 # Increased from 32 - more slots for better utilization
   episode_dim: 128 # Match fusion dimension
-  memory_alpha: 0.15 # Reduced from 0.2 - slower adaptation prevents collapse
+  memory_alpha: 0.12 # Reduced from 0.2 - slower, more stable adaptation
   direct_writing: true
   memory_compression: true
   enable_adaptive_training: true
   
-  # NEW MEMORY PRESERVATION PARAMETERS
-  memory_diversity_regularization: 0.05 # Encourages slot diversity
-  memory_utilization_penalty: 0.02 # Penalizes under-utilization
-  memory_entropy_weight: 0.03 # Maintains entropy in memory usage
-  memory_temperature: 1.2 # Higher temp for more diverse access patterns
+  # ENHANCED MEMORY PRESERVATION PARAMETERS  
+  memory_diversity_regularization: 0.03 # Reduced - less aggressive diversity forcing
+  memory_utilization_penalty: 0.01 # Reduced - gentler utilization enforcement
+  memory_entropy_weight: 0.02 # Reduced - less entropy forcing
+  memory_temperature: 1.1 # Reduced from 1.2 - more focused access patterns
   prevent_memory_collapse: true # Actively prevent slot consolidation
-  min_memory_utilization: 0.75 # Require at least 75% slot usage
+  min_memory_utilization: 0.70 # Reduced from 0.75 - more realistic target
+  
+  # STABILITY PARAMETERS
+  memory_diversity_smoothing: 0.95 # High smoothing for stable diversity score
+  memory_utilization_smoothing: 0.90 # Smooth utilization tracking
+  memory_update_momentum: 0.85 # Momentum for memory updates
 
   # Model configuration
   max_seq_len: 256 # Balanced sequence length
@@ -78,17 +83,17 @@ data:
 # ENHANCED ADAPTIVE TRAINING - Addresses Memory Consolidation
 adaptive_training:
   enabled: true
-  similarity_window_size: 100 # Faster response to changes
-  drop_threshold: 0.08 # Lower threshold for earlier intervention
-  min_steps_between_interventions: 500 # More frequent interventions allowed
-  freeze_duration_steps: 800 # Shorter freeze periods
-  loss_rebalance_factor: 2.5 # Stronger rebalancing
-  similarity_smoothing_alpha: 0.1 # More responsive smoothing
+  similarity_window_size: 150 # Faster response to changes (was 100)
+  drop_threshold: 0.06 # Lower threshold for earlier intervention (was 0.08)
+  min_steps_between_interventions: 800 # Longer cooldown for stability (was 500)
+  freeze_duration_steps: 600 # Shorter freeze periods (was 800)
+  loss_rebalance_factor: 2.0 # Moderate rebalancing (was 2.5)
+  similarity_smoothing_alpha: 0.15 # More stable smoothing (was 0.1)
   
-  # NEW MEMORY-SPECIFIC ADAPTIVE PARAMETERS
-  memory_diversity_threshold: 0.3 # Trigger intervention if diversity drops
-  memory_utilization_threshold: 0.6 # Trigger if utilization drops below 60%
-  memory_intervention_strength: 1.5 # How strongly to intervene
+  # MEMORY-SPECIFIC ADAPTIVE PARAMETERS - GENTLER APPROACH
+  memory_diversity_threshold: 0.25 # Lower threshold (was 0.3)
+  memory_utilization_threshold: 0.55 # Lower threshold (was 0.6)
+  memory_intervention_strength: 1.2 # Gentler intervention (was 1.5)
   enable_memory_diversity_recovery: true # Enable diversity recovery mechanisms
 
 training:
@@ -110,16 +115,16 @@ training:
     T_mult: 2
     eta_min_ratio: 0.1
 
-  # REBALANCED LOSS WEIGHTS - Prioritizes Memory Health
-  cross_modal_loss_weight: 1.3 # Slightly reduced for balance
+  # REBALANCED LOSS WEIGHTS - Prioritizes Stability
+  cross_modal_loss_weight: 1.2 # Moderate cross-modal focus (was 1.3)
   text_generation_loss_weight: 1.0
-  memory_regularization_weight: 0.15 # Increased memory regularization
-  alignment_consistency_weight: 0.4
+  memory_regularization_weight: 0.10 # Moderate memory regularization (was 0.15)
+  alignment_consistency_weight: 0.3 # Reduced for stability (was 0.4)
   
-  # NEW MEMORY-SPECIFIC LOSS TERMS
-  memory_diversity_loss_weight: 0.08 # Encourage diverse memory usage
-  memory_utilization_loss_weight: 0.06 # Prevent under-utilization
-  memory_entropy_loss_weight: 0.04 # Maintain usage entropy
+  # MEMORY-SPECIFIC LOSS TERMS - GENTLER APPROACH
+  memory_diversity_loss_weight: 0.04 # Reduced for smoother diversity (was 0.08)
+  memory_utilization_loss_weight: 0.03 # Reduced utilization pressure (was 0.06)
+  memory_entropy_loss_weight: 0.02 # Reduced entropy forcing (was 0.04)
 
   # Token-aware training
   track_token_usage: true

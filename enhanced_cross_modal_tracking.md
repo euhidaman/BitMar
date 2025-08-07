@@ -6,28 +6,32 @@ The BitMar training script now includes **enhanced cross-modal similarity tracki
 
 ## Key Features
 
-### 🎯 **Dual Learning Trajectories**
-Instead of a single cross-modal similarity line, you now get:
+### 🎯 **Single Graph Dual Learning Trajectories**
+The main visualization shows both text and vision learning on **one graph**:
 
-1. **Text Learning Trajectory** (`learning_trajectories/text_learning`)
-   - Shows how well the text encoder is learning representations
-   - Combines text consistency (how coherent text representations are) with learning strength (representation diversity)
-   - Higher values = better text representation learning
+1. **Text Learning Line** (Orange) - Text encoder learning progression
+   - Starts at a lower baseline
+   - Gradually improves over training
+   - Moves toward convergence with vision line
 
-2. **Vision Learning Trajectory** (`learning_trajectories/vision_learning`)
-   - Shows how well the vision encoder is learning representations
-   - Combines vision consistency with learning strength
-   - Higher values = better vision representation learning
+2. **Vision Learning Line** (Blue) - Vision encoder learning progression
+   - May start at different level than text
+   - Shows independent vision learning
+   - Gradually converges with text line
 
-3. **Trajectory Convergence** (`learning_trajectories/convergence_rate`)
-   - Shows how quickly text and vision trajectories are aligning
-   - High convergence = text and vision learning are synchronized
-   - Low convergence = text and vision learning are diverging
+3. **Convergence Pattern** - Both lines meet and rise together
+   - Distance between lines decreases over time
+   - Both trajectories trend upward
+   - Final convergence indicates successful cross-modal alignment
 
-## WandB Visualization Metrics
+## WandB Visualization
 
-### **Primary Trajectory Metrics**
-- `learning_trajectories/text_learning` - Text learning progression (blue line)
+### **Main Graph: Cross-Modal Learning**
+- `Cross-Modal Learning/Text Learning` - Orange line showing text progress
+- `Cross-Modal Learning/Vision Learning` - Blue line showing vision progress  
+- `Cross-Modal Learning/Trajectory Distance` - Gap between lines (should decrease)
+- `Cross-Modal Learning/Convergence Score` - How well aligned they are (should increase)
+- `Cross-Modal Learning/Overall Similarity` - Traditional similarity metric
 - `learning_trajectories/vision_learning` - Vision learning progression (orange line)
 - `learning_trajectories/trajectory_distance` - Distance between trajectories (should decrease)
 - `learning_trajectories/trajectory_alignment` - How well aligned the trajectories are (should increase)
@@ -45,24 +49,30 @@ Instead of a single cross-modal similarity line, you now get:
 ## What to Look For
 
 ### **Healthy Training Pattern** ✅
+
 ```
-Text Learning:     ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲
-Vision Learning:   ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲
-Distance:          ▼ ▼ ▼ ▼ ▼ ▼ ▼ ▼
+Text Learning (Orange):   ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲
+Vision Learning (Blue):   ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲  
+Gap Distance:             ▼ ▼ ▼ ▼ ▼ ▼ ▼ ▼
 ```
-- Both text and vision trajectories increase over time
-- Distance between trajectories decreases
-- Final trajectory alignment > 0.8
+
+- Both orange and blue lines trend upward
+- Lines start apart and gradually converge
+- Final convergence score > 0.8
+- Smooth, non-jagged trajectories
 
 ### **Poor Alignment Pattern** ❌
+
 ```
-Text Learning:     ▲ ▲ ▲ ▲ ▲ ▼ ▼ ▼
-Vision Learning:   ▼ ▼ ▲ ▲ ▲ ▲ ▲ ▲
-Distance:          ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲
+Text Learning (Orange):   ▲ ▲ ▲ ▼ ▼ ▼ ▼ ▼
+Vision Learning (Blue):   ▼ ▼ ▲ ▲ ▲ ▲ ▲ ▲
+Gap Distance:             ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲
 ```
-- Text and vision learning diverge over time
-- Distance between trajectories increases
-- Final trajectory alignment < 0.4
+
+- Lines diverge instead of converging
+- One or both lines decline over time
+- Final convergence score < 0.4
+- Jagged, unstable patterns
 
 ## Implementation Details
 
