@@ -67,10 +67,23 @@ cd ..
 
 **Pipeline 2025 (Full Evaluation):**
 ```bash
-cd evaluation-pipeline-2025/evaluation_data
-curl -L -o full_eval.zip "https://files.osf.io/v1/resources/ryjfm/providers/osfstorage/6819fcae32b1521c270a7df8/?zip="
-unzip full_eval.zip
-cd ../..
+cd evaluation-pipeline-2025
+curl -L "https://files.osf.io/v1/resources/ryjfm/providers/osfstorage/6819fcae32b1521c270a7df8/?zip=" -o full_eval.zip
+
+# Extract using Python (compatible with all systems)
+python3 -c "
+import zipfile
+import os
+os.makedirs('evaluation_data', exist_ok=True)
+with zipfile.ZipFile('full_eval.zip', 'r') as zip_ref:
+    zip_ref.extractall('evaluation_data/')
+print('✅ Evaluation data extracted!')
+"
+rm full_eval.zip
+
+# Check what was extracted
+ls -la evaluation_data/full_eval/
+cd ..
 ```
 
 **Pipeline 2024:**
@@ -92,7 +105,10 @@ Request access to these datasets:
 **EWoK Data:**
 ```bash
 cd evaluation-pipeline-2025
+# Download EWoK data (this will handle both full and fast versions)
 python -m evaluation_pipeline.ewok.dl_and_filter
+
+# If the above fails, you can skip this step - EWoK fast evaluation will be handled automatically
 cd ..
 ```
 
