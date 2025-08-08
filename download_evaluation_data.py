@@ -50,10 +50,48 @@ def download_file(url: str, filepath: str, chunk_size: int = 8192) -> bool:
 
 
 def extract_zip(zip_path: str, extract_to: str) -> bool:
-    """Extract ZIP file"""
+    """Extract ZIP file and handle nested directory structure"""
     try:
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_to)
+            # First extract to a temporary location to inspect structure
+            temp_extract = Path(extract_to) / "temp_extract"
+            temp_extract.mkdir(exist_ok=True)
+
+            zip_ref.extractall(temp_extract)
+
+            # Check the structure and move files appropriately
+            extracted_items = list(temp_extract.iterdir())
+
+            # If there's a single directory containing everything, use that
+            if len(extracted_items) == 1 and extracted_items[0].is_dir():
+                source_dir = extracted_items[0]
+                logger.info(f"Found nested directory: {source_dir.name}")
+
+                # Move contents from nested directory to target location
+                target_dir = Path(extract_to)
+                for item in source_dir.iterdir():
+                    target_path = target_dir / item.name
+                    if target_path.exists():
+                        if target_path.is_dir():
+                            shutil.rmtree(target_path)
+                        else:
+                            target_path.unlink()
+                    shutil.move(str(item), str(target_path))
+            else:
+                # Move all items directly
+                target_dir = Path(extract_to)
+                for item in extracted_items:
+                    target_path = target_dir / item.name
+                    if target_path.exists():
+                        if target_path.is_dir():
+                            shutil.rmtree(target_path)
+                        else:
+                            target_path.unlink()
+                    shutil.move(str(item), str(target_path))
+
+            # Clean up temp directory
+            shutil.rmtree(temp_extract)
+
         logger.info(f"✅ Extracted {zip_path} to {extract_to}")
         return True
     except Exception as e:
@@ -99,10 +137,50 @@ def check_evaluation_data_exists():
     return False, None
 
 
+def fix_existing_evaluation_data():
+    """Fix the evaluation data structure if it was extracted incorrectly"""
+    logger.info("🔧 Checking and fixing evaluation data structure...")
+
+    # Check if fast_eval and full_eval are in the wrong location (parent directory)
+    parent_fast_eval = Path("../../fast_eval")
+    parent_full_eval = Path("../../full_eval")
+
+    # Target location
+    target_eval_data = Path("../evaluation_data")
+    target_fast_eval = target_eval_data / "fast_eval"
+    target_full_eval = target_eval_data / "full_eval"
+
+    moved_something = False
+
+    # Move fast_eval if it's in the wrong place
+    if parent_fast_eval.exists() and not target_fast_eval.exists():
+        logger.info(f"📁 Moving fast_eval from {parent_fast_eval} to {target_fast_eval}")
+        target_eval_data.mkdir(exist_ok=True)
+        shutil.move(str(parent_fast_eval), str(target_fast_eval))
+        moved_something = True
+
+    # Move full_eval if it's in the wrong place
+    if parent_full_eval.exists() and not target_full_eval.exists():
+        logger.info(f"📁 Moving full_eval from {parent_full_eval} to {target_full_eval}")
+        target_eval_data.mkdir(exist_ok=True)
+        shutil.move(str(parent_full_eval), str(target_full_eval))
+        moved_something = True
+
+    if moved_something:
+        logger.info("✅ Fixed evaluation data structure!")
+        return True
+    else:
+        logger.info("📁 Evaluation data structure is already correct")
+        return False
+
+
 def download_evaluation_data():
     """Download BabyLM evaluation data from OSF"""
     logger.info("🚀 Starting BabyLM Evaluation Data Download")
     logger.info("=" * 60)
+
+    # First try to fix existing data structure
+    fix_existing_evaluation_data()
 
     # Target directory for evaluation data
     eval_data_dir = Path("../evaluation_data")
@@ -135,9 +213,9 @@ def download_evaluation_data():
     if download_file(eval_data_url, str(zip_filename)):
         logger.info("✅ Download completed successfully!")
 
-        # Extract ZIP file
+        # Extract ZIP file with improved handling
         logger.info("📦 Extracting evaluation data...")
-        if extract_zip(str(zip_filename), str(eval_data_dir.parent)):
+        if extract_zip(str(zip_filename), str(eval_data_dir)):
             logger.info("✅ Extraction completed successfully!")
 
             # Clean up ZIP file
