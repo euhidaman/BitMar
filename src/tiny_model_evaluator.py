@@ -450,6 +450,25 @@ class TinyModelBabyLMEvaluator:
         except Exception as e:
             logger.error(f"BabyLM tiny model evaluation failed: {e}")
             return {}
+
+
+class TinyModelEvaluator:
+    """Comprehensive tiny model evaluation framework"""
+    
+    def __init__(self, model, tokenizer, save_dir: str, device: str = "auto"):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.save_dir = Path(save_dir)
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Set device
+        if device == "auto":
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device(device)
+        
+        # Evaluation history
+        self.evaluation_history = {
             'steps': [],
             'epochs': [],
             'parameter_efficiency': [],
