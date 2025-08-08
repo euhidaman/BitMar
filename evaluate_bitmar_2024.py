@@ -101,24 +101,27 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
             # Try to run individual multimodal tasks
             return run_individual_multimodal_tasks(model_path, eval_type, output_dir)
 
-        # Run multimodal evaluation
+        # Run multimodal evaluation with proper quoting
         if eval_script.endswith('.py'):
             cmd = [
                 sys.executable, eval_script,
-                "--model_path", model_path,
+                "--model_path", f'"{model_path}"',  # Quote the model path
                 "--eval_type", eval_type,
                 "--output_dir", f"{output_dir}/multimodal_results"
             ]
+            # Use shell=False for Python scripts with proper argument list
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         else:
             cmd = [
                 "bash", eval_script,
-                "--model_path", model_path,
-                "--eval_type", eval_type,
-                "--output_dir", f"{output_dir}/multimodal_results"
+                f'"{model_path}"',  # Quote the model path for bash scripts
+                eval_type,
+                f"{output_dir}/multimodal_results"
             ]
+            # Use shell=True for bash scripts with quoted arguments
+            result = subprocess.run(' '.join(cmd), capture_output=True, text=True, timeout=3600, shell=True)
 
         logger.info(f"Running command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
 
         if result.returncode == 0:
             logger.info("✅ Multimodal evaluation completed successfully")
@@ -184,10 +187,10 @@ def run_individual_multimodal_tasks(model_path: str, eval_type: str, output_dir:
                 logger.warning(f"⚠️ Script not found for {task['name']}")
                 continue
 
-            # Run task
+            # Run task with properly quoted model path
             cmd = [
                 sys.executable, script_path,
-                "--model_path", model_path,
+                "--model_path", f'"{model_path}"',  # Quote the model path
                 "--data_dir", str(data_path),
                 "--output_dir", f"{output_dir}/{task['name']}_results"
             ]

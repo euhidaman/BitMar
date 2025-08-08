@@ -83,40 +83,84 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
     results = {}
 
     try:
-        # Determine eval script based on type
+        # Create output directory
+        text_output_dir = Path(output_dir) / "text_results"
+        text_output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Determine eval script and arguments based on type
         if eval_type == "fast":
             eval_script = "eval_zero_shot_fast.sh"
+            # eval_zero_shot_fast.sh expects: MODEL_PATH REVISION_NAME BACKEND [EVAL_DIR]
+            cmd = [
+                "bash", eval_script,
+                f'"{model_path}"',  # Quote the model path to handle spaces
+                "main",  # revision_name
+                "causal",  # backend for BitMar (causal language model)
+                "evaluation_data/fast_eval"  # eval_dir
+            ]
         else:
             eval_script = "eval_zero_shot.sh"
+            # eval_zero_shot.sh expects: MODEL_PATH BACKEND [EVAL_DIR]
+            cmd = [
+                "bash", eval_script,
+                f'"{model_path}"',  # Quote the model path to handle spaces
+                "causal",  # backend for BitMar (causal language model)
+                "evaluation_data/full_eval"  # eval_dir
+            ]
 
         # Check if script exists
         if not Path(eval_script).exists():
             logger.warning(f"⚠️ Evaluation script not found: {eval_script}")
             return results
 
-        # Run text evaluation
-        cmd = [
-            "bash", eval_script,
-            "--model_path", model_path,
-            "--output_dir", f"{output_dir}/text_results"
-        ]
-
         logger.info(f"Running command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+
+        # Set environment variables for output redirection
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+
+        # Use shell=True to properly handle quoted arguments
+        result = subprocess.run(
+            ' '.join(cmd),  # Join command as string for shell execution
+            capture_output=True,
+            text=True,
+            timeout=3600,
+            env=env,
+            shell=True,  # Enable shell processing for proper quoting
+            cwd=Path.cwd()
+        )
 
         if result.returncode == 0:
             logger.info("✅ Text evaluation completed successfully")
 
-            # Try to parse results
-            results_file = Path(f"{output_dir}/text_results/results.json")
-            if results_file.exists():
-                with open(results_file, 'r') as f:
-                    results['text'] = json.load(f)
-
+            # The pipeline saves results in predictions/ directory, look for them
+            predictions_dir = Path("predictions")
+            if predictions_dir.exists():
+                # Collect all prediction files
+                prediction_files = list(predictions_dir.glob("*.json"))
+                results['text'] = {
+                    "status": "completed",
+                    "prediction_files": [str(f) for f in prediction_files],
+                    "stdout": result.stdout[:1000] if result.stdout else "",  # First 1000 chars
+                }
+                logger.info(f"Found {len(prediction_files)} prediction files")
+            else:
+                results['text'] = {
+                    "status": "completed",
+                    "stdout": result.stdout[:1000] if result.stdout else ""
+                }
         else:
-            logger.warning(f"⚠️ Text evaluation failed: {result.stderr}")
-            results['text'] = {"error": result.stderr}
+            logger.warning(f"⚠️ Text evaluation failed with return code {result.returncode}")
+            logger.warning(f"STDERR: {result.stderr[:500]}")
+            results['text'] = {
+                "error": f"Return code {result.returncode}",
+                "stderr": result.stderr[:1000] if result.stderr else "",
+                "stdout": result.stdout[:1000] if result.stdout else ""
+            }
 
+    except subprocess.TimeoutExpired:
+        logger.error("❌ Text evaluation timed out after 1 hour")
+        results['text'] = {"error": "Timeout after 3600 seconds"}
     except Exception as e:
         logger.error(f"❌ Text evaluation error: {e}")
         results['text'] = {"error": str(e)}
@@ -131,52 +175,70 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
     results = {}
 
     try:
-        # Check for multimodal evaluation script
-        multimodal_scripts = [
-            "eval_multimodal.sh",
-            "evaluation_pipeline/multimodal/run_evaluation.py"
-        ]
+        # Look for available multimodal evaluation tasks in the pipeline
+        multimodal_tasks = []
 
-        eval_script = None
-        for script in multimodal_scripts:
-            if Path(script).exists():
-                eval_script = script
-                break
+        # Check for VQA evaluation
+        vqa_data_dir = f"evaluation_data/{'fast_eval' if eval_type == 'fast' else 'full_eval'}/vqa_filtered"
+        if Path(vqa_data_dir).exists():
+            multimodal_tasks.append(("vqa", vqa_data_dir))
 
-        if not eval_script:
-            logger.warning("⚠️ No multimodal evaluation script found")
+        # Check for Winoground evaluation
+        winoground_data_dir = f"evaluation_data/{'fast_eval' if eval_type == 'fast' else 'full_eval'}/winoground_filtered"
+        if Path(winoground_data_dir).exists():
+            multimodal_tasks.append(("winoground", winoground_data_dir))
+
+        if not multimodal_tasks:
+            logger.warning("⚠️ No multimodal evaluation data found")
+            results['multimodal'] = {"error": "No multimodal data found"}
             return results
 
-        # Run multimodal evaluation
-        if eval_script.endswith('.py'):
-            cmd = [
-                sys.executable, eval_script,
-                "--model_path", model_path,
-                "--eval_type", eval_type,
-                "--output_dir", f"{output_dir}/multimodal_results"
-            ]
-        else:
-            cmd = [
-                "bash", eval_script,
-                "--model_path", model_path,
-                "--eval_type", eval_type,
-                "--output_dir", f"{output_dir}/multimodal_results"
-            ]
+        # Convert BitMar model to HuggingFace format for evaluation
+        hf_model_dir = f"hf_model_temp_{eval_type}"
+        try:
+            from bitmar_hf_adapter import save_hf_compatible_model
+            hf_model_path = save_hf_compatible_model(model_path, hf_model_dir)
+            logger.info(f"✅ Created HuggingFace compatible model at: {hf_model_path}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to create HF adapter: {e}")
+            results['multimodal'] = {"error": f"HF adapter failed: {e}"}
+            return results
 
-        logger.info(f"Running command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        # Run each multimodal task
+        task_results = {}
+        for task_name, data_dir in multimodal_tasks:
+            try:
+                logger.info(f"Running {task_name} evaluation...")
 
-        if result.returncode == 0:
-            logger.info("✅ Multimodal evaluation completed successfully")
+                # Use the evaluation pipeline's multimodal runner
+                cmd = [
+                    "python", "-m", "evaluation_pipeline.sentence_zero_shot.run",
+                    "--model_path_or_name", hf_model_path,
+                    "--backend", "causal",
+                    "--task", task_name,
+                    "--data_path", data_dir,
+                    "--save_predictions"
+                ]
 
-            # Try to parse results
-            results_file = Path(f"{output_dir}/multimodal_results/results.json")
-            if results_file.exists():
-                with open(results_file, 'r') as f:
-                    results['multimodal'] = json.load(f)
-        else:
-            logger.warning(f"⚠️ Multimodal evaluation failed: {result.stderr}")
-            results['multimodal'] = {"error": result.stderr}
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+
+                if result.returncode == 0:
+                    logger.info(f"✅ {task_name} evaluation completed")
+                    task_results[task_name] = {"status": "completed", "stdout": result.stdout[:500]}
+                else:
+                    logger.warning(f"⚠️ {task_name} evaluation failed: {result.stderr[:500]}")
+                    task_results[task_name] = {"error": result.stderr[:500]}
+
+            except Exception as e:
+                logger.error(f"❌ {task_name} evaluation error: {e}")
+                task_results[task_name] = {"error": str(e)}
+
+        results['multimodal'] = task_results
+
+        # Cleanup temp HF model
+        import shutil
+        if Path(hf_model_dir).exists():
+            shutil.rmtree(hf_model_dir)
 
     except Exception as e:
         logger.error(f"❌ Multimodal evaluation error: {e}")
