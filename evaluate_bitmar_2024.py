@@ -1,482 +1,393 @@
 """
-BitMar Evaluation Script for 2024 BabyLM Challenge
-Evaluates on multimodal tasks only using evaluation-pipeline-2024
+BitMar Evaluation Script for 2024 Pipeline
+Evaluates BitMar models on multimodal tasks only using the 2024 evaluation pipeline
 """
 
 import os
 import sys
 import argparse
 import logging
-import subprocess
 import json
+import torch
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional
-import torch
-from datetime import datetime
+import subprocess
+import shutil
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('evaluation_2024.log'),
-        logging.StreamHandler()
-    ]
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class BitMar2024Evaluator:
-    """Evaluator for BitMar using 2024 evaluation pipeline (multimodal only)"""
+def load_model_checkpoint(checkpoint_path: str, device: str = 'cuda:0'):
+    """Load BitMar model from checkpoint"""
+    try:
+        # Add src to path for model loading
+        sys.path.append(str(Path(__file__).parent / "src"))
+        from src.model import create_bitmar_model
 
-    def __init__(self,
-                 model_path: str,
-                 evaluation_pipeline_path: str = "../evaluation-pipeline-2024",
-                 evaluation_data_path: str = None,
-                 output_dir: str = "evaluation_results_2024"):
-        """
-        Initialize evaluator
+        logger.info(f"Loading checkpoint from: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
 
-        Args:
-            model_path: Path to BitMar model checkpoint
-            evaluation_pipeline_path: Path to evaluation-pipeline-2024 repository
-            evaluation_data_path: Path to evaluation_data directory (will auto-detect if None)
-            output_dir: Directory to save evaluation results
-        """
-        self.model_path = Path(model_path)
-        self.eval_pipeline_path = Path(evaluation_pipeline_path)
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Extract config and model state
+        config = checkpoint.get('config', {})
+        model_state = checkpoint['model_state_dict']
 
-        # Auto-detect evaluation data path if not provided
-        if evaluation_data_path is None:
-            # Look for evaluation_data in common locations
-            possible_paths = [
-                self.eval_pipeline_path / "evaluation_data",
-                Path("../evaluation_data"),
-                Path("./evaluation_data"),
-                Path("../babylm_dataset/evaluation_data")
-            ]
-            for path in possible_paths:
-                if path.exists():
-                    self.evaluation_data_path = path
-                    break
-            else:
-                raise FileNotFoundError(
-                    "Could not find evaluation_data directory. Please download from OSF and specify path."
-                )
-        else:
-            self.evaluation_data_path = Path(evaluation_data_path)
+        # Create model with config
+        model = create_bitmar_model(config['model'])
+        model.load_state_dict(model_state)
 
-        logger.info(f"Initialized BitMar 2024 Evaluator:")
-        logger.info(f"  • Model: {self.model_path}")
-        logger.info(f"  • Pipeline: {self.eval_pipeline_path}")
-        logger.info(f"  • Data: {self.evaluation_data_path}")
-        logger.info(f"  • Output: {self.output_dir}")
+        # Move to device
+        device = torch.device(device)
+        model = model.to(device)
+        model.eval()
 
-        # Verify paths exist
-        self._verify_paths()
+        logger.info(f"✅ Model loaded successfully on {device}")
+        return model, config
 
-        # Setup model for evaluation
-        self._setup_model()
+    except Exception as e:
+        logger.error(f"❌ Failed to load model: {e}")
+        raise
 
-    def _verify_paths(self):
-        """Verify all required paths exist"""
-        if not self.model_path.exists():
-            raise FileNotFoundError(f"Model checkpoint not found: {self.model_path}")
 
-        if not self.eval_pipeline_path.exists():
-            raise FileNotFoundError(f"Evaluation pipeline not found: {self.eval_pipeline_path}")
+def setup_evaluation_environment(pipeline_path: Path, eval_data_path: Path):
+    """Setup evaluation environment for 2024 pipeline"""
+    try:
+        # Change to pipeline directory
+        original_cwd = os.getcwd()
+        os.chdir(pipeline_path)
 
-        if not self.evaluation_data_path.exists():
-            raise FileNotFoundError(f"Evaluation data not found: {self.evaluation_data_path}")
+        # Check if evaluation_data exists, if not create symlink
+        eval_data_link = pipeline_path / "evaluation_data"
 
-        # Check for fast_eval and full_eval directories
-        self.fast_eval_path = self.evaluation_data_path / "fast_eval"
-        self.full_eval_path = self.evaluation_data_path / "full_eval"
-
-        if not self.fast_eval_path.exists():
-            logger.warning(f"Fast eval directory not found: {self.fast_eval_path}")
-
-        if not self.full_eval_path.exists():
-            logger.warning(f"Full eval directory not found: {self.full_eval_path}")
-
-        # Check for lm_eval installation
-        try:
-            import lm_eval
-            logger.info("✅ lm_eval package found")
-        except ImportError:
-            logger.error("❌ lm_eval package not found. Please install evaluation-pipeline-2024")
-            raise ImportError("lm_eval package required for 2024 evaluation")
-
-    def _setup_model(self):
-        """Setup model for evaluation (convert to HuggingFace format if needed)"""
-        logger.info("Setting up model for evaluation...")
-
-        # Check if model is already in HuggingFace format
-        hf_model_path = self.model_path.parent / "hf_model"
-
-        if not hf_model_path.exists():
-            logger.info("Converting BitMar checkpoint to HuggingFace format...")
-            self._convert_to_hf_format(hf_model_path)
-
-        self.hf_model_path = hf_model_path
-        logger.info(f"HuggingFace model ready at: {self.hf_model_path}")
-
-    def _convert_to_hf_format(self, output_path: Path):
-        """Convert BitMar checkpoint to HuggingFace format"""
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        try:
-            # Load BitMar checkpoint
-            checkpoint = torch.load(self.model_path, map_location='cpu')
-            config = checkpoint.get('config', {})
-
-            # Create a minimal HuggingFace config compatible with lm_eval
-            hf_config = {
-                "architectures": ["BitMarForCausalLM"],
-                "model_type": "bitmar",
-                "vocab_size": config.get('model', {}).get('vocab_size', 50257),
-                "hidden_size": config.get('model', {}).get('text_encoder_dim', 128),
-                "num_hidden_layers": config.get('model', {}).get('text_encoder_layers', 4),
-                "num_attention_heads": config.get('model', {}).get('text_encoder_heads', 4),
-                "max_position_embeddings": config.get('model', {}).get('max_seq_len', 256),
-                "intermediate_size": config.get('model', {}).get('text_encoder_dim', 128) * 4,
-                "layer_norm_eps": 1e-5,
-                "use_cache": True,
-                "torch_dtype": "float32",
-                "transformers_version": "4.36.0",
-                "auto_map": {
-                    "AutoConfig": "configuration_bitmar.BitMarConfig",
-                    "AutoModelForCausalLM": "modeling_bitmar.BitMarForCausalLM"
-                }
-            }
-
-            # Save config
-            with open(output_path / "config.json", "w") as f:
-                json.dump(hf_config, f, indent=2)
-
-            # Save model state dict
-            torch.save(checkpoint['model_state_dict'], output_path / "pytorch_model.bin")
-
-            # Create a simple tokenizer config (using GPT-2 tokenizer)
-            tokenizer_config = {
-                "tokenizer_class": "GPT2Tokenizer",
-                "name_or_path": "gpt2",
-                "bos_token": "<|endoftext|>",
-                "eos_token": "<|endoftext|>",
-                "pad_token": "<|endoftext|>",
-                "unk_token": "<|endoftext|>"
-            }
-
-            with open(output_path / "tokenizer_config.json", "w") as f:
-                json.dump(tokenizer_config, f, indent=2)
-
-            # Create basic modeling file for compatibility
-            modeling_code = '''
-from transformers import PreTrainedModel, PretrainedConfig
-from transformers.modeling_outputs import CausalLMOutputWithPast
-import torch
-import torch.nn as nn
-
-class BitMarConfig(PretrainedConfig):
-    model_type = "bitmar"
-    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-class BitMarForCausalLM(PreTrainedModel):
-    config_class = BitMarConfig
-    
-    def __init__(self, config):
-        super().__init__(config)
-        # Placeholder implementation - actual model loading handled separately
-        self.config = config
-    
-    def forward(self, input_ids=None, attention_mask=None, **kwargs):
-        # Placeholder - actual forward pass handled by BitMar model
-        return CausalLMOutputWithPast()
-'''
-
-            with open(output_path / "modeling_bitmar.py", "w") as f:
-                f.write(modeling_code)
-
-            # Create configuration file
-            config_code = '''
-from transformers import PretrainedConfig
-
-class BitMarConfig(PretrainedConfig):
-    model_type = "bitmar"
-    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-'''
-
-            with open(output_path / "configuration_bitmar.py", "w") as f:
-                f.write(config_code)
-
-            logger.info(f"Model converted to HuggingFace format: {output_path}")
-
-        except Exception as e:
-            logger.error(f"Failed to convert model to HuggingFace format: {e}")
-            raise
-
-    def run_fast_multimodal_evaluation(self) -> Dict:
-        """Run fast multimodal evaluation (for epoch checkpoints)"""
-        logger.info("🚀 Starting fast multimodal evaluation (2024 pipeline)...")
-
-        results = {}
-
-        # Multimodal tasks available in 2024 pipeline
-        multimodal_tasks = ["winoground_filtered", "vqa_filtered"]
-
-        for task in multimodal_tasks:
-            logger.info(f"Evaluating {task}...")
+        if not eval_data_link.exists():
+            logger.info(f"Creating evaluation data link: {eval_data_link} -> {eval_data_path}")
             try:
-                result = self._run_lm_eval(task, fast=True)
-                results[task] = result
-            except Exception as e:
-                logger.error(f"Failed to evaluate {task}: {e}")
-                results[task] = {"error": str(e)}
+                eval_data_link.symlink_to(eval_data_path.resolve(), target_is_directory=True)
+            except OSError:
+                # Fallback to copying on Windows
+                shutil.copytree(eval_data_path, eval_data_link)
+                logger.info(f"Copied evaluation data to: {eval_data_link}")
 
-        # Save fast evaluation results
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_file = self.output_dir / f"fast_multimodal_results_{timestamp}.json"
+        return original_cwd
 
-        with open(results_file, "w") as f:
-            json.dump(results, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to setup evaluation environment: {e}")
+        raise
 
-        logger.info(f"Fast multimodal evaluation completed. Results saved to: {results_file}")
-        return results
 
-    def run_full_multimodal_evaluation(self) -> Dict:
-        """Run full multimodal evaluation (for final model)"""
-        logger.info("🚀 Starting full multimodal evaluation (2024 pipeline)...")
+def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_dir: str = "results_2024"):
+    """Run multimodal evaluations (VQA, Winoground, etc.) for 2024 pipeline"""
+    logger.info(f"🖼️ Running multimodal evaluations ({eval_type}) - 2024 Pipeline...")
 
-        results = {}
+    results = {}
 
-        # Multimodal tasks available in 2024 pipeline
-        multimodal_tasks = ["winoground_filtered", "vqa_filtered"]
+    try:
+        # Check for multimodal evaluation script in 2024 pipeline
+        multimodal_scripts = [
+            "eval_multimodal.sh",
+            "run_multimodal_eval.py",
+            "scripts/eval_multimodal.py"
+        ]
 
-        for task in multimodal_tasks:
-            logger.info(f"Evaluating {task}...")
-            try:
-                result = self._run_lm_eval(task, fast=False)
-                results[task] = result
-            except Exception as e:
-                logger.error(f"Failed to evaluate {task}: {e}")
-                results[task] = {"error": str(e)}
+        eval_script = None
+        for script in multimodal_scripts:
+            if Path(script).exists():
+                eval_script = script
+                break
 
-        # Save full evaluation results
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_file = self.output_dir / f"full_multimodal_results_{timestamp}.json"
+        if not eval_script:
+            logger.warning("⚠️ No multimodal evaluation script found in 2024 pipeline")
+            # Try to run individual multimodal tasks
+            return run_individual_multimodal_tasks(model_path, eval_type, output_dir)
 
-        with open(results_file, "w") as f:
-            json.dump(results, f, indent=2)
-
-        logger.info(f"Full multimodal evaluation completed. Results saved to: {results_file}")
-        return results
-
-    def _run_lm_eval(self, task: str, fast: bool = False) -> Dict:
-        """Run evaluation using lm_eval (2024 pipeline)"""
-        eval_type = "fast" if fast else "full"
-        output_file = self.output_dir / f"{task}_{eval_type}_lm_eval.json"
-
-        try:
-            # Prepare lm_eval command
+        # Run multimodal evaluation
+        if eval_script.endswith('.py'):
             cmd = [
-                "python", "-m", "lm_eval",
-                "--model", "hf",
-                "--model_args", f"pretrained={self.hf_model_path},backend=causal",
-                "--tasks", task,
-                "--device", "cuda:0" if torch.cuda.is_available() else "cpu",
-                "--batch_size", "32" if fast else "16",
-                "--output_path", str(output_file),
-                "--log_samples"
+                sys.executable, eval_script,
+                "--model_path", model_path,
+                "--eval_type", eval_type,
+                "--output_dir", f"{output_dir}/multimodal_results"
+            ]
+        else:
+            cmd = [
+                "bash", eval_script,
+                "--model_path", model_path,
+                "--eval_type", eval_type,
+                "--output_dir", f"{output_dir}/multimodal_results"
             ]
 
-            # Add image source for multimodal tasks
-            if task == "winoground_filtered":
-                cmd.extend([
-                    "--image_src", "facebook/winoground",
-                    "--image_src_split", "test"
-                ])
-            elif task == "vqa_filtered":
-                cmd.extend([
-                    "--image_src", "HuggingFaceM4/VQAv2",
-                    "--image_src_split", "validation"
-                ])
+        logger.info(f"Running command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
 
-            # Add trust_remote_code if needed
-            cmd.append("--trust_remote_code")
+        if result.returncode == 0:
+            logger.info("✅ Multimodal evaluation completed successfully")
 
-            logger.info(f"Running command: {' '.join(cmd)}")
+            # Try to parse results
+            results_file = Path(f"{output_dir}/multimodal_results/results.json")
+            if results_file.exists():
+                with open(results_file, 'r') as f:
+                    results['multimodal'] = json.load(f)
+        else:
+            logger.warning(f"⚠️ Multimodal evaluation failed: {result.stderr}")
+            results['multimodal'] = {"error": result.stderr}
 
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.eval_pipeline_path),
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour timeout
-            )
+    except Exception as e:
+        logger.error(f"❌ Multimodal evaluation error: {e}")
+        results['multimodal'] = {"error": str(e)}
 
-            if result.returncode == 0:
-                logger.info(f"✅ {task} evaluation completed successfully")
+    return results
 
-                # Try to parse the output file
-                if output_file.exists():
-                    try:
-                        with open(output_file, 'r') as f:
-                            eval_results = json.load(f)
-                        return {
-                            "success": True,
-                            "results": eval_results,
-                            "stdout": result.stdout
-                        }
-                    except json.JSONDecodeError:
-                        return {
-                            "success": True,
-                            "stdout": result.stdout,
-                            "note": "Could not parse JSON output"
-                        }
-                else:
-                    return {
-                        "success": True,
-                        "stdout": result.stdout,
-                        "note": "No output file generated"
-                    }
-            else:
-                logger.error(f"❌ {task} evaluation failed")
-                logger.error(f"Return code: {result.returncode}")
-                logger.error(f"STDERR: {result.stderr}")
-                return {
-                    "success": False,
-                    "error": result.stderr,
-                    "stdout": result.stdout,
-                    "return_code": result.returncode
-                }
 
-        except subprocess.TimeoutExpired:
-            logger.error(f"❌ {task} evaluation timed out")
-            return {"error": "Evaluation timed out"}
-        except Exception as e:
-            logger.error(f"❌ {task} evaluation failed with exception: {e}")
-            return {"error": str(e)}
+def run_individual_multimodal_tasks(model_path: str, eval_type: str, output_dir: str):
+    """Run individual multimodal tasks if main script not found"""
+    logger.info("🔧 Running individual multimodal tasks...")
 
-    def run_bash_script_evaluation(self) -> Dict:
-        """Run evaluation using the provided bash script (eval_multimodal.sh)"""
-        logger.info("🚀 Running multimodal evaluation using bash script...")
+    results = {}
 
-        script_path = self.eval_pipeline_path / "eval_multimodal.sh"
+    # Define multimodal tasks for 2024 pipeline
+    multimodal_tasks = [
+        {
+            "name": "vqa",
+            "script": "eval_vqa.py",
+            "data_dir": "evaluation_data/full_eval/vqa_filtered" if eval_type == "full" else "evaluation_data/fast_eval/vqa_fast"
+        },
+        {
+            "name": "winoground",
+            "script": "eval_winoground.py",
+            "data_dir": "evaluation_data/full_eval/winoground_filtered" if eval_type == "full" else "evaluation_data/fast_eval/winoground_fast"
+        }
+    ]
 
-        if not script_path.exists():
-            logger.error(f"eval_multimodal.sh not found at: {script_path}")
-            return {"error": "eval_multimodal.sh script not found"}
-
+    for task in multimodal_tasks:
         try:
-            # Make script executable
-            subprocess.run(["chmod", "+x", str(script_path)], check=True)
+            # Check if data directory exists
+            data_path = Path(task["data_dir"])
+            if not data_path.exists():
+                logger.warning(f"⚠️ Data not found for {task['name']}: {data_path}")
+                continue
 
-            # Run the script with our model path
-            cmd = [str(script_path), str(self.hf_model_path)]
+            # Check if script exists
+            script_paths = [
+                task["script"],
+                f"scripts/{task['script']}",
+                f"evaluation/{task['script']}"
+            ]
 
-            logger.info(f"Running: {' '.join(cmd)}")
+            script_path = None
+            for path in script_paths:
+                if Path(path).exists():
+                    script_path = path
+                    break
 
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.eval_pipeline_path),
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour timeout
-            )
+            if not script_path:
+                logger.warning(f"⚠️ Script not found for {task['name']}")
+                continue
+
+            # Run task
+            cmd = [
+                sys.executable, script_path,
+                "--model_path", model_path,
+                "--data_dir", str(data_path),
+                "--output_dir", f"{output_dir}/{task['name']}_results"
+            ]
+
+            logger.info(f"Running {task['name']}: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
 
             if result.returncode == 0:
-                logger.info("✅ Bash script evaluation completed successfully")
+                logger.info(f"✅ {task['name']} evaluation completed")
 
-                # Look for results in the results directory
-                results_dir = self.eval_pipeline_path / "results"
-                model_name = self.hf_model_path.name
-
-                results = {}
-                for task in ["winoground_filtered", "vqa_filtered"]:
-                    task_results_path = results_dir / task / model_name / f"{task}_results.json"
-                    if task_results_path.exists():
-                        try:
-                            with open(task_results_path, 'r') as f:
-                                results[task] = json.load(f)
-                        except json.JSONDecodeError:
-                            results[task] = {"error": "Could not parse results JSON"}
-                    else:
-                        results[task] = {"error": "Results file not found"}
-
-                return {
-                    "success": True,
-                    "results": results,
-                    "stdout": result.stdout
-                }
+                # Try to parse results
+                task_results_file = Path(f"{output_dir}/{task['name']}_results/results.json")
+                if task_results_file.exists():
+                    with open(task_results_file, 'r') as f:
+                        results[task['name']] = json.load(f)
+                else:
+                    results[task['name']] = {"status": "completed", "details": "No results file found"}
             else:
-                logger.error(f"❌ Bash script evaluation failed")
-                logger.error(f"STDERR: {result.stderr}")
-                return {
-                    "success": False,
-                    "error": result.stderr,
-                    "stdout": result.stdout
-                }
+                logger.warning(f"⚠️ {task['name']} evaluation failed: {result.stderr}")
+                results[task['name']] = {"error": result.stderr}
 
         except Exception as e:
-            logger.error(f"❌ Bash script evaluation failed: {e}")
-            return {"error": str(e)}
+            logger.error(f"❌ {task['name']} evaluation error: {e}")
+            results[task['name']] = {"error": str(e)}
+
+    return results
+
+
+def run_ewok_evaluation(model_path: str, eval_type: str, output_dir: str):
+    """Run EWOK evaluation if available"""
+    logger.info("🦉 Running EWOK evaluation...")
+
+    results = {}
+
+    try:
+        # Check for EWOK script
+        ewok_script = "eval_ewok.sh"
+
+        if not Path(ewok_script).exists():
+            logger.warning("⚠️ EWOK evaluation script not found")
+            return results
+
+        # Determine EWOK data directory
+        if eval_type == "fast":
+            ewok_data = "evaluation_data/fast_eval/ewok_fast"
+        else:
+            ewok_data = "evaluation_data/full_eval/ewok"
+
+        if not Path(ewok_data).exists():
+            logger.warning(f"⚠️ EWOK data not found: {ewok_data}")
+            return results
+
+        # Run EWOK evaluation
+        cmd = [
+            "bash", ewok_script,
+            "--model_path", model_path,
+            "--data_dir", ewok_data,
+            "--output_dir", f"{output_dir}/ewok_results"
+        ]
+
+        logger.info(f"Running command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+
+        if result.returncode == 0:
+            logger.info("✅ EWOK evaluation completed successfully")
+
+            # Try to parse results
+            results_file = Path(f"{output_dir}/ewok_results/results.json")
+            if results_file.exists():
+                with open(results_file, 'r') as f:
+                    results['ewok'] = json.load(f)
+        else:
+            logger.warning(f"⚠️ EWOK evaluation failed: {result.stderr}")
+            results['ewok'] = {"error": result.stderr}
+
+    except Exception as e:
+        logger.error(f"❌ EWOK evaluation error: {e}")
+        results['ewok'] = {"error": str(e)}
+
+    return results
+
+
+def evaluate_bitmar_2024(
+    model_path: str,
+    eval_type: str = "fast",
+    evaluation_pipeline_path: str = "../evaluation-pipeline-2024",
+    output_dir: str = "results_2024"
+):
+    """
+    Evaluate BitMar model using 2024 pipeline (multimodal tasks only)
+
+    Args:
+        model_path: Path to model checkpoint
+        eval_type: "fast" or "full" evaluation
+        evaluation_pipeline_path: Path to 2024 evaluation pipeline
+        output_dir: Output directory for results
+    """
+    logger.info("🚀 Starting BitMar 2024 Pipeline Evaluation (Multimodal Only)")
+    logger.info(f"📁 Model: {model_path}")
+    logger.info(f"🎯 Evaluation type: {eval_type}")
+    logger.info(f"📂 Pipeline: {evaluation_pipeline_path}")
+    logger.info(f"💾 Output: {output_dir}")
+
+    # Convert paths
+    pipeline_path = Path(evaluation_pipeline_path).resolve()
+    model_path = Path(model_path).resolve()
+    output_path = Path(output_dir)
+
+    # Validate paths
+    if not pipeline_path.exists():
+        raise FileNotFoundError(f"Pipeline path not found: {pipeline_path}")
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model path not found: {model_path}")
+
+    # Create output directory
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Find evaluation data
+    eval_data_paths = [
+        pipeline_path / "evaluation_data",
+        pipeline_path.parent / "evaluation_data"
+    ]
+
+    eval_data_path = None
+    for path in eval_data_paths:
+        if path.exists():
+            eval_data_path = path
+            break
+
+    if not eval_data_path:
+        raise FileNotFoundError("Evaluation data not found. Run download_evaluation_data.py first.")
+
+    logger.info(f"📊 Using evaluation data: {eval_data_path}")
+
+    # Setup evaluation environment
+    original_cwd = setup_evaluation_environment(pipeline_path, eval_data_path)
+
+    try:
+        all_results = {}
+
+        # Run multimodal evaluations (main focus for 2024 pipeline)
+        multimodal_results = run_multimodal_evaluations(str(model_path), eval_type, str(output_path))
+        all_results.update(multimodal_results)
+
+        # Run EWOK if available
+        ewok_results = run_ewok_evaluation(str(model_path), eval_type, str(output_path))
+        all_results.update(ewok_results)
+
+        # Save combined results
+        results_file = output_path / "combined_results_2024.json"
+        with open(results_file, 'w') as f:
+            json.dump(all_results, f, indent=2)
+
+        logger.info(f"📊 Results saved to: {results_file}")
+
+        # Log summary
+        logger.info("📈 Evaluation Summary (2024 Pipeline - Multimodal Only):")
+        for task_type, results in all_results.items():
+            if isinstance(results, dict) and "error" not in results:
+                logger.info(f"  ✅ {task_type}: Success")
+            else:
+                logger.info(f"  ❌ {task_type}: Failed")
+
+        return all_results
+
+    finally:
+        # Restore original working directory
+        os.chdir(original_cwd)
 
 
 def main():
-    """Main evaluation function"""
-    parser = argparse.ArgumentParser(description="Evaluate BitMar using 2024 BabyLM pipeline (multimodal only)")
+    """Main function"""
+    parser = argparse.ArgumentParser(description="Evaluate BitMar using 2024 pipeline (multimodal only)")
 
     parser.add_argument("--model_path", type=str, required=True,
-                       help="Path to BitMar model checkpoint")
-    parser.add_argument("--eval_type", type=str, choices=["fast", "full", "both"],
-                       default="both", help="Type of evaluation to run")
-    parser.add_argument("--evaluation_pipeline_path", type=str,
-                       default="../evaluation-pipeline-2024",
-                       help="Path to evaluation-pipeline-2024")
-    parser.add_argument("--evaluation_data_path", type=str, default=None,
-                       help="Path to evaluation_data directory")
-    parser.add_argument("--output_dir", type=str, default="evaluation_results_2024",
+                       help="Path to model checkpoint")
+    parser.add_argument("--eval_type", type=str, choices=["fast", "full"], default="fast",
+                       help="Type of evaluation to run")
+    parser.add_argument("--evaluation_pipeline_path", type=str, default="../evaluation-pipeline-2024",
+                       help="Path to 2024 evaluation pipeline")
+    parser.add_argument("--output_dir", type=str, default="results_2024",
                        help="Output directory for results")
-    parser.add_argument("--use_bash_script", action="store_true",
-                       help="Use the provided eval_multimodal.sh script")
+    parser.add_argument("--device", type=str, default="cuda:0",
+                       help="Device to use for evaluation")
 
     args = parser.parse_args()
 
     try:
-        # Initialize evaluator
-        evaluator = BitMar2024Evaluator(
+        results = evaluate_bitmar_2024(
             model_path=args.model_path,
+            eval_type=args.eval_type,
             evaluation_pipeline_path=args.evaluation_pipeline_path,
-            evaluation_data_path=args.evaluation_data_path,
             output_dir=args.output_dir
         )
 
-        # Run evaluation
-        if args.use_bash_script:
-            logger.info("Using bash script for evaluation...")
-            results = evaluator.run_bash_script_evaluation()
-            logger.info(f"Bash script evaluation completed")
-        else:
-            if args.eval_type in ["fast", "both"]:
-                logger.info("Running fast multimodal evaluation...")
-                fast_results = evaluator.run_fast_multimodal_evaluation()
-                logger.info(f"Fast evaluation completed with {len(fast_results)} tasks")
-
-            if args.eval_type in ["full", "both"]:
-                logger.info("Running full multimodal evaluation...")
-                full_results = evaluator.run_full_multimodal_evaluation()
-                logger.info(f"Full evaluation completed with {len(full_results)} tasks")
-
-        logger.info("✅ Evaluation completed successfully!")
+        logger.info("🎉 2024 Pipeline evaluation (multimodal only) completed successfully!")
 
     except Exception as e:
-        logger.error(f"Evaluation failed: {e}")
+        logger.error(f"❌ Evaluation failed: {e}")
         sys.exit(1)
 
 

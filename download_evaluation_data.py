@@ -179,79 +179,118 @@ def extract_all_nested_zips(directory: Path, max_iterations: int = 5) -> int:
     return total_extracted
 
 
-def check_evaluation_data_exists():
-    """Check if evaluation data already exists"""
-    logger.info("🔍 Checking for existing evaluation data...")
+def verify_evaluation_data(eval_data_dir: Path) -> bool:
+    """Verify that evaluation data has been properly extracted"""
+    logger.info("🔍 Verifying evaluation data...")
 
-    # Check both pipeline locations
-    possible_locations = [
-        Path("../evaluation_data"),
-        Path("./evaluation_data"),
-        Path("../evaluation-pipeline-2024/evaluation_data"),
-        Path("../evaluation-pipeline-2025/evaluation_data")
+    # Expected directories
+    expected_dirs = [
+        "fast_eval",
+        "full_eval",
+        "fast_eval/blimp_fast",
+        "fast_eval/entity_tracking_fast",
+        "fast_eval/reading",
+        "fast_eval/supplement_fast",
+        "fast_eval/wug_adj_nominalization",
+        "fast_eval/wug_past_tense",
+        "full_eval/blimp_filtered",
+        "full_eval/cdi_childes",
+        "full_eval/comps",
+        "full_eval/entity_tracking",
+        "full_eval/glue_filtered",
+        "full_eval/reading",
+        "full_eval/supplement_filtered",
+        "full_eval/vqa_filtered",
+        "full_eval/winoground_filtered",
+        "full_eval/wug_adj_nominalization",
+        "full_eval/wug_past_tense"
     ]
 
-    for location in possible_locations:
-        if location.exists():
-            # Check for key directories
-            fast_eval = location / "fast_eval"
-            full_eval = location / "full_eval"
+    missing_dirs = []
+    found_dirs = []
 
-            if fast_eval.exists() and full_eval.exists():
-                logger.info(f"✅ Found evaluation data at: {location.absolute()}")
+    for expected_dir in expected_dirs:
+        dir_path = eval_data_dir / expected_dir
+        if dir_path.exists():
+            found_dirs.append(expected_dir)
+        else:
+            missing_dirs.append(expected_dir)
 
-                # Count files in each directory
-                fast_files = len(list(fast_eval.rglob("*.*")))
-                full_files = len(list(full_eval.rglob("*.*")))
+    logger.info("📊 Verification Summary:")
+    logger.info(f"  • Found directories: {len(found_dirs)}/{len(expected_dirs)}")
+    logger.info(f"  • Missing directories: {len(missing_dirs)}")
 
-                logger.info(f"  • fast_eval: {fast_files} files")
-                logger.info(f"  • full_eval: {full_files} files")
+    if missing_dirs:
+        logger.warning("⚠️ Missing directories:")
+        for missing in missing_dirs:
+            logger.warning(f"    - {missing}")
 
-                if fast_files > 50 and full_files > 100:  # Reasonable threshold
-                    logger.info("🎉 Evaluation data appears complete!")
-                    return True, location
-                else:
-                    logger.warning(f"⚠️ Evaluation data seems incomplete at {location}")
+    # Check if we have the minimum required structure
+    if (eval_data_dir / "fast_eval").exists() and (eval_data_dir / "full_eval").exists():
+        logger.info("🎉 Evaluation data verification successful!")
 
-    logger.info("❌ No complete evaluation data found")
-    return False, None
+        # Check for both 2024 and 2025 pipeline compatibility
+        has_multimodal = (eval_data_dir / "full_eval" / "vqa_filtered").exists() or (eval_data_dir / "full_eval" / "winoground_filtered").exists()
+        has_text_tasks = (eval_data_dir / "full_eval" / "blimp_filtered").exists()
 
+        if has_multimodal:
+            logger.info("✅ 2024 pipeline data available (multimodal)")
+        if has_text_tasks and has_multimodal:
+            logger.info("✅ 2025 pipeline data available (text + multimodal)")
 
-def fix_existing_evaluation_data():
-    """Fix the evaluation data structure if it was extracted incorrectly"""
-    logger.info("🔧 Checking and fixing evaluation data structure...")
-
-    # Check if fast_eval and full_eval are in the wrong location (parent directory)
-    parent_fast_eval = Path("../../fast_eval")
-    parent_full_eval = Path("../../full_eval")
-
-    # Target location
-    target_eval_data = Path("../evaluation_data")
-    target_fast_eval = target_eval_data / "fast_eval"
-    target_full_eval = target_eval_data / "full_eval"
-
-    moved_something = False
-
-    # Move fast_eval if it's in the wrong place
-    if parent_fast_eval.exists() and not target_fast_eval.exists():
-        logger.info(f"📁 Moving fast_eval from {parent_fast_eval} to {target_fast_eval}")
-        target_eval_data.mkdir(exist_ok=True)
-        shutil.move(str(parent_fast_eval), str(target_fast_eval))
-        moved_something = True
-
-    # Move full_eval if it's in the wrong place
-    if parent_full_eval.exists() and not target_full_eval.exists():
-        logger.info(f"📁 Moving full_eval from {parent_full_eval} to {target_full_eval}")
-        target_eval_data.mkdir(exist_ok=True)
-        shutil.move(str(parent_full_eval), str(target_full_eval))
-        moved_something = True
-
-    if moved_something:
-        logger.info("✅ Fixed evaluation data structure!")
         return True
     else:
-        logger.info("📁 Evaluation data structure is already correct")
+        logger.error("❌ Missing fast_eval or full_eval directories")
         return False
+
+
+def setup_evaluation_symlinks(eval_data_dir: Path) -> bool:
+    """Setup symlinks/copies for evaluation pipelines"""
+    logger.info("🔗 Setting up symlinks to evaluation data...")
+
+    # Pipeline directories
+    pipeline_2024 = Path("../evaluation-pipeline-2024")
+    pipeline_2025 = Path("../evaluation-pipeline-2025")
+
+    success_count = 0
+
+    for pipeline_name, pipeline_dir in [("2024", pipeline_2024), ("2025", pipeline_2025)]:
+        if pipeline_dir.exists():
+            target_eval_data = pipeline_dir / "evaluation_data"
+
+            try:
+                # Remove existing evaluation_data if it exists
+                if target_eval_data.exists():
+                    if target_eval_data.is_symlink():
+                        target_eval_data.unlink()
+                    else:
+                        shutil.rmtree(target_eval_data)
+
+                # Create symlink (or copy on Windows if symlink fails)
+                try:
+                    target_eval_data.symlink_to(eval_data_dir.resolve(), target_is_directory=True)
+                    logger.info(f"✅ Created symlink for {pipeline_name} pipeline: {target_eval_data}")
+                except OSError:
+                    # Fallback to copying on Windows if symlinks don't work
+                    shutil.copytree(eval_data_dir, target_eval_data)
+                    logger.info(f"✅ Copied evaluation data for {pipeline_name} pipeline: {target_eval_data}")
+
+                success_count += 1
+
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to setup evaluation data for {pipeline_name} pipeline: {e}")
+        else:
+            logger.warning(f"⚠️ Pipeline directory not found: {pipeline_dir}")
+
+    if success_count == 0:
+        logger.error("❌ Failed to set up evaluation data for any pipeline")
+        return False
+    elif success_count == 2:
+        logger.info("🎉 Successfully set up evaluation data for both pipelines")
+        return True
+    else:
+        logger.warning(f"⚠️ Partial success: set up evaluation data for {success_count}/2 pipelines")
+        return True
 
 
 def download_evaluation_data():
@@ -259,12 +298,24 @@ def download_evaluation_data():
     logger.info("🚀 Starting BabyLM Evaluation Data Download")
     logger.info("=" * 60)
 
-    # First try to fix existing data structure
-    fix_existing_evaluation_data()
-
     # Target directory for evaluation data
     eval_data_dir = Path("../evaluation_data")
     eval_data_dir.mkdir(exist_ok=True)
+
+    # Check if data already exists and is complete
+    if verify_evaluation_data(eval_data_dir):
+        logger.info("✅ Evaluation data already exists and appears complete!")
+
+        # Still try to setup symlinks in case they're missing
+        setup_success = setup_evaluation_symlinks(eval_data_dir)
+
+        if setup_success:
+            logger.info("🎉 Evaluation data setup completed!")
+            return True
+        else:
+            logger.warning("⚠️ Evaluation data exists but symlink setup failed")
+            logger.info("💡 You can manually copy evaluation_data to pipeline directories")
+            return False
 
     # Official evaluation data URL
     eval_data_url = "https://files.osf.io/v1/resources/ryjfm/providers/osfstorage/6819f54f5dc6fc2bff0a7bba/?zip="
@@ -273,280 +324,72 @@ def download_evaluation_data():
     logger.info(f"📁 Target directory: {eval_data_dir.absolute()}")
     logger.info(f"📥 Downloading from: {eval_data_url}")
 
-    # Expected structure after extraction
-    expected_structure = [
-        "evaluation_data/fast_eval/",
-        "evaluation_data/full_eval/",
-        "evaluation_data/fast_eval/blimp_fast/",
-        "evaluation_data/full_eval/blimp_filtered/",
-        "evaluation_data/full_eval/glue_filtered/",
-        "evaluation_data/full_eval/winoground_filtered/",
-        "evaluation_data/full_eval/vqa_filtered/"
-    ]
-
-    logger.info("\n📋 Expected evaluation data structure:")
-    for path in expected_structure:
-        logger.info(f"   📁 {path}")
-
     # Download the ZIP file
     logger.info(f"\n📥 Downloading evaluation data...")
-    if download_file(eval_data_url, str(zip_filename)):
-        logger.info("✅ Download completed successfully!")
-
-        # Extract ZIP file with improved handling
-        logger.info("📦 Extracting evaluation data...")
-        if extract_zip(str(zip_filename), str(eval_data_dir)):
-            logger.info("✅ Extraction completed successfully!")
-
-            # Clean up ZIP file
-            zip_filename.unlink()
-            logger.info("🧹 Cleaned up ZIP file")
-
-            # Verify extraction
-            return verify_evaluation_data(eval_data_dir)
-        else:
-            logger.error("❌ Failed to extract evaluation data")
-            return False
-    else:
-        logger.error("❌ Failed to download evaluation data")
+    if not download_file(eval_data_url, str(zip_filename)):
+        logger.error("❌ Download failed!")
         return False
 
+    logger.info("✅ Download completed successfully!")
 
-def verify_evaluation_data(eval_data_dir: Path):
-    """Verify the downloaded evaluation data"""
+    # Extract ZIP file with improved handling
+    logger.info("📦 Extracting evaluation data...")
+    if not extract_zip(str(zip_filename), str(eval_data_dir)):
+        logger.error("❌ Extraction failed!")
+        return False
+
+    logger.info("✅ Extraction completed successfully!")
+
+    # Clean up ZIP file
+    zip_filename.unlink()
+    logger.info("🧹 Cleaned up ZIP file")
+
+    # Extract all nested ZIP files (including ewok_fast.zip)
+    logger.info("📦 Extracting nested ZIP files...")
+    extracted_count = extract_all_nested_zips(eval_data_dir)
+
+    if extracted_count > 0:
+        logger.info(f"✅ Extracted {extracted_count} nested ZIP files")
+    else:
+        logger.info("ℹ️ No nested ZIP files found")
+
+    # Verify the extracted data
     logger.info("🔍 Verifying evaluation data...")
-
-    # Check main directories
-    fast_eval_dir = eval_data_dir / "fast_eval"
-    full_eval_dir = eval_data_dir / "full_eval"
-
-    if not fast_eval_dir.exists() or not full_eval_dir.exists():
-        logger.error("❌ Missing fast_eval or full_eval directories")
+    if not verify_evaluation_data(eval_data_dir):
+        logger.error("❌ Download failed!")
         return False
 
-    # Check key subdirectories for 2025 pipeline
-    required_2025_dirs = [
-        "blimp_filtered",
-        "cdi_childes",
-        "comps",
-        "entity_tracking",
-        "glue_filtered",
-        "reading",
-        "supplement_filtered",
-        "winoground_filtered",
-        "vqa_filtered",
-        "wug_adj_nominalization",
-        "wug_past_tense"
-    ]
-
-    # Check key subdirectories for 2024 pipeline
-    required_2024_dirs = [
-        "winoground_filtered",
-        "vqa_filtered"
-    ]
-
-    missing_dirs = []
-    found_dirs = []
-
-    # Check full_eval directories
-    for dir_name in required_2025_dirs:
-        dir_path = full_eval_dir / dir_name
-        if dir_path.exists():
-            file_count = len(list(dir_path.rglob("*.*")))
-            logger.info(f"  ✅ {dir_name}: {file_count} files")
-            found_dirs.append(dir_name)
-        else:
-            logger.warning(f"  ❌ {dir_name}: Missing")
-            missing_dirs.append(dir_name)
-
-    # Check fast_eval directories (should be subsets)
-    fast_dirs = [d.name for d in fast_eval_dir.iterdir() if d.is_dir()]
-    logger.info(f"\n📁 Fast eval directories found: {len(fast_dirs)}")
-    for dir_name in fast_dirs:
-        file_count = len(list((fast_eval_dir / dir_name).rglob("*.*")))
-        logger.info(f"  📂 {dir_name}: {file_count} files")
-
-    # Summary
-    logger.info(f"\n📊 Verification Summary:")
-    logger.info(f"  • Found directories: {len(found_dirs)}/{len(required_2025_dirs)}")
-    logger.info(f"  • Missing directories: {len(missing_dirs)}")
-
-    if missing_dirs:
-        logger.warning(f"  • Missing: {missing_dirs}")
-
-    # Check if we have the essentials for both pipelines
-    has_2024_essentials = all(d in found_dirs for d in required_2024_dirs)
-    has_2025_essentials = len(found_dirs) >= len(required_2025_dirs) * 0.8  # 80% threshold
-
-    if has_2024_essentials and has_2025_essentials:
-        logger.info("🎉 Evaluation data verification successful!")
-        logger.info("✅ Both 2024 and 2025 pipeline data available")
-        return True
-    elif has_2024_essentials:
-        logger.info("⚠️ 2024 pipeline data available, 2025 data incomplete")
-        return True
-    else:
-        logger.error("❌ Evaluation data verification failed")
-        return False
-
-
-def setup_symlinks():
-    """Create symlinks to evaluation data in both pipeline directories"""
+    # Setup symlinks for evaluation pipelines
     logger.info("🔗 Setting up symlinks to evaluation data...")
+    setup_success = setup_evaluation_symlinks(eval_data_dir)
 
-    eval_data_dir = Path("../evaluation_data")
-
-    if not eval_data_dir.exists():
-        logger.error("❌ Evaluation data directory not found")
-        return False
-
-    # Correct symlinks for both pipelines (they're at the same level as BitMar)
-    pipeline_dirs = [
-        Path("../evaluation-pipeline-2024"),  # D:\BabyLM\evaluation-pipeline-2024
-        Path("../evaluation-pipeline-2025")   # D:\BabyLM\evaluation-pipeline-2025
-    ]
-
-    success_count = 0
-
-    for pipeline_dir in pipeline_dirs:
-        pipeline_name = pipeline_dir.name
-        logger.info(f"🔍 Checking pipeline: {pipeline_dir.absolute()}")
-
-        if pipeline_dir.exists():
-            logger.info(f"✅ Found {pipeline_name} at: {pipeline_dir.absolute()}")
-            symlink_path = pipeline_dir / "evaluation_data"
-
-            # Remove existing symlink/directory if it exists
-            if symlink_path.exists() or symlink_path.is_symlink():
-                if symlink_path.is_symlink():
-                    symlink_path.unlink()
-                    logger.info(f"🗑️ Removed existing symlink: {symlink_path}")
-                else:
-                    logger.warning(f"⚠️ Directory exists at {symlink_path}, skipping symlink creation")
-                    # Copy instead of symlink if directory exists
-                    logger.info(f"📁 Copying evaluation_data to {pipeline_name} instead...")
-                    try:
-                        shutil.copytree(eval_data_dir, symlink_path, dirs_exist_ok=True)
-                        logger.info(f"✅ Copied evaluation_data to {pipeline_name}")
-                        success_count += 1
-                        continue
-                    except Exception as e:
-                        logger.warning(f"⚠️ Failed to copy to {pipeline_name}: {e}")
-                        continue
-
-            try:
-                # Create symlink (Windows requires admin rights for directory symlinks)
-                if os.name == 'nt':  # Windows
-                    import subprocess
-                    result = subprocess.run([
-                        'mklink', '/D',
-                        str(symlink_path.absolute()),
-                        str(eval_data_dir.absolute())
-                    ], shell=True, capture_output=True, text=True)
-
-                    if result.returncode == 0:
-                        logger.info(f"✅ Created symlink: {pipeline_name}/evaluation_data")
-                        success_count += 1
-                    else:
-                        logger.warning(f"⚠️ Failed to create symlink for {pipeline_name}: {result.stderr}")
-                        # Copy instead of symlink on Windows if no admin rights
-                        logger.info(f"📁 Copying evaluation_data to {pipeline_name} instead...")
-                        try:
-                            shutil.copytree(eval_data_dir, symlink_path, dirs_exist_ok=True)
-                            logger.info(f"✅ Copied evaluation_data to {pipeline_name}")
-                            success_count += 1
-                        except Exception as e:
-                            logger.warning(f"⚠️ Failed to copy to {pipeline_name}: {e}")
-                else:  # Unix-like
-                    symlink_path.symlink_to(eval_data_dir.absolute())
-                    logger.info(f"✅ Created symlink: {pipeline_name}/evaluation_data")
-                    success_count += 1
-
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to create symlink for {pipeline_name}: {e}")
-                # Try copying as fallback
-                try:
-                    logger.info(f"📁 Trying to copy evaluation_data to {pipeline_name}...")
-                    shutil.copytree(eval_data_dir, symlink_path, dirs_exist_ok=True)
-                    logger.info(f"✅ Copied evaluation_data to {pipeline_name}")
-                    success_count += 1
-                except Exception as copy_error:
-                    logger.warning(f"⚠️ Failed to copy to {pipeline_name}: {copy_error}")
-        else:
-            logger.warning(f"⚠️ Pipeline directory not found: {pipeline_dir.absolute()}")
-            logger.info(f"💡 Expected location: {pipeline_dir.absolute()}")
-
-    if success_count > 0:
-        logger.info(f"✅ Successfully set up evaluation data for {success_count} pipeline(s)")
-        return True
-    else:
+    if not setup_success:
         logger.error("❌ Failed to set up evaluation data for any pipeline")
-        logger.info("💡 Manual setup instructions:")
-        logger.info(f"1. Copy {eval_data_dir.absolute()} to:")
-        logger.info("   • D:\\BabyLM\\evaluation-pipeline-2024\\evaluation_data")
-        logger.info("   • D:\\BabyLM\\evaluation-pipeline-2025\\evaluation_data")
+        logger.warning("⚠️ Download successful but symlink setup failed")
+        logger.info("💡 You can manually copy evaluation_data to pipeline directories")
         return False
+
+    logger.info("✅ Download and extraction completed successfully!")
+    return True
 
 
 def main():
-    """Main function to download and setup evaluation data"""
-    logger.info("🚀 BabyLM Evaluation Data Setup")
-    logger.info("=" * 50)
-
-    # First check if data already exists
-    data_exists, existing_location = check_evaluation_data_exists()
-
-    if data_exists:
-        logger.info("✅ Evaluation data already exists!")
-        # Still try to set up symlinks
-        setup_symlinks()
-        return True
-
-    # Download evaluation data
-    logger.info("📥 Downloading evaluation data...")
-
+    """Main function"""
     try:
         success = download_evaluation_data()
         if success:
-            logger.info("✅ Download and extraction completed successfully!")
-
-            # Extract all nested ZIP files (like ewok_fast.zip)
-            logger.info("📦 Extracting all nested ZIP files...")
-            eval_data_dir = Path("../evaluation_data")
-            total_zips_extracted = extract_all_nested_zips(eval_data_dir)
-
-            if total_zips_extracted > 0:
-                logger.info(f"✅ Extracted {total_zips_extracted} additional ZIP files!")
-            else:
-                logger.info("📁 No additional ZIP files found to extract")
-
-            # Set up symlinks to both evaluation pipelines
-            setup_success = setup_symlinks()
-
-            if setup_success:
-                logger.info("🎉 Evaluation data setup completed successfully!")
-                logger.info("\n📋 Next steps:")
-                logger.info("1. Install evaluation pipeline dependencies")
-                logger.info("2. Run evaluations using the provided scripts")
-                return True
-            else:
-                logger.warning("⚠️ Download successful but symlink setup failed")
-                logger.info("💡 You can manually copy evaluation_data to pipeline directories")
-                return True
+            logger.info("🎉 All evaluation data setup completed successfully!")
+            sys.exit(0)
         else:
-            logger.error("❌ Download failed!")
-            return False
+            logger.error("❌ Evaluation data setup failed!")
+            sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("⚠️ Download interrupted by user")
+        sys.exit(1)
     except Exception as e:
-        logger.error(f"❌ Setup failed with error: {e}")
-        logger.info("\n📋 Manual setup instructions:")
-        logger.info("1. Download the evaluation data from:")
-        logger.info("   https://files.osf.io/v1/resources/ryjfm/providers/osfstorage/6819f54f5dc6fc2bff0a7bba/?zip=")
-        logger.info("2. Extract to ../evaluation_data/")
-        logger.info("3. Copy or symlink to both evaluation pipeline directories")
-        return False
+        logger.error(f"❌ Unexpected error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    success = main()
-    if not success:
-        sys.exit(1)
+    main()
