@@ -413,7 +413,7 @@ class BitNetTextDecoder(nn.Module):
 
 
 class EpisodicMemory(nn.Module):
-    """Episodic Memory mechanism inspired by Larimar"""
+    """Episodic Memory mechanism inspired by Larimar with performance optimizations"""
 
     def __init__(
         self,
@@ -430,90 +430,273 @@ class EpisodicMemory(nn.Module):
         self.direct_writing = direct_writing
         self.observation_noise_std = observation_noise_std
 
-        # Memory storage
-        self.register_buffer('memory', torch.zeros(memory_size, episode_dim))
+        # Memory storage with improved initialization
+        self.register_buffer('memory', torch.randn(memory_size, episode_dim) * 0.02)
         self.register_buffer('memory_age', torch.zeros(memory_size))
         self.register_buffer('memory_usage', torch.zeros(memory_size))
 
-        # Memory access networks
-        self.query_net = BitNetLinear(episode_dim, episode_dim)
-        self.key_net = BitNetLinear(episode_dim, episode_dim)
-        self.value_net = BitNetLinear(episode_dim, episode_dim)
+        # Add memory quality tracking for better slot selection
+        self.register_buffer('memory_quality', torch.zeros(memory_size))
+        self.register_buffer('memory_importance', torch.ones(memory_size))
+
+        # Add running statistics for adaptive normalization
+        self.register_buffer('memory_mean', torch.zeros(episode_dim))
+        self.register_buffer('memory_std', torch.ones(episode_dim))
+        self.register_buffer('update_count', torch.tensor(0))
+
+        # Enhanced memory access networks with residual connections
+        self.query_net = nn.Sequential(
+            BitNetLinear(episode_dim, episode_dim),
+            nn.LayerNorm(episode_dim),
+            nn.GELU(),
+            BitNetLinear(episode_dim, episode_dim)
+        )
+        self.key_net = nn.Sequential(
+            BitNetLinear(episode_dim, episode_dim),
+            nn.LayerNorm(episode_dim),
+            nn.GELU(),
+            BitNetLinear(episode_dim, episode_dim)
+        )
+        self.value_net = nn.Sequential(
+            BitNetLinear(episode_dim, episode_dim),
+            nn.LayerNorm(episode_dim),
+            nn.GELU(),
+            BitNetLinear(episode_dim, episode_dim)
+        )
+
+        # Add temperature parameter for attention sharpening
+        self.register_parameter('attention_temperature', nn.Parameter(torch.tensor(1.0)))
+
+        # Memory consolidation network for better episode encoding
+        self.consolidation_net = nn.Sequential(
+            BitNetLinear(episode_dim, episode_dim * 2),
+            nn.LayerNorm(episode_dim * 2),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            BitNetLinear(episode_dim * 2, episode_dim),
+            nn.LayerNorm(episode_dim)
+        )
+
+    def _update_memory_statistics(self, episodes: torch.Tensor):
+        """Update running statistics for memory normalization"""
+        with torch.no_grad():
+            batch_mean = episodes.mean(dim=0)
+            batch_var = episodes.var(dim=0, unbiased=False)
+
+            # Exponential moving average
+            momentum = 0.1
+            self.memory_mean = (1 - momentum) * self.memory_mean + momentum * batch_mean
+            self.memory_std = torch.sqrt((1 - momentum) * self.memory_std**2 + momentum * batch_var)
+            self.update_count += 1
+
+    def _normalize_episodes(self, episodes: torch.Tensor) -> torch.Tensor:
+        """Normalize episodes using running statistics"""
+        if self.update_count > 10:  # Only normalize after some updates
+            return (episodes - self.memory_mean) / (self.memory_std + 1e-8)
+        return episodes
+
+    def _compute_episode_quality(self, episode: torch.Tensor, retrieved: torch.Tensor) -> torch.Tensor:
+        """Compute quality score for memory episodes"""
+        # Quality based on diversity and relevance
+        similarity_to_memory = torch.cosine_similarity(
+            episode.unsqueeze(1), self.memory.unsqueeze(0), dim=-1
+        ).max(dim=1)[0]
+
+        # Encourage diversity - lower similarity = higher quality
+        diversity_score = 1.0 - similarity_to_memory
+
+        # Relevance score based on retrieval quality
+        retrieval_quality = torch.cosine_similarity(episode, retrieved, dim=-1)
+
+        # Combined quality score
+        return 0.7 * diversity_score + 0.3 * retrieval_quality
 
     def write_memory(self, episode: torch.Tensor) -> torch.Tensor:
-        """Write episode to memory"""
+        """Optimized memory writing with intelligent slot selection"""
         batch_size = episode.size(0)
 
-        if self.direct_writing:
-            # Direct writing: find least recently used slots
-            # Ensure we don't request more indices than available memory slots
-            k = min(batch_size, self.memory_size)
-            _, lru_indices = self.memory_age.topk(k, largest=False)
+        # Apply consolidation to improve episode representation
+        consolidated_episode = self.consolidation_net(episode) + episode  # Residual connection
 
-            # If batch_size > memory_size, we need to handle multiple batches
-            if batch_size > self.memory_size:
-                # Process in chunks of memory_size
+        # Update statistics
+        self._update_memory_statistics(consolidated_episode)
+
+        # Normalize episodes
+        normalized_episode = self._normalize_episodes(consolidated_episode)
+
+        if self.direct_writing:
+            # Enhanced slot selection combining age, usage, and quality
+            if batch_size <= self.memory_size:
+                # Compute composite scores for slot selection
+                age_scores = -self.memory_age  # Prefer older slots
+                usage_scores = -self.memory_usage  # Prefer less used slots
+                quality_scores = -self.memory_quality  # Prefer lower quality slots
+                importance_scores = -self.memory_importance  # Prefer less important slots
+
+                # Weighted combination
+                composite_scores = (
+                    0.4 * age_scores +
+                    0.3 * usage_scores +
+                    0.2 * quality_scores +
+                    0.1 * importance_scores
+                )
+
+                _, best_indices = composite_scores.topk(batch_size, largest=True)
+
+                # Update memory slots with momentum-based updates
+                momentum = self.alpha
+                self.memory[best_indices] = (
+                    (1 - momentum) * self.memory[best_indices] +
+                    momentum * normalized_episode.detach()
+                )
+
+                # Update metadata
+                self.memory_age[best_indices] = self.memory_age.max() + 1
+                self.memory_usage[best_indices] += 1
+
+                # Update quality scores (will be computed during read)
+                with torch.no_grad():
+                    # Temporary quality estimation based on internal consistency
+                    temp_quality = torch.norm(normalized_episode, dim=-1)
+                    self.memory_quality[best_indices] = temp_quality.detach()
+
+            else:
+                # Handle large batches efficiently
                 for i in range(0, batch_size, self.memory_size):
                     end_idx = min(i + self.memory_size, batch_size)
                     chunk_size = end_idx - i
 
-                    # Get LRU indices for this chunk
-                    _, chunk_lru_indices = self.memory_age.topk(chunk_size, largest=False)
+                    # Apply same logic for chunks
+                    age_scores = -self.memory_age
+                    usage_scores = -self.memory_usage
+                    quality_scores = -self.memory_quality
+                    importance_scores = -self.memory_importance
 
-                    # Update memory slots
-                    self.memory[chunk_lru_indices] = episode[i:end_idx].detach()
-                    self.memory_age[chunk_lru_indices] = self.memory_age.max() + 1 + i
-                    self.memory_usage[chunk_lru_indices] += 1
-            else:
-                # Normal case: batch_size <= memory_size
-                # Update memory slots
-                self.memory[lru_indices] = episode[:k].detach()
-                self.memory_age[lru_indices] = self.memory_age.max() + 1
-                self.memory_usage[lru_indices] += 1
+                    composite_scores = (
+                        0.4 * age_scores +
+                        0.3 * usage_scores +
+                        0.2 * quality_scores +
+                        0.1 * importance_scores
+                    )
 
-        return episode
+                    _, chunk_indices = composite_scores.topk(chunk_size, largest=True)
+
+                    momentum = self.alpha
+                    self.memory[chunk_indices] = (
+                        (1 - momentum) * self.memory[chunk_indices] +
+                        momentum * normalized_episode[i:end_idx].detach()
+                    )
+
+                    self.memory_age[chunk_indices] = self.memory_age.max() + 1 + i
+                    self.memory_usage[chunk_indices] += 1
+
+                    temp_quality = torch.norm(normalized_episode[i:end_idx], dim=-1)
+                    self.memory_quality[chunk_indices] = temp_quality.detach()
+
+        return consolidated_episode
 
     def read_memory(self, query: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Read from memory using attention mechanism"""
+        """Optimized memory reading with enhanced attention"""
         batch_size = query.size(0)
 
         # Validate query dimensions
         if query.size(-1) != self.episode_dim:
             raise ValueError(f"Query dimension {query.size(-1)} doesn't match memory episode_dim {self.episode_dim}")
 
-        # Compute attention weights
-        q = self.query_net(query)  # [batch_size, episode_dim]
-        k = self.key_net(self.memory)  # [memory_size, episode_dim]
-        v = self.value_net(self.memory)  # [memory_size, episode_dim]
+        # Normalize query
+        normalized_query = self._normalize_episodes(query)
 
-        # Attention scores
-        attention_scores = torch.matmul(
-            q, k.transpose(0, 1)) / math.sqrt(self.episode_dim)
-        # [batch_size, memory_size]
+        # Enhanced query, key, value computation with residual connections
+        q = self.query_net(normalized_query) + normalized_query  # Residual
+        k = self.key_net(self.memory) + self.memory  # Residual
+        v = self.value_net(self.memory) + self.memory  # Residual
+
+        # Scaled dot-product attention with learnable temperature
+        attention_scores = torch.matmul(q, k.transpose(0, 1)) / (
+            math.sqrt(self.episode_dim) * self.attention_temperature.clamp(min=0.1, max=10.0)
+        )
+
+        # Add importance weighting to attention scores
+        importance_weights = self.memory_importance.unsqueeze(0).expand(batch_size, -1)
+        attention_scores = attention_scores + torch.log(importance_weights + 1e-8)
+
+        # Apply attention with improved stability
         attention_weights = F.softmax(attention_scores, dim=-1)
 
+        # Add attention dropout for regularization during training
+        if self.training:
+            attention_weights = F.dropout(attention_weights, p=0.1)
+
         # Weighted memory retrieval
-        # [batch_size, episode_dim]
         retrieved = torch.matmul(attention_weights, v)
 
-        # Update memory access statistics
-        access_counts = attention_weights.sum(0)
-        self.memory_usage += access_counts.detach()
+        # Update memory access statistics and importance
+        with torch.no_grad():
+            access_counts = attention_weights.sum(0)
+            self.memory_usage += access_counts
+
+            # Update importance based on usage frequency
+            self.memory_importance = 0.9 * self.memory_importance + 0.1 * (access_counts + 1e-8)
+
+            # Update quality scores based on retrieval effectiveness
+            if hasattr(self, '_last_query_quality'):
+                quality_update = self._compute_episode_quality(query, retrieved)
+                # Update quality for attended slots
+                attended_indices = attention_weights.max(0)[1]  # Most attended slots
+                self.memory_quality[attended_indices] = (
+                    0.8 * self.memory_quality[attended_indices] +
+                    0.2 * quality_update.mean()
+                )
 
         return retrieved, attention_weights
 
     def forward(self, episode: torch.Tensor, mode: str = "read_write") -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through episodic memory"""
+        """Enhanced forward pass with memory consolidation"""
         if mode == "write":
             return self.write_memory(episode), None
         elif mode == "read":
             return self.read_memory(episode)
         else:  # read_write
-            # Write episode to memory
-            self.write_memory(episode)
-            # Read from memory
-            retrieved, attention_weights = self.read_memory(episode)
-            return retrieved, attention_weights
+            # Write episode to memory with consolidation
+            consolidated_episode = self.write_memory(episode)
+
+            # Read from memory using consolidated episode as query
+            retrieved, attention_weights = self.read_memory(consolidated_episode)
+
+            # Memory-augmented output combining input and retrieved memory
+            output = 0.7 * consolidated_episode + 0.3 * retrieved
+
+            return output, attention_weights
+
+    def get_memory_statistics(self) -> Dict[str, torch.Tensor]:
+        """Get comprehensive memory statistics for monitoring"""
+        return {
+            'memory_usage_distribution': self.memory_usage,
+            'memory_age_distribution': self.memory_age,
+            'memory_quality_scores': self.memory_quality,
+            'memory_importance': self.memory_importance,
+            'attention_temperature': self.attention_temperature,
+            'memory_utilization': (self.memory_usage > 0).float().mean(),
+            'memory_diversity': torch.std(self.memory, dim=0).mean(),
+            'update_count': self.update_count
+        }
+
+    def consolidate_memory(self):
+        """Explicit memory consolidation for improved organization"""
+        with torch.no_grad():
+            # Sort memory by importance and quality
+            importance_quality_score = 0.6 * self.memory_importance + 0.4 * self.memory_quality
+            sorted_indices = torch.argsort(importance_quality_score, descending=True)
+
+            # Reorganize memory to group similar episodes
+            sorted_memory = self.memory[sorted_indices]
+            self.memory.copy_(sorted_memory)
+
+            # Update corresponding metadata
+            self.memory_age[:] = self.memory_age[sorted_indices]
+            self.memory_usage[:] = self.memory_usage[sorted_indices]
+            self.memory_quality[:] = self.memory_quality[sorted_indices]
+            self.memory_importance[:] = self.memory_importance[sorted_indices]
 
 
 class CrossModalFusion(nn.Module):
