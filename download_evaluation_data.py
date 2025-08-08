@@ -320,25 +320,39 @@ def setup_symlinks():
         logger.error("❌ Evaluation data directory not found")
         return False
 
-    # Symlinks for both pipelines
+    # Correct symlinks for both pipelines (they're at the same level as BitMar)
     pipeline_dirs = [
-        Path("../evaluation-pipeline-2024"),
-        Path("../evaluation-pipeline-2025")
+        Path("../evaluation-pipeline-2024"),  # D:\BabyLM\evaluation-pipeline-2024
+        Path("../evaluation-pipeline-2025")   # D:\BabyLM\evaluation-pipeline-2025
     ]
 
     success_count = 0
 
     for pipeline_dir in pipeline_dirs:
+        pipeline_name = pipeline_dir.name
+        logger.info(f"🔍 Checking pipeline: {pipeline_dir.absolute()}")
+
         if pipeline_dir.exists():
+            logger.info(f"✅ Found {pipeline_name} at: {pipeline_dir.absolute()}")
             symlink_path = pipeline_dir / "evaluation_data"
 
             # Remove existing symlink/directory if it exists
             if symlink_path.exists() or symlink_path.is_symlink():
                 if symlink_path.is_symlink():
                     symlink_path.unlink()
+                    logger.info(f"🗑️ Removed existing symlink: {symlink_path}")
                 else:
                     logger.warning(f"⚠️ Directory exists at {symlink_path}, skipping symlink creation")
-                    continue
+                    # Copy instead of symlink if directory exists
+                    logger.info(f"📁 Copying evaluation_data to {pipeline_name} instead...")
+                    try:
+                        shutil.copytree(eval_data_dir, symlink_path, dirs_exist_ok=True)
+                        logger.info(f"✅ Copied evaluation_data to {pipeline_name}")
+                        success_count += 1
+                        continue
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to copy to {pipeline_name}: {e}")
+                        continue
 
             try:
                 # Create symlink (Windows requires admin rights for directory symlinks)
@@ -351,29 +365,46 @@ def setup_symlinks():
                     ], shell=True, capture_output=True, text=True)
 
                     if result.returncode == 0:
-                        logger.info(f"✅ Created symlink: {pipeline_dir.name}/evaluation_data")
+                        logger.info(f"✅ Created symlink: {pipeline_name}/evaluation_data")
                         success_count += 1
                     else:
-                        logger.warning(f"⚠️ Failed to create symlink for {pipeline_dir.name}: {result.stderr}")
+                        logger.warning(f"⚠️ Failed to create symlink for {pipeline_name}: {result.stderr}")
                         # Copy instead of symlink on Windows if no admin rights
-                        logger.info(f"📁 Copying evaluation_data to {pipeline_dir.name} instead...")
-                        shutil.copytree(eval_data_dir, symlink_path, dirs_exist_ok=True)
-                        success_count += 1
+                        logger.info(f"📁 Copying evaluation_data to {pipeline_name} instead...")
+                        try:
+                            shutil.copytree(eval_data_dir, symlink_path, dirs_exist_ok=True)
+                            logger.info(f"✅ Copied evaluation_data to {pipeline_name}")
+                            success_count += 1
+                        except Exception as e:
+                            logger.warning(f"⚠️ Failed to copy to {pipeline_name}: {e}")
                 else:  # Unix-like
                     symlink_path.symlink_to(eval_data_dir.absolute())
-                    logger.info(f"✅ Created symlink: {pipeline_dir.name}/evaluation_data")
+                    logger.info(f"✅ Created symlink: {pipeline_name}/evaluation_data")
                     success_count += 1
 
             except Exception as e:
-                logger.warning(f"⚠️ Failed to create symlink for {pipeline_dir.name}: {e}")
+                logger.warning(f"⚠️ Failed to create symlink for {pipeline_name}: {e}")
+                # Try copying as fallback
+                try:
+                    logger.info(f"📁 Trying to copy evaluation_data to {pipeline_name}...")
+                    shutil.copytree(eval_data_dir, symlink_path, dirs_exist_ok=True)
+                    logger.info(f"✅ Copied evaluation_data to {pipeline_name}")
+                    success_count += 1
+                except Exception as copy_error:
+                    logger.warning(f"⚠️ Failed to copy to {pipeline_name}: {copy_error}")
         else:
-            logger.warning(f"⚠️ Pipeline directory not found: {pipeline_dir}")
+            logger.warning(f"⚠️ Pipeline directory not found: {pipeline_dir.absolute()}")
+            logger.info(f"💡 Expected location: {pipeline_dir.absolute()}")
 
     if success_count > 0:
         logger.info(f"✅ Successfully set up evaluation data for {success_count} pipeline(s)")
         return True
     else:
         logger.error("❌ Failed to set up evaluation data for any pipeline")
+        logger.info("💡 Manual setup instructions:")
+        logger.info(f"1. Copy {eval_data_dir.absolute()} to:")
+        logger.info("   • D:\\BabyLM\\evaluation-pipeline-2024\\evaluation_data")
+        logger.info("   • D:\\BabyLM\\evaluation-pipeline-2025\\evaluation_data")
         return False
 
 
