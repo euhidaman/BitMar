@@ -129,19 +129,22 @@ class BabyLMEvaluationPipeline:
                 # Run zero-shot evaluations with correct data path
                 eval_data_path = f"evaluation_data/{eval_data_suffix}"
                 
+                # Construct command with correct argument order
+                # Script expects: MODEL_PATH REVISION_NAME BACKEND [EVAL_DIR]
+                revision_name = f"epoch_{epoch}" if fast else f"epoch_{epoch}_full"
+                
                 cmd = [
                     "bash", 
                     str(script_path),
                     model_path,
-                    "causal",  # Assume causal backend for BitMar
-                    eval_data_path  # Pass the evaluation data path
+                    revision_name,  # revision name
+                    "causal",  # backend for BitMar
+                    eval_data_path  # evaluation data path
                 ]
-                
-                if fast:
-                    cmd.append(f"epoch_{epoch}")  # revision name for fast eval
                 
                 logger.info(f"Running text evaluations 2025 (fast={fast}): {' '.join(cmd)}")
                 logger.info(f"Using evaluation data from: {eval_data_path}")
+                logger.info(f"Using revision name: {revision_name}")
                 
                 result = subprocess.run(
                     cmd,

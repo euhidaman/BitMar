@@ -1336,8 +1336,8 @@ class TokenAwareTrainer:
                 if len(self.loss_history) > 1000:  # Keep last 1000 losses
                     self.loss_history.pop(0)
 
-                # Log memory visualization if available
-                if self.memory_viz is not None:
+                # Log memory visualization if available (reduce frequency for clarity)
+                if self.memory_viz is not None and self.global_step % 50 == 0:  # Log every 50 steps
                     try:
                         self.memory_viz.log_training_step(
                             batch=batch,
@@ -2061,16 +2061,30 @@ class TokenAwareTrainer:
                         for rec in interpretation["recommendations"]:
                             logger.info(f"    • {rec}")
                     
-                    # Log to WandB final summary
+                    # Log to WandB final summary (flatten complex structures)
                     if self.use_wandb:
                         try:
-                            wandb.log({
-                                "final_summary/cross_modal_summary": cross_modal_summary,
+                            wandb_summary = {
                                 "final_summary/text_trajectory_improvement": text_learning['improvement'],
                                 "final_summary/vision_trajectory_improvement": vision_learning['improvement'],
                                 "final_summary/trajectory_convergence_score": interpretation['trajectory_convergence_score'],
                                 "final_summary/final_cross_modal_similarity": similarity['final']
-                            })
+                            }
+                            
+                            # Add flattened cross-modal summary
+                            if cross_modal_summary.get('status') == 'success':
+                                wandb_summary["final_summary/cross_modal_status"] = "success"
+                                if 'interpretation' in cross_modal_summary:
+                                    interp = cross_modal_summary['interpretation']
+                                    wandb_summary["final_summary/cross_modal_assessment"] = interp.get('assessment', 'N/A')
+                                    # Convert recommendations list to a single string
+                                    if 'recommendations' in interp and isinstance(interp['recommendations'], list):
+                                        wandb_summary["final_summary/cross_modal_recommendations"] = "; ".join(interp['recommendations'])
+                            else:
+                                wandb_summary["final_summary/cross_modal_status"] = "failed"
+                                wandb_summary["final_summary/cross_modal_message"] = cross_modal_summary.get('message', 'Unknown issue')
+                            
+                            wandb.log(wandb_summary)
                         except Exception as e:
                             logger.warning(f"Failed to log final cross-modal summary to wandb: {e}")
                 else:
