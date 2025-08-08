@@ -660,6 +660,26 @@ class TokenAwareTrainer:
         
         logger.info(f"💾 Checkpoint saved: {checkpoint_path}")
 
+    def save_step_checkpoint(self):
+        """Save checkpoint based on current step"""
+        checkpoint = {
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
+            'epoch': self.current_epoch,
+            'global_step': self.global_step,
+            'tokens_processed': self.tokens_processed,
+            'target_tokens': self.target_tokens,
+            'best_similarity': self.best_similarity,
+            'config': self.config
+        }
+
+        # Save checkpoint with step information
+        step_checkpoint_path = self.checkpoint_dir / f'checkpoint_step_{self.global_step}_tokens_{self.tokens_processed}.pt'
+        torch.save(checkpoint, step_checkpoint_path)
+
+        logger.info(f"💾 Step-based checkpoint saved: {step_checkpoint_path}")
+
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """Train one epoch with token awareness"""
         self.model.train()
@@ -897,7 +917,13 @@ class TokenAwareTrainer:
 
                 self.global_step += 1
 
-                # Save checkpoint periodically
+                # Save checkpoint based on step frequency if specified
+                if hasattr(self, 'save_every_n_steps') and self.save_every_n_steps is not None:
+                    if self.global_step % self.save_every_n_steps == 0:
+                        logger.info(f"💾 Saving step-based checkpoint at step {self.global_step}")
+                        self.save_step_checkpoint()
+
+                # Save checkpoint periodically (default behavior)
                 if self.global_step % 5000 == 0:
                     self.save_token_checkpoint()
 
@@ -982,6 +1008,10 @@ class TokenAwareTrainer:
                 # Save checkpoint after each epoch
                 self.save_token_checkpoint()
 
+                # Run fast evaluation after each epoch if enabled
+                if hasattr(self, 'enable_fast_eval') and self.enable_fast_eval:
+                    self.run_fast_evaluation_after_epoch(epoch)
+
                 # Log epoch summary to wandb with error handling
                 if self.use_wandb:
                     try:
@@ -1011,6 +1041,10 @@ class TokenAwareTrainer:
 
             # Final checkpoint
             self.save_token_checkpoint()
+
+            # Run full evaluation at the end if enabled
+            if hasattr(self, 'enable_full_eval') and self.enable_full_eval:
+                self.run_full_evaluation_final()
 
             # Final FLOPS summary and cleanup
             if self.flops_tracker:
@@ -1067,6 +1101,177 @@ class TokenAwareTrainer:
                 except Exception as e:
                     logger.warning(f"Failed to finish wandb run: {e}")
 
+    def run_fast_evaluation_after_epoch(self, epoch: int):
+        """Run fast evaluation after completing an epoch"""
+        try:
+            logger.info(f"🧪 Running fast evaluation after epoch {epoch}")
+
+            # Get the checkpoint path for this epoch
+            checkpoint_path = self.checkpoint_dir / f'checkpoint_epoch_{epoch}_tokens_{self.tokens_processed}.pt'
+
+            # Import and run evaluation scripts
+            import subprocess
+            import sys
+
+            eval_results_dir = Path("evaluation_results") / f"epoch_{epoch}"
+            eval_results_dir.mkdir(parents=True, exist_ok=True)
+
+            eval_success = {'2025': False, '2024': False}
+
+            # Run 2025 pipeline (text + multimodal fast evaluation)
+            eval_2025_path = Path("../evaluation-pipeline-2025")
+            if eval_2025_path.exists():
+                try:
+                    cmd = [
+                        sys.executable, "evaluate_bitmar_2025.py",
+                        "--model_path", str(checkpoint_path),
+                        "--eval_type", "fast",
+                        "--evaluation_pipeline_path", str(eval_2025_path),
+                        "--output_dir", str(eval_results_dir / "2025_results")
+                    ]
+
+                    logger.info("Running 2025 pipeline fast evaluation...")
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+
+                    if result.returncode == 0:
+                        logger.info("✅ 2025 pipeline evaluation completed successfully")
+                        eval_success['2025'] = True
+                    else:
+                        logger.warning(f"⚠️ 2025 pipeline evaluation failed: {result.stderr}")
+
+                except Exception as e:
+                    logger.warning(f"⚠️ 2025 pipeline evaluation error: {e}")
+            else:
+                logger.info("⚠️ 2025 evaluation pipeline not found, skipping")
+
+            # Run 2024 pipeline (multimodal only fast evaluation)
+            eval_2024_path = Path("../evaluation-pipeline-2024")
+            if eval_2024_path.exists():
+                try:
+                    cmd = [
+                        sys.executable, "evaluate_bitmar_2024.py",
+                        "--model_path", str(checkpoint_path),
+                        "--eval_type", "fast",
+                        "--evaluation_pipeline_path", str(eval_2024_path),
+                        "--output_dir", str(eval_results_dir / "2024_results")
+                    ]
+
+                    logger.info("Running 2024 pipeline fast evaluation...")
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+
+                    if result.returncode == 0:
+                        logger.info("✅ 2024 pipeline evaluation completed successfully")
+                        eval_success['2024'] = True
+                    else:
+                        logger.warning(f"⚠️ 2024 pipeline evaluation failed: {result.stderr}")
+
+                except Exception as e:
+                    logger.warning(f"⚠️ 2024 pipeline evaluation error: {e}")
+            else:
+                logger.info("⚠️ 2024 evaluation pipeline not found, skipping")
+
+            # Log evaluation success to wandb
+            if self.use_wandb:
+                try:
+                    wandb.log({
+                        f'epoch_{epoch}/eval_2025_success': eval_success['2025'],
+                        f'epoch_{epoch}/eval_2024_success': eval_success['2024'],
+                    }, step=self.global_step)
+                except Exception as e:
+                    logger.warning(f"Failed to log evaluation results to wandb: {e}")
+
+            logger.info(f"📊 Fast evaluation completed for epoch {epoch}")
+            logger.info(f"  • 2025 pipeline: {'✅' if eval_success['2025'] else '❌'}")
+            logger.info(f"  • 2024 pipeline: {'✅' if eval_success['2024'] else '❌'}")
+
+        except Exception as e:
+            logger.error(f"❌ Fast evaluation failed for epoch {epoch}: {e}")
+
+    def run_full_evaluation_final(self):
+        """Run full evaluation on the final model"""
+        try:
+            logger.info("🧪 Running full evaluation on final model")
+
+            # Get the final checkpoint path
+            final_checkpoint = self.checkpoint_dir / 'latest_checkpoint.pt'
+
+            import subprocess
+            import sys
+
+            eval_results_dir = Path("evaluation_results") / "final"
+            eval_results_dir.mkdir(parents=True, exist_ok=True)
+
+            eval_success = {'2025': False, '2024': False}
+
+            # Run 2025 pipeline (text + multimodal full evaluation)
+            eval_2025_path = Path("../evaluation-pipeline-2025")
+            if eval_2025_path.exists():
+                try:
+                    cmd = [
+                        sys.executable, "evaluate_bitmar_2025.py",
+                        "--model_path", str(final_checkpoint),
+                        "--eval_type", "full",
+                        "--evaluation_pipeline_path", str(eval_2025_path),
+                        "--output_dir", str(eval_results_dir / "2025_results")
+                    ]
+
+                    logger.info("Running 2025 pipeline full evaluation...")
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)  # 2 hours
+
+                    if result.returncode == 0:
+                        logger.info("✅ 2025 pipeline full evaluation completed successfully")
+                        eval_success['2025'] = True
+                    else:
+                        logger.warning(f"⚠️ 2025 pipeline full evaluation failed: {result.stderr}")
+
+                except Exception as e:
+                    logger.warning(f"⚠️ 2025 pipeline full evaluation error: {e}")
+            else:
+                logger.info("⚠️ 2025 evaluation pipeline not found, skipping")
+
+            # Run 2024 pipeline (multimodal only full evaluation)
+            eval_2024_path = Path("../evaluation-pipeline-2024")
+            if eval_2024_path.exists():
+                try:
+                    cmd = [
+                        sys.executable, "evaluate_bitmar_2024.py",
+                        "--model_path", str(final_checkpoint),
+                        "--eval_type", "full",
+                        "--evaluation_pipeline_path", str(eval_2024_path),
+                        "--output_dir", str(eval_results_dir / "2024_results")
+                    ]
+
+                    logger.info("Running 2024 pipeline full evaluation...")
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)  # 2 hours
+
+                    if result.returncode == 0:
+                        logger.info("✅ 2024 pipeline full evaluation completed successfully")
+                        eval_success['2024'] = True
+                    else:
+                        logger.warning(f"⚠️ 2024 pipeline full evaluation failed: {result.stderr}")
+
+                except Exception as e:
+                    logger.warning(f"⚠️ 2024 pipeline full evaluation error: {e}")
+            else:
+                logger.info("⚠️ 2024 evaluation pipeline not found, skipping")
+
+            # Log final evaluation success to wandb
+            if self.use_wandb:
+                try:
+                    wandb.log({
+                        'final/eval_2025_success': eval_success['2025'],
+                        'final/eval_2024_success': eval_success['2024'],
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to log final evaluation results to wandb: {e}")
+
+            logger.info("📊 Full evaluation completed on final model")
+            logger.info(f"  • 2025 pipeline: {'✅' if eval_success['2025'] else '❌'}")
+            logger.info(f"  • 2024 pipeline: {'✅' if eval_success['2024'] else '❌'}")
+
+        except Exception as e:
+            logger.error(f"❌ Full evaluation failed: {e}")
+
 
 def main():
     """Main function"""
@@ -1077,14 +1282,49 @@ def main():
     parser.add_argument("--device", type=str, help="Device to use (cuda:0, cpu)")
     parser.add_argument("--rebuild_cache", action="store_true",
                        help="Rebuild token-constrained dataset cache")
-    
+    parser.add_argument("--save_every_n_steps", type=int, default=None,
+                       help="Save checkpoint every N training steps (optional)")
+    parser.add_argument("--enable_fast_eval", action="store_true",
+                       help="Enable fast evaluation after each epoch")
+    parser.add_argument("--enable_full_eval", action="store_true",
+                       help="Enable full evaluation at the end")
+    parser.add_argument("--disable_fast_eval", action="store_true",
+                       help="Disable fast evaluation after each epoch")
+    parser.add_argument("--disable_full_eval", action="store_true",
+                       help="Disable full evaluation at the end")
+
     args = parser.parse_args()
     
     try:
         # Initialize trainer
         trainer = TokenAwareTrainer(args.config, device=args.device)
         trainer.rebuild_cache = args.rebuild_cache  # Pass rebuild_cache to trainer
-        
+        trainer.save_every_n_steps = args.save_every_n_steps  # Pass step-based saving option
+
+        # Set evaluation flags (default to True unless explicitly disabled)
+        # Check environment variables first (for bash script compatibility)
+        env_fast_eval = os.getenv('BITMAR_ENABLE_FAST_EVAL', 'true').lower() == 'true'
+        env_full_eval = os.getenv('BITMAR_ENABLE_FULL_EVAL', 'true').lower() == 'true'
+
+        # Command line arguments override environment variables
+        if args.disable_fast_eval:
+            trainer.enable_fast_eval = False
+        elif args.enable_fast_eval:
+            trainer.enable_fast_eval = True
+        else:
+            trainer.enable_fast_eval = env_fast_eval
+
+        if args.disable_full_eval:
+            trainer.enable_full_eval = False
+        elif args.enable_full_eval:
+            trainer.enable_full_eval = True
+        else:
+            trainer.enable_full_eval = env_full_eval
+
+        logger.info(f"🧪 Evaluation settings:")
+        logger.info(f"  • Fast evaluation (after epochs): {trainer.enable_fast_eval}")
+        logger.info(f"  • Full evaluation (at end): {trainer.enable_full_eval}")
+
         # Start training
         trainer.train()
         
