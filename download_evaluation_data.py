@@ -99,6 +99,86 @@ def extract_zip(zip_path: str, extract_to: str) -> bool:
         return False
 
 
+def extract_all_nested_zips(directory: Path, max_iterations: int = 5) -> int:
+    """Extract all ZIP files in a directory recursively with multiple iterations"""
+    total_extracted = 0
+
+    for iteration in range(max_iterations):
+        logger.info(f"🔄 ZIP Extraction Iteration {iteration + 1}/{max_iterations}: Scanning {directory}")
+
+        # Find all ZIP files in current iteration
+        zip_files = list(directory.rglob("*.zip"))
+
+        if not zip_files:
+            logger.info(f"  📂 No ZIP files found in iteration {iteration + 1}")
+            break
+
+        logger.info(f"  📦 Found {len(zip_files)} ZIP files to extract")
+        iteration_extracted = 0
+
+        for zip_file in zip_files:
+            logger.info(f"    📦 Processing: {zip_file.relative_to(directory)}")
+
+            # Determine extraction directory (same directory as ZIP file)
+            extract_dir = zip_file.parent / zip_file.stem
+
+            try:
+                # Create extraction directory
+                extract_dir.mkdir(exist_ok=True)
+
+                # Extract ZIP file
+                with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
+
+                logger.info(f"      ✅ Extracted {zip_file.name} to {extract_dir.name}/")
+                iteration_extracted += 1
+                total_extracted += 1
+
+                # List extracted contents
+                extracted_items = list(extract_dir.iterdir())
+                logger.info(f"      📁 Extracted {len(extracted_items)} items:")
+
+                # Show first 3 items and count ZIP files
+                zip_count = 0
+                for i, item in enumerate(extracted_items[:3]):
+                    if item.is_file():
+                        size_kb = item.stat().st_size / 1024
+                        if item.suffix.lower() == '.zip':
+                            logger.info(f"        📦 {item.name} ({size_kb:.1f} KB) - ZIP file detected!")
+                            zip_count += 1
+                        else:
+                            logger.info(f"        📄 {item.name} ({size_kb:.1f} KB)")
+                    else:
+                        logger.info(f"        📁 {item.name}/")
+
+                # Count remaining ZIP files
+                for item in extracted_items[3:]:
+                    if item.suffix.lower() == '.zip':
+                        zip_count += 1
+
+                if len(extracted_items) > 3:
+                    logger.info(f"        ... and {len(extracted_items) - 3} more items")
+
+                if zip_count > 0:
+                    logger.info(f"      🔍 Found {zip_count} additional ZIP files to extract in next iteration")
+
+                # Clean up ZIP file
+                zip_file.unlink()
+                logger.info(f"      🗑️ Removed {zip_file.name}")
+
+            except Exception as e:
+                logger.error(f"      ❌ Failed to extract {zip_file.name}: {e}")
+
+        logger.info(f"  ✅ Iteration {iteration + 1} completed: {iteration_extracted} files extracted")
+
+        # If no files were extracted in this iteration, we're done
+        if iteration_extracted == 0:
+            break
+
+    logger.info(f"🎉 Total ZIP extraction completed: {total_extracted} ZIP files extracted across {iteration + 1} iterations")
+    return total_extracted
+
+
 def check_evaluation_data_exists():
     """Check if evaluation data already exists"""
     logger.info("🔍 Checking for existing evaluation data...")
@@ -429,6 +509,16 @@ def main():
         success = download_evaluation_data()
         if success:
             logger.info("✅ Download and extraction completed successfully!")
+
+            # Extract all nested ZIP files (like ewok_fast.zip)
+            logger.info("📦 Extracting all nested ZIP files...")
+            eval_data_dir = Path("../evaluation_data")
+            total_zips_extracted = extract_all_nested_zips(eval_data_dir)
+
+            if total_zips_extracted > 0:
+                logger.info(f"✅ Extracted {total_zips_extracted} additional ZIP files!")
+            else:
+                logger.info("📁 No additional ZIP files found to extract")
 
             # Set up symlinks to both evaluation pipelines
             setup_success = setup_symlinks()
