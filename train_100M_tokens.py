@@ -22,20 +22,6 @@ import traceback
 import time
 from collections import defaultdict
 
-# FLOPS computation utilities
-try:
-    from fvcore.nn import FlopCountMode, flop_count
-    FLOPS_AVAILABLE = True
-    logger.info("✅ FLOPS computation available via fvcore")
-except ImportError:
-    try:
-        from ptflops import get_model_complexity_info
-        FLOPS_AVAILABLE = True
-        logger.info("✅ FLOPS computation available via ptflops")
-    except ImportError:
-        FLOPS_AVAILABLE = False
-        logger.warning("⚠️  No FLOPS computation library available. Install fvcore or ptflops for FLOPS tracking")
-
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
@@ -49,6 +35,20 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# FLOPS computation utilities (after logger is defined)
+try:
+    from fvcore.nn import flop_count
+    FLOPS_AVAILABLE = True
+    logger.info("✅ FLOPS computation available via fvcore")
+except ImportError:
+    try:
+        from ptflops import get_model_complexity_info
+        FLOPS_AVAILABLE = True
+        logger.info("✅ FLOPS computation available via ptflops")
+    except ImportError:
+        FLOPS_AVAILABLE = False
+        logger.warning("⚠️  No FLOPS computation library available. Install fvcore or ptflops for FLOPS tracking")
 
 # Import components
 from src.dataset import create_data_module
