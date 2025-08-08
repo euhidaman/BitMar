@@ -15,53 +15,130 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def extract_zip_files_in_directory(directory: Path, cleanup: bool = True):
-    """Extract all ZIP files in a directory"""
-    extracted_count = 0
+def extract_zip_files_in_directory(directory: Path, cleanup: bool = True, max_iterations: int = 3):
+    """Extract all ZIP files in a directory recursively with multiple iterations"""
+    total_extracted = 0
 
-    for zip_file in directory.rglob("*.zip"):
-        logger.info(f"📦 Found ZIP file: {zip_file}")
+    for iteration in range(max_iterations):
+        logger.info(f"🔄 Iteration {iteration + 1}/{max_iterations}: Scanning {directory}")
 
-        # Determine extraction directory (same directory as ZIP file)
-        extract_dir = zip_file.parent / zip_file.stem
+        # Find all ZIP files in current iteration
+        zip_files = list(directory.rglob("*.zip"))
+
+        if not zip_files:
+            logger.info(f"  📂 No ZIP files found in iteration {iteration + 1}")
+            break
+
+        logger.info(f"  📦 Found {len(zip_files)} ZIP files to extract")
+        iteration_extracted = 0
+
+        for zip_file in zip_files:
+            logger.info(f"    📦 Processing: {zip_file.relative_to(directory)}")
+
+            # Determine extraction directory (same directory as ZIP file)
+            extract_dir = zip_file.parent / zip_file.stem
+
+            try:
+                # Create extraction directory
+                extract_dir.mkdir(exist_ok=True)
+
+                # Extract ZIP file
+                with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
+
+                logger.info(f"      ✅ Extracted {zip_file.name} to {extract_dir.name}/")
+                iteration_extracted += 1
+                total_extracted += 1
+
+                # List extracted contents
+                extracted_items = list(extract_dir.iterdir())
+                logger.info(f"      📁 Extracted {len(extracted_items)} items:")
+
+                # Show first 3 items and count ZIP files
+                zip_count = 0
+                for i, item in enumerate(extracted_items[:3]):
+                    if item.is_file():
+                        size_kb = item.stat().st_size / 1024
+                        if item.suffix.lower() == '.zip':
+                            logger.info(f"        📦 {item.name} ({size_kb:.1f} KB) - ZIP file detected!")
+                            zip_count += 1
+                        else:
+                            logger.info(f"        📄 {item.name} ({size_kb:.1f} KB)")
+                    else:
+                        logger.info(f"        📁 {item.name}/")
+
+                # Count remaining ZIP files
+                for item in extracted_items[3:]:
+                    if item.suffix.lower() == '.zip':
+                        zip_count += 1
+
+                if len(extracted_items) > 3:
+                    logger.info(f"        ... and {len(extracted_items) - 3} more items")
+
+                if zip_count > 0:
+                    logger.info(f"      🔍 Found {zip_count} additional ZIP files to extract in next iteration")
+
+                # Clean up ZIP file if requested
+                if cleanup:
+                    zip_file.unlink()
+                    logger.info(f"      🗑️ Removed {zip_file.name}")
+
+            except Exception as e:
+                logger.error(f"      ❌ Failed to extract {zip_file.name}: {e}")
+
+        logger.info(f"  ✅ Iteration {iteration + 1} completed: {iteration_extracted} files extracted")
+
+        # If no files were extracted in this iteration, we're done
+        if iteration_extracted == 0:
+            break
+
+    logger.info(f"🎉 Total extraction completed: {total_extracted} ZIP files extracted across {iteration + 1} iterations")
+    return total_extracted
+
+
+def scan_and_report_directory_structure(directory: Path, max_depth: int = 3):
+    """Scan and report the directory structure to identify all ZIP files"""
+    logger.info(f"🔍 Scanning directory structure: {directory}")
+
+    zip_files = []
+    total_files = 0
+
+    def scan_recursive(path: Path, current_depth: int = 0):
+        nonlocal total_files
+
+        if current_depth > max_depth:
+            return
 
         try:
-            # Create extraction directory
-            extract_dir.mkdir(exist_ok=True)
+            for item in path.iterdir():
+                total_files += 1
 
-            # Extract ZIP file
-            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-                zip_ref.extractall(extract_dir)
-
-            logger.info(f"✅ Extracted {zip_file.name} to {extract_dir.name}")
-            extracted_count += 1
-
-            # List extracted contents
-            extracted_files = list(extract_dir.iterdir())
-            logger.info(f"   📁 Extracted {len(extracted_files)} items:")
-            for item in extracted_files[:5]:  # Show first 5 items
                 if item.is_file():
-                    size_kb = item.stat().st_size / 1024
-                    logger.info(f"     📄 {item.name} ({size_kb:.1f} KB)")
-                else:
-                    logger.info(f"     📁 {item.name}/")
+                    if item.suffix.lower() == '.zip':
+                        zip_files.append(item)
+                        size_mb = item.stat().st_size / (1024 * 1024)
+                        indent = "  " * current_depth
+                        logger.info(f"{indent}📦 {item.relative_to(directory)} ({size_mb:.1f} MB)")
+                elif item.is_dir() and current_depth < max_depth:
+                    # Recursively scan subdirectories
+                    scan_recursive(item, current_depth + 1)
 
-            if len(extracted_files) > 5:
-                logger.info(f"     ... and {len(extracted_files) - 5} more items")
-
-            # Clean up ZIP file if requested
-            if cleanup:
-                zip_file.unlink()
-                logger.info(f"🗑️ Removed {zip_file.name}")
-
+        except PermissionError:
+            logger.warning(f"⚠️ Permission denied accessing {path}")
         except Exception as e:
-            logger.error(f"❌ Failed to extract {zip_file}: {e}")
+            logger.warning(f"⚠️ Error scanning {path}: {e}")
 
-    return extracted_count
+    scan_recursive(directory)
+
+    logger.info(f"📊 Scan complete:")
+    logger.info(f"  • Total items scanned: {total_files}")
+    logger.info(f"  • ZIP files found: {len(zip_files)}")
+
+    return zip_files
 
 
 def setup_evaluation_data_extraction():
-    """Setup and extract evaluation data files"""
+    """Setup and extract evaluation data files with comprehensive scanning"""
     logger.info("🔧 Setting up evaluation data extraction...")
 
     # Check for evaluation data directory
@@ -73,32 +150,46 @@ def setup_evaluation_data_extraction():
     ]
 
     found_eval_data = False
+    total_extracted = 0
 
     for eval_path in eval_data_paths:
         if eval_path.exists():
             logger.info(f"✅ Found evaluation data at: {eval_path.absolute()}")
             found_eval_data = True
 
-            # Extract ZIP files in fast_eval
-            fast_eval_dir = eval_path / "fast_eval"
-            if fast_eval_dir.exists():
-                logger.info("📦 Extracting ZIP files in fast_eval/...")
-                fast_extracted = extract_zip_files_in_directory(fast_eval_dir)
-                logger.info(f"✅ Extracted {fast_extracted} ZIP files in fast_eval/")
+            # First, scan and report all ZIP files
+            logger.info("🔍 Initial scan for ZIP files...")
+            initial_zip_files = scan_and_report_directory_structure(eval_path)
 
-            # Extract ZIP files in full_eval
-            full_eval_dir = eval_path / "full_eval"
-            if full_eval_dir.exists():
-                logger.info("📦 Extracting ZIP files in full_eval/...")
-                full_extracted = extract_zip_files_in_directory(full_eval_dir)
-                logger.info(f"✅ Extracted {full_extracted} ZIP files in full_eval/")
+            if initial_zip_files:
+                logger.info(f"📦 Found {len(initial_zip_files)} ZIP files to extract")
 
-            # Summary
-            total_extracted = (fast_extracted if 'fast_extracted' in locals() else 0) + \
-                            (full_extracted if 'full_extracted' in locals() else 0)
+                # Extract ZIP files in fast_eval with iterations
+                fast_eval_dir = eval_path / "fast_eval"
+                if fast_eval_dir.exists():
+                    logger.info("📦 Extracting ZIP files in fast_eval/ (with iterations)...")
+                    fast_extracted = extract_zip_files_in_directory(fast_eval_dir, max_iterations=5)
+                    total_extracted += fast_extracted
+                    logger.info(f"✅ Extracted {fast_extracted} ZIP files in fast_eval/")
 
-            if total_extracted > 0:
-                logger.info(f"🎉 Successfully extracted {total_extracted} ZIP files!")
+                # Extract ZIP files in full_eval with iterations
+                full_eval_dir = eval_path / "full_eval"
+                if full_eval_dir.exists():
+                    logger.info("📦 Extracting ZIP files in full_eval/ (with iterations)...")
+                    full_extracted = extract_zip_files_in_directory(full_eval_dir, max_iterations=5)
+                    total_extracted += full_extracted
+                    logger.info(f"✅ Extracted {full_extracted} ZIP files in full_eval/")
+
+                # Final scan to verify all ZIP files are extracted
+                logger.info("🔍 Final scan to verify extraction...")
+                remaining_zip_files = scan_and_report_directory_structure(eval_path)
+
+                if remaining_zip_files:
+                    logger.warning(f"⚠️ {len(remaining_zip_files)} ZIP files still remain:")
+                    for zip_file in remaining_zip_files:
+                        logger.warning(f"  📦 {zip_file.relative_to(eval_path)}")
+                else:
+                    logger.info("✅ All ZIP files successfully extracted!")
             else:
                 logger.info("📁 No ZIP files found to extract")
 
@@ -107,63 +198,60 @@ def setup_evaluation_data_extraction():
         logger.info("💡 Run download_evaluation_data.py first to download the evaluation data")
         return False
 
+    if total_extracted > 0:
+        logger.info(f"🎉 Successfully extracted {total_extracted} ZIP files total!")
+    else:
+        logger.info("📁 No ZIP files found to extract")
+
     return True
 
 
-def verify_ewok_extraction():
-    """Specifically verify EWoK data extraction"""
-    logger.info("🔍 Verifying EWoK data extraction...")
+def verify_specific_extractions():
+    """Specifically verify known extractions like EWoK"""
+    logger.info("🔍 Verifying specific known extractions...")
 
-    # Check for ewok_fast.zip and its extraction
+    # Check for specific known ZIP files and their extractions
+    known_extractions = [
+        {
+            'name': 'EWoK Fast',
+            'zip_pattern': '**/ewok_fast.zip',
+            'expected_dir': 'ewok_fast'
+        },
+        {
+            'name': 'DevBench',
+            'zip_pattern': '**/devbench*.zip',
+            'expected_dir': 'devbench'
+        }
+    ]
+
     eval_data_paths = [
         Path("../evaluation_data"),
         Path("./evaluation_data"),
     ]
 
     for eval_path in eval_data_paths:
-        ewok_zip_path = eval_path / "fast_eval" / "ewok_fast.zip"
-        ewok_dir_path = eval_path / "fast_eval" / "ewok_fast"
+        if eval_path.exists():
+            logger.info(f"🔍 Checking specific extractions in: {eval_path}")
 
-        if ewok_zip_path.exists():
-            logger.info(f"📦 Found ewok_fast.zip at: {ewok_zip_path}")
+            for extraction in known_extractions:
+                # Look for ZIP files matching pattern
+                zip_files = list(eval_path.glob(extraction['zip_pattern']))
 
-            if not ewok_dir_path.exists():
-                logger.info("📦 Extracting ewok_fast.zip...")
-                try:
-                    with zipfile.ZipFile(ewok_zip_path, 'r') as zip_ref:
-                        zip_ref.extractall(ewok_dir_path)
+                if zip_files:
+                    logger.info(f"📦 Found {extraction['name']} ZIP files:")
+                    for zip_file in zip_files:
+                        size_mb = zip_file.stat().st_size / (1024 * 1024)
+                        logger.info(f"  📦 {zip_file.relative_to(eval_path)} ({size_mb:.1f} MB)")
 
-                    logger.info(f"✅ Extracted ewok_fast.zip to {ewok_dir_path}")
-
-                    # List contents
-                    contents = list(ewok_dir_path.iterdir())
-                    logger.info(f"📁 EWoK fast eval contents ({len(contents)} items):")
-                    for item in contents[:10]:  # Show first 10 items
-                        if item.is_file():
-                            size_kb = item.stat().st_size / 1024
-                            logger.info(f"  📄 {item.name} ({size_kb:.1f} KB)")
+                        # Check if already extracted
+                        expected_extract_dir = zip_file.parent / extraction['expected_dir']
+                        if expected_extract_dir.exists():
+                            items = list(expected_extract_dir.iterdir())
+                            logger.info(f"    ✅ Already extracted to {expected_extract_dir.name}/ ({len(items)} items)")
                         else:
-                            logger.info(f"  📁 {item.name}/")
+                            logger.info(f"    ⚠️ Not yet extracted - will be handled by main extraction")
 
-                    if len(contents) > 10:
-                        logger.info(f"  ... and {len(contents) - 10} more items")
-
-                    # Remove ZIP file
-                    ewok_zip_path.unlink()
-                    logger.info("🗑️ Removed ewok_fast.zip")
-
-                    return True
-
-                except Exception as e:
-                    logger.error(f"❌ Failed to extract ewok_fast.zip: {e}")
-                    return False
-            else:
-                logger.info(f"✅ EWoK fast eval already extracted at: {ewok_dir_path}")
-                return True
-        else:
-            logger.info(f"ℹ️ ewok_fast.zip not found at: {ewok_zip_path}")
-
-    return False
+    return True
 
 
 def main():
