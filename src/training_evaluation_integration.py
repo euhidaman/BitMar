@@ -517,39 +517,46 @@ class TrainingEvaluationIntegration:
             prefix = "Evaluation/Step"
             wandb_metrics = {}
             
-            # Log step evaluation results (typically a subset of full evaluation)
-            if 'step_results' in results:
-                step_results = results['step_results']
-                for task, score in step_results.items():
-                    if isinstance(score, (int, float)):
-                        wandb_metrics[f"{prefix}/{task}"] = score
+            # Log all available results from step evaluation
+            for key, value in results.items():
+                if key in ['step', 'epoch', 'timestamp', 'error']:
+                    # Skip metadata keys or log them separately
+                    continue
+                    
+                if isinstance(value, dict):
+                    # Handle nested dictionaries (e.g., text_minimal results)
+                    for subkey, subvalue in value.items():
+                        if isinstance(subvalue, (int, float)):
+                            wandb_metrics[f"{prefix}/{key}/{subkey}"] = subvalue
+                        elif isinstance(subvalue, dict):
+                            # Handle double-nested results
+                            for subsubkey, subsubvalue in subvalue.items():
+                                if isinstance(subsubvalue, (int, float)):
+                                    wandb_metrics[f"{prefix}/{key}/{subkey}/{subsubkey}"] = subsubvalue
+                elif isinstance(value, (int, float)):
+                    # Direct numeric values
+                    wandb_metrics[f"{prefix}/{key}"] = value
             
-            # Quick evaluation metrics
-            if 'quick_eval' in results:
-                quick = results['quick_eval']
-                if isinstance(quick, dict):
-                    for metric, value in quick.items():
-                        if isinstance(value, (int, float)):
-                            wandb_metrics[f"{prefix}/Quick/{metric}"] = value
-            
-            # Performance metrics for step evaluation
-            if 'performance' in results:
-                perf = results['performance']
-                if isinstance(perf, dict):
-                    for metric, value in perf.items():
-                        if isinstance(value, (int, float)):
-                            wandb_metrics[f"{prefix}/Performance/{metric}"] = value
-            
-            # Evaluation metadata
+            # Add metadata
             wandb_metrics[f"{prefix}/Step"] = step
             wandb_metrics[f"{prefix}/Epoch"] = epoch
             
+            # Check for errors
+            if 'error' in results:
+                wandb_metrics[f"{prefix}/Error"] = 1
+                logger.warning(f"Step {step} evaluation had error: {results['error']}")
+            else:
+                wandb_metrics[f"{prefix}/Error"] = 0
+            
             # Log all metrics at once
             if wandb_metrics:
-                wandb.log(wandb_metrics)
+                wandb.log(wandb_metrics, step=step)
                 logger.info(f"✅ Logged {len(wandb_metrics)} step evaluation metrics to wandb for step {step}")
+                logger.debug(f"Step evaluation metrics: {list(wandb_metrics.keys())}")
             else:
                 logger.warning(f"⚠️  No step evaluation metrics found to log for step {step}")
                 
         except Exception as e:
             logger.error(f"Failed to log step evaluation results to wandb: {e}")
+            import traceback
+            logger.debug(f"Full traceback: {traceback.format_exc()}")

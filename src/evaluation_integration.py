@@ -13,6 +13,7 @@ import os
 import json
 import logging
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import tempfile
@@ -411,7 +412,7 @@ class BabyLMEvaluationPipeline:
         all_results = {
             "epoch": epoch,
             "fast_eval": use_fast_eval,
-            "timestamp": wandb.util.timestamp() if self.use_wandb else None
+            "timestamp": time.time() if self.use_wandb else None
         }
         
         try:
@@ -477,7 +478,7 @@ class BabyLMEvaluationPipeline:
         step_results = {
             "step": step,
             "epoch": epoch,
-            "timestamp": wandb.util.timestamp() if self.use_wandb else None
+            "timestamp": time.time() if self.use_wandb else None
         }
         
         try:

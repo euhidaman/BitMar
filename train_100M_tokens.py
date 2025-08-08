@@ -947,17 +947,28 @@ class TokenAwareTrainer:
                 wandb_logger=self.wandb_logger if self.use_wandb else None
             )
             
-            # Log results to wandb
+            # Debug: log what we got back from evaluation
+            if eval_results:
+                logger.info(f"📋 Step evaluation returned keys: {list(eval_results.keys())}")
+                if "error" in eval_results:
+                    logger.warning(f"⚠️  Step evaluation error: {eval_results['error']}")
+            else:
+                logger.warning("⚠️  Step evaluation returned None/empty results")
+            
+            # The evaluation integration should handle wandb logging directly
+            # This is a backup/debugging logging
             if self.use_wandb and eval_results:
                 try:
-                    wandb_log = {}
-                    for task, metrics in eval_results.items():
-                        if isinstance(metrics, dict):
-                            for metric, value in metrics.items():
-                                wandb_log[f"eval_step/{task}_{metric}"] = value
-                    wandb.log(wandb_log, step=self.global_step)
+                    # Log a simple summary of what was evaluated
+                    summary_log = {
+                        "eval_step/completed": 1,
+                        "eval_step/num_tasks": len(eval_results),
+                        "eval_step/has_error": 1 if "error" in eval_results else 0
+                    }
+                    wandb.log(summary_log, step=self.global_step)
+                    logger.info(f"📊 Step evaluation summary logged: {summary_log}")
                 except Exception as e:
-                    logger.warning(f"Failed to log step evaluation to wandb: {e}")
+                    logger.warning(f"Failed to log step evaluation summary to wandb: {e}")
             
             logger.info(f"✅ Step-based evaluation completed at step {self.global_step}")
             
