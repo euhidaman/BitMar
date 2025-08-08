@@ -241,6 +241,29 @@ performance_targets:
   target_text_generation_quality: 0.6 # Target BLEU score
   memory_efficiency_threshold: 0.8 # Memory usage efficiency
 
+# FLOPS tracking configuration
+flops_tracking:
+  enabled: true # Enable FLOPS tracking
+  log_frequency: 100 # Log FLOPS every 100 steps
+  save_statistics: true # Save detailed FLOPS statistics
+  estimate_theoretical: true # Calculate theoretical FLOPS estimates
+  track_peak_performance: true # Track peak throughput
+  log_to_wandb: true # Log FLOPS metrics to Weights & Biases
+
+  # Advanced FLOPS tracking settings
+  detailed_breakdown: true # Track FLOPS by component (attention, FFN, etc.)
+  memory_bandwidth_tracking: false # Advanced memory bandwidth tracking (experimental)
+  efficiency_analysis: true # Analyze computational efficiency
+
+  # FLOPS logging categories
+  track_components:
+    - "attention" # Self-attention mechanisms
+    - "feedforward" # Feed-forward networks
+    - "layer_norm" # Layer normalization
+    - "embeddings" # Input/output embeddings
+    - "vision_encoder" # Vision encoding operations
+    - "cross_modal_fusion" # Cross-modal fusion operations
+
 # Token tracking and constraints (Enhanced alignment tracking)
 token_tracking:
   log_frequency: 1000 # Log token usage every 1000 steps
@@ -254,3 +277,8 @@ token_tracking:
   log_misaligned_samples: true # Log samples with poor alignment
   alignment_quality_threshold: 0.7 # Threshold for good alignment
   save_alignment_statistics: true # Save alignment statistics
+
+  # FLOPS-token correlation tracking
+  correlate_flops_with_tokens: true # Track FLOPS per token processed
+  log_computational_efficiency: true # Log computational efficiency metrics
+  track_throughput_vs_quality: true # Monitor trade-offs between speed and quality

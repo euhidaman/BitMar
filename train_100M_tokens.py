@@ -42,6 +42,15 @@ from src.wandb_logger import BitMarWandbLogger
 from src.attention_visualizer import AttentionHeadAnalyzer
 from src.memory_visualization_integration import setup_memory_visualization
 
+# Try to import FLOPS tracker
+try:
+    from src.flops_tracker import FLOPsTracker, FLOPsEstimator
+    FLOPS_TRACKER_AVAILABLE = True
+    logger.info("✅ FLOPS tracker available")
+except ImportError:
+    FLOPS_TRACKER_AVAILABLE = False
+    logger.warning("⚠️  FLOPS tracker not available")
+
 # Try to import token-constrained dataset
 try:
     from src.token_constrained_dataset import create_token_constrained_data_module
@@ -469,6 +478,9 @@ class TokenAwareTrainer:
             logger.warning(f"⚠️  Failed to initialize memory visualization: {e}")
             self.memory_viz = None
 
+        # Setup FLOPS tracking
+        self.setup_flops_tracking()
+
     def setup_optimizer(self):
         """Setup optimizer and scheduler for 100M token training"""
         # Calculate total training steps based on exact token count
@@ -543,6 +555,65 @@ class TokenAwareTrainer:
 
         logger.info("🤖 Adaptive training controller enabled for 100M token training")
 
+    def setup_flops_tracking(self):
+        """Setup FLOPS tracking system"""
+        if not FLOPS_TRACKER_AVAILABLE:
+            self.flops_tracker = None
+            logger.warning("⚠️  FLOPS tracking not available")
+            return
+
+        try:
+            # Get FLOPS tracking configuration
+            flops_config = self.config.get('flops_tracking', {})
+            log_frequency = flops_config.get('log_frequency', 100)
+
+            # Create FLOPS logs directory
+            flops_logs_dir = Path("./flops_logs_100M")
+            flops_logs_dir.mkdir(parents=True, exist_ok=True)
+
+            # Initialize FLOPS tracker
+            self.flops_tracker = FLOPsTracker(
+                model=self.model,
+                log_frequency=log_frequency,
+                save_dir=str(flops_logs_dir)
+            )
+
+            # Log model computational complexity
+            self.flops_tracker.log_model_complexity()
+
+            # Estimate theoretical FLOPS for the model
+            batch_size = self.config['data']['batch_size']
+            seq_length = self.config['model']['max_seq_len']
+
+            # Estimate transformer FLOPS
+            transformer_flops = FLOPsEstimator.estimate_transformer_flops(
+                batch_size=batch_size,
+                seq_length=seq_length,
+                d_model=self.config['model']['text_encoder_dim'],
+                num_layers=self.config['model']['text_encoder_layers'],
+                num_heads=self.config['model']['text_encoder_heads'],
+                vocab_size=self.config['model']['vocab_size']
+            )
+
+            # Estimate vision encoder FLOPS
+            vision_flops = FLOPsEstimator.estimate_vision_encoder_flops(
+                batch_size=batch_size,
+                vision_dim=self.config['model']['vision_encoder_dim'],
+                latent_dim=self.config['model']['vision_latent_size']
+            )
+
+            logger.info("🔢 FLOPS Tracker initialized:")
+            logger.info(f"  • Log frequency: {log_frequency} steps")
+            logger.info(f"  • Save directory: {flops_logs_dir}")
+            logger.info("🔢 Theoretical FLOPS estimates per forward pass:")
+            logger.info(f"  • Transformer: {self.flops_tracker._format_flops(transformer_flops['total_flops'])}")
+            logger.info(f"  • Vision encoder: {self.flops_tracker._format_flops(vision_flops['total_flops'])}")
+            logger.info(f"  • Total estimated: {self.flops_tracker._format_flops(transformer_flops['total_flops'] + vision_flops['total_flops'])}")
+
+        except Exception as e:
+            logger.warning(f"Failed to setup FLOPS tracking: {e}")
+            self.flops_tracker = None
+
     def count_tokens_in_batch(self, batch: Dict) -> int:
         """Count actual tokens in a batch"""
         attention_mask = batch['attention_mask']
@@ -606,6 +677,10 @@ class TokenAwareTrainer:
         for batch_idx, batch in enumerate(progress_bar):
             # Count tokens in this batch for logging purposes
             batch_tokens = self.count_tokens_in_batch(batch)
+
+            # Start FLOPS tracking for this step
+            if self.flops_tracker:
+                self.flops_tracker.start_step()
 
             try:
                 # Move batch to device and ensure all required keys exist
@@ -741,6 +816,26 @@ class TokenAwareTrainer:
 
                 self.optimizer.step()
                 self.scheduler.step()
+
+                # End FLOPS tracking and get metrics
+                flops_metrics = None
+                if self.flops_tracker:
+                    try:
+                        flops_metrics = self.flops_tracker.end_step(
+                            batch_size=batch['input_ids'].size(0),
+                            sequence_length=batch['input_ids'].size(1)
+                        )
+
+                        # Log FLOPS periodically
+                        if self.flops_tracker.should_log():
+                            self.flops_tracker.log_flops(
+                                metrics=flops_metrics,
+                                logger_func=logger.info,
+                                wandb_logger=wandb if self.use_wandb else None,
+                                step=self.global_step
+                            )
+                    except Exception as e:
+                        logger.warning(f"FLOPS tracking failed: {e}")
 
                 # Update token count
                 self.tokens_processed += batch_tokens
@@ -916,6 +1011,40 @@ class TokenAwareTrainer:
 
             # Final checkpoint
             self.save_token_checkpoint()
+
+            # Final FLOPS summary and cleanup
+            if self.flops_tracker:
+                try:
+                    # Generate final FLOPS statistics
+                    final_stats = self.flops_tracker.get_summary_stats()
+                    logger.info("🔢 Final FLOPS Summary:")
+                    logger.info(f"  • Total FLOPS: {final_stats.get('flops_formatted', 'N/A')}")
+                    logger.info(f"  • Total training time: {final_stats.get('total_time', 0):.1f}s")
+                    logger.info(f"  • Average FLOPS/step: {self.flops_tracker._format_flops(final_stats.get('avg_flops_per_step', 0))}")
+                    logger.info(f"  • Average throughput: {final_stats.get('avg_throughput_formatted', 'N/A')}")
+                    logger.info(f"  • Peak throughput: {self.flops_tracker._format_flops(final_stats.get('peak_throughput', 0))}/s")
+
+                    # Save FLOPS statistics
+                    self.flops_tracker.save_statistics("final_flops_statistics.json")
+
+                    # Log to wandb if available
+                    if self.use_wandb:
+                        try:
+                            wandb.log({
+                                'final_flops/total_flops': final_stats.get('total_flops', 0),
+                                'final_flops/avg_flops_per_step': final_stats.get('avg_flops_per_step', 0),
+                                'final_flops/avg_throughput': final_stats.get('avg_throughput', 0),
+                                'final_flops/peak_throughput': final_stats.get('peak_throughput', 0),
+                                'final_flops/total_time': final_stats.get('total_time', 0)
+                            })
+                        except Exception as e:
+                            logger.warning(f"Failed to log final FLOPS to wandb: {e}")
+
+                    # Cleanup FLOPS tracker
+                    self.flops_tracker.cleanup()
+                    logger.info("✅ FLOPS tracking completed and cleaned up")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to complete FLOPS tracking: {e}")
 
             # Generate final memory visualization report
             if self.memory_viz is not None:
