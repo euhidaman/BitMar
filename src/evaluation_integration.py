@@ -123,7 +123,6 @@ class BabyLMEvaluationPipeline:
             
             # Change to pipeline 2025 directory
             original_cwd = os.getcwd()
-            os.chdir(self.pipeline_2025_path)
             
             try:
                 # Run zero-shot evaluations with correct data path
@@ -133,10 +132,16 @@ class BabyLMEvaluationPipeline:
                 # Script expects: MODEL_PATH REVISION_NAME BACKEND [EVAL_DIR]
                 revision_name = f"epoch_{epoch}" if fast else f"epoch_{epoch}_full"
                 
+                # Ensure model path is absolute (since we'll change directories)
+                abs_model_path = os.path.abspath(model_path)
+                
+                # Change to pipeline directory after getting absolute paths
+                os.chdir(self.pipeline_2025_path)
+                
                 cmd = [
                     "bash", 
                     str(script_path),
-                    model_path,
+                    abs_model_path,  # Use absolute model path
                     revision_name,  # revision name
                     "causal",  # backend for BitMar
                     eval_data_path  # evaluation data path

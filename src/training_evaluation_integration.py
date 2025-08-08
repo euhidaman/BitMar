@@ -94,7 +94,7 @@ class BitMarEvaluationWrapper:
             torch.save(model_state, model_path)
             
             logger.info(f"Saved HF-compatible model for epoch {epoch} at {epoch_model_path}")
-            return str(epoch_model_path)
+            return str(epoch_model_path.resolve())  # Return absolute path
             
         except Exception as e:
             logger.error(f"Failed to save HF-compatible model: {e}")
@@ -129,7 +129,7 @@ class BitMarEvaluationWrapper:
             self.tokenizer.save_pretrained(epoch_model_path)
             
             logger.warning(f"Created dummy model for epoch {epoch} at {epoch_model_path}")
-            return str(epoch_model_path)
+            return str(epoch_model_path.resolve())  # Return absolute path
             
         except Exception as e:
             logger.error(f"Failed to create dummy model: {e}")
@@ -338,6 +338,20 @@ class TrainingEvaluationIntegration:
             # Log results to wandb
             if wandb_logger and results:
                 self._log_step_evaluation_results_to_wandb(results, step, epoch, wandb_logger)
+            elif wandb_logger:
+                # Log a basic evaluation attempt even if results are empty
+                try:
+                    import wandb
+                    fallback_metrics = {
+                        "Evaluation/Step/attempt": 1,
+                        "Evaluation/Step/failed": 1,
+                        "Evaluation/Step/Step": step,
+                        "Evaluation/Step/Epoch": epoch
+                    }
+                    wandb.log(fallback_metrics, step=step)
+                    logger.info(f"📊 Logged fallback step evaluation metrics for step {step}")
+                except Exception as e:
+                    logger.warning(f"Failed to log fallback metrics: {e}")
             
             # Cleanup temporary files immediately for step evaluations
             try:
@@ -349,6 +363,15 @@ class TrainingEvaluationIntegration:
                 logger.warning(f"Failed to cleanup step evaluation files: {cleanup_e}")
             
             logger.info(f"Completed step {step} evaluation")
+            
+            # Add evaluation success metrics
+            if results and "error" not in results:
+                results["evaluation_status"] = "success"
+                results["num_metrics"] = len([k for k, v in results.items() if isinstance(v, (dict, int, float))])
+            elif results and "error" in results:
+                results["evaluation_status"] = "failed"
+                results["num_metrics"] = 0
+                
             return results
             
         except Exception as e:
@@ -548,15 +571,22 @@ class TrainingEvaluationIntegration:
             else:
                 wandb_metrics[f"{prefix}/Error"] = 0
             
-            # Log all metrics at once
+            # Log to wandb with debugging
             if wandb_metrics:
+                logger.info(f"🔍 Logging {len(wandb_metrics)} step evaluation metrics to wandb:")
+                for key, value in list(wandb_metrics.items())[:5]:  # Show first 5 metrics
+                    logger.info(f"  • {key}: {value}")
+                if len(wandb_metrics) > 5:
+                    logger.info(f"  • ... and {len(wandb_metrics) - 5} more metrics")
+                    
                 wandb.log(wandb_metrics, step=step)
-                logger.info(f"✅ Logged {len(wandb_metrics)} step evaluation metrics to wandb for step {step}")
-                logger.debug(f"Step evaluation metrics: {list(wandb_metrics.keys())}")
+                logger.info(f"✅ Successfully logged step {step} evaluation metrics to wandb")
             else:
-                logger.warning(f"⚠️  No step evaluation metrics found to log for step {step}")
+                logger.warning(f"⚠️  No metrics to log for step {step} evaluation")
                 
         except Exception as e:
             logger.error(f"Failed to log step evaluation results to wandb: {e}")
+            import traceback
+            traceback.print_exc()
             import traceback
             logger.debug(f"Full traceback: {traceback.format_exc()}")
