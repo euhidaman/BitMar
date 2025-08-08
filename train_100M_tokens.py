@@ -1518,6 +1518,39 @@ class TokenAwareTrainer:
                     # Log to WandB
                     try:
                         wandb.log(log_dict, step=self.global_step)
+                        
+                        # Create custom visualization: Single graph with two colored learning curves
+                        # This will show Text (orange) and Vision (green) learning trajectories converging
+                        if ('Cross-Modal Trajectories/Text Learning' in log_dict and 
+                            'Cross-Modal Trajectories/Vision Learning' in log_dict):
+                            
+                            # Create a custom line plot with both trajectories
+                            text_value = log_dict['Cross-Modal Trajectories/Text Learning']
+                            vision_value = log_dict['Cross-Modal Trajectories/Vision Learning']
+                            
+                            # Custom plot data for wandb
+                            custom_plot_data = [
+                                [self.global_step, text_value, "Text Learning"],
+                                [self.global_step, vision_value, "Vision Learning"]
+                            ]
+                            
+                            # Create the custom plot table
+                            learning_convergence_table = wandb.Table(
+                                data=custom_plot_data,
+                                columns=["step", "learning_strength", "modality"]
+                            )
+                            
+                            # Log the custom plot - this creates the single graph with two colored lines
+                            wandb.log({
+                                "Learning Convergence Chart": wandb.plot.line(
+                                    learning_convergence_table, 
+                                    x="step", 
+                                    y="learning_strength",
+                                    color="modality",
+                                    title="Cross-Modal Learning Convergence: Text (Orange) + Vision (Green)"
+                                )
+                            }, step=self.global_step)
+                        
                     except Exception as e:
                         logger.warning(f"Failed to log to wandb during training: {e}")
                         self.use_wandb = False

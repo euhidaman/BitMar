@@ -141,8 +141,8 @@ class TrainingEvaluationIntegration:
     
     def __init__(
         self,
-        pipeline_2024_path: str = "d:/BabyLM/evaluation-pipeline-2024",
-        pipeline_2025_path: str = "d:/BabyLM/evaluation-pipeline-2025", 
+        pipeline_2024_path: str = None,
+        pipeline_2025_path: str = None, 
         results_dir: str = "evaluation_results",
         eval_frequency: int = 1,  # Evaluate every N epochs
         fast_eval_epochs: list = None,  # Epochs to run fast evaluation
@@ -157,8 +157,14 @@ class TrainingEvaluationIntegration:
             fast_eval_epochs: List of epochs to run fast evaluation (default: all except last)
             full_eval_epochs: List of epochs to run full evaluation (default: last epoch only)
         """
-        self.pipeline_2024_path = pipeline_2024_path
-        self.pipeline_2025_path = pipeline_2025_path
+        # Set default paths with environment variable fallback
+        if pipeline_2024_path is None:
+            pipeline_2024_path = os.environ.get('BABYLM_EVAL_2024_PATH', "d:/BabyLM/evaluation-pipeline-2024")
+        if pipeline_2025_path is None:
+            pipeline_2025_path = os.environ.get('BABYLM_EVAL_2025_PATH', "d:/BabyLM/evaluation-pipeline-2025")
+            
+        self.pipeline_2024_path = str(Path(pipeline_2024_path).resolve())
+        self.pipeline_2025_path = str(Path(pipeline_2025_path).resolve())
         self.results_dir = results_dir
         self.eval_frequency = eval_frequency
         
@@ -296,6 +302,18 @@ class TrainingEvaluationIntegration:
             return None
         
         try:
+            # Safety checks
+            if model is None:
+                logger.warning("Model is None, skipping step evaluation")
+                return {"error": "model_is_none", "step": step, "epoch": epoch}
+            
+            if not hasattr(model, 'eval'):
+                logger.warning("Model lacks eval() method, skipping step evaluation")
+                return {"error": "model_no_eval_method", "step": step, "epoch": epoch}
+            
+            # Store original training state
+            original_training_state = model.training
+            
             logger.info(f"Starting step evaluation at step {step} (epoch {epoch})")
             
             # Create temporary model wrapper for this step
@@ -314,8 +332,7 @@ class TrainingEvaluationIntegration:
             # For step evaluations, we typically run only a subset of tasks
             results = self.evaluation_pipeline.run_step_evaluation(
                 step=step,
-                epoch=epoch,
-                use_fast_eval=True  # Always use fast evaluation for steps
+                epoch=epoch
             )
             
             # Log results to wandb
@@ -337,104 +354,160 @@ class TrainingEvaluationIntegration:
         except Exception as e:
             logger.error(f"Error in step {step} evaluation: {e}")
             return {"error": str(e), "step": step, "epoch": epoch}
+        finally:
+            # Always restore original training state
+            try:
+                if 'original_training_state' in locals() and model is not None:
+                    model.train(original_training_state)
+                    logger.debug(f"Restored model training state to {original_training_state}")
+            except Exception as restore_e:
+                logger.warning(f"Failed to restore model training state: {restore_e}")
+            
+            # Clear GPU cache after evaluation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     
     def finalize_evaluation(self):
         """Clean up evaluation pipeline resources"""
         try:
             if self.evaluation_pipeline:
-                # Cleanup any remaining temporary files
-                temp_dir = Path(self.results_dir) / "temp_models"
-                if temp_dir.exists():
-                    import shutil
-                    shutil.rmtree(temp_dir)
-                    logger.info("Cleaned up temporary model files")
+                # Cleanup any remaining temporary files with retry mechanism
+                temp_dirs = [
+                    Path(self.results_dir) / "temp_models",
+                    Path(tempfile.gettempdir()) / "bitmar_eval_*"
+                ]
+                
+                for temp_pattern in temp_dirs:
+                    if "*" in str(temp_pattern):
+                        # Handle wildcard patterns
+                        import glob
+                        for temp_path in glob.glob(str(temp_pattern)):
+                            self._safe_cleanup_directory(temp_path)
+                    else:
+                        # Handle direct paths
+                        if temp_pattern.exists():
+                            self._safe_cleanup_directory(str(temp_pattern))
                     
             logger.info("Evaluation pipeline finalized")
             
         except Exception as e:
             logger.warning(f"Error finalizing evaluation pipeline: {e}")
     
-    def _log_evaluation_results_to_wandb(self, results: dict, epoch: int, is_fast: bool, wandb_logger):
-        """Log evaluation results to wandb with proper categorization"""
-        try:
-            import wandb
-            
-            eval_type = "Fast" if is_fast else "Full"
-            prefix = f"Evaluation/{eval_type}"
-            
-            # Log overall evaluation metrics
-            wandb_metrics = {}
-            
-            # BabyLM Pipeline Results
-            if 'babylm_results' in results:
-                babylm_results = results['babylm_results']
+    def _safe_cleanup_directory(self, dir_path: str, max_retries: int = 3):
+        """Safely cleanup directory with retries"""
+        import shutil
+        import time
+        
+        for attempt in range(max_retries):
+            try:
+                if Path(dir_path).exists():
+                    shutil.rmtree(dir_path)
+                    logger.debug(f"Cleaned up directory: {dir_path}")
+                return
+            except PermissionError:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Permission denied cleaning {dir_path}, retrying in {0.5 * (attempt + 1)}s...")
+                    time.sleep(0.5 * (attempt + 1))
+                else:
+                    logger.error(f"Failed to cleanup {dir_path} after {max_retries} attempts")
+            except Exception as e:
+                logger.warning(f"Error cleaning up {dir_path}: {e}")
+                return
+    
+    def _log_evaluation_results_to_wandb(self, results: dict, epoch: int, is_fast: bool, wandb_logger, max_retries: int = 3):
+        """Log evaluation results to wandb with proper categorization and retry logic"""
+        for attempt in range(max_retries):
+            try:
+                import wandb
                 
-                # 2024 Pipeline (Multimodal) Results
-                if 'pipeline_2024' in babylm_results:
-                    p2024 = babylm_results['pipeline_2024']
-                    for task, score in p2024.items():
-                        if isinstance(score, (int, float)):
-                            wandb_metrics[f"{prefix}/BabyLM_2024/{task}"] = score
+                # Check if wandb is properly initialized
+                if wandb.run is None:
+                    logger.warning("Wandb run not initialized, skipping evaluation logging")
+                    return
                 
-                # 2025 Pipeline (Text) Results  
-                if 'pipeline_2025' in babylm_results:
-                    p2025 = babylm_results['pipeline_2025']
-                    for task, score in p2025.items():
-                        if isinstance(score, (int, float)):
-                            wandb_metrics[f"{prefix}/BabyLM_2025/{task}"] = score
-            
-            # Overall scores
-            if 'overall_score' in results:
-                wandb_metrics[f"{prefix}/Overall_Score"] = results['overall_score']
-            
-            if 'average_score' in results:
-                wandb_metrics[f"{prefix}/Average_Score"] = results['average_score']
-            
-            # BLIMP results
-            if 'blimp_results' in results:
-                blimp = results['blimp_results']
-                if isinstance(blimp, dict):
-                    for category, score in blimp.items():
-                        if isinstance(score, (int, float)):
-                            wandb_metrics[f"{prefix}/BLIMP/{category}"] = score
-            
-            # GLUE results
-            if 'glue_results' in results:
-                glue = results['glue_results']
-                if isinstance(glue, dict):
-                    for task, score in glue.items():
-                        if isinstance(score, (int, float)):
-                            wandb_metrics[f"{prefix}/GLUE/{task}"] = score
-            
-            # Multimodal results
-            if 'multimodal_results' in results:
-                mm = results['multimodal_results']
-                if isinstance(mm, dict):
-                    for task, score in mm.items():
-                        if isinstance(score, (int, float)):
-                            wandb_metrics[f"{prefix}/Multimodal/{task}"] = score
-            
-            # QA results
-            if 'qa_results' in results:
-                qa = results['qa_results']
-                if isinstance(qa, dict):
-                    for task, score in qa.items():
-                        if isinstance(score, (int, float)):
-                            wandb_metrics[f"{prefix}/QA/{task}"] = score
-            
-            # Evaluation metadata
-            wandb_metrics[f"{prefix}/Epoch"] = epoch
-            wandb_metrics[f"{prefix}/Evaluation_Type"] = "fast" if is_fast else "full"
-            
-            # Log all metrics at once
-            if wandb_metrics:
-                wandb.log(wandb_metrics)
-                logger.info(f"✅ Logged {len(wandb_metrics)} evaluation metrics to wandb for epoch {epoch}")
-            else:
-                logger.warning(f"⚠️  No evaluation metrics found to log for epoch {epoch}")
+                eval_type = "Fast" if is_fast else "Full"
+                prefix = f"Evaluation/{eval_type}"
                 
-        except Exception as e:
-            logger.error(f"Failed to log evaluation results to wandb: {e}")
+                # Log overall evaluation metrics
+                wandb_metrics = {}
+                
+                # BabyLM Pipeline Results
+                if 'babylm_results' in results:
+                    babylm_results = results['babylm_results']
+                    
+                    # 2024 Pipeline (Multimodal) Results
+                    if 'pipeline_2024' in babylm_results:
+                        p2024 = babylm_results['pipeline_2024']
+                        for task, score in p2024.items():
+                            if isinstance(score, (int, float)):
+                                wandb_metrics[f"{prefix}/BabyLM_2024/{task}"] = score
+                    
+                    # 2025 Pipeline (Text) Results  
+                    if 'pipeline_2025' in babylm_results:
+                        p2025 = babylm_results['pipeline_2025']
+                        for task, score in p2025.items():
+                            if isinstance(score, (int, float)):
+                                wandb_metrics[f"{prefix}/BabyLM_2025/{task}"] = score
+                
+                # Overall scores
+                if 'overall_score' in results:
+                    wandb_metrics[f"{prefix}/Overall_Score"] = results['overall_score']
+                
+                if 'average_score' in results:
+                    wandb_metrics[f"{prefix}/Average_Score"] = results['average_score']
+                
+                # BLIMP results
+                if 'blimp_results' in results:
+                    blimp = results['blimp_results']
+                    if isinstance(blimp, dict):
+                        for category, score in blimp.items():
+                            if isinstance(score, (int, float)):
+                                wandb_metrics[f"{prefix}/BLIMP/{category}"] = score
+                
+                # GLUE results
+                if 'glue_results' in results:
+                    glue = results['glue_results']
+                    if isinstance(glue, dict):
+                        for task, score in glue.items():
+                            if isinstance(score, (int, float)):
+                                wandb_metrics[f"{prefix}/GLUE/{task}"] = score
+                
+                # Multimodal results
+                if 'multimodal_results' in results:
+                    mm = results['multimodal_results']
+                    if isinstance(mm, dict):
+                        for task, score in mm.items():
+                            if isinstance(score, (int, float)):
+                                wandb_metrics[f"{prefix}/Multimodal/{task}"] = score
+                
+                # QA results
+                if 'qa_results' in results:
+                    qa = results['qa_results']
+                    if isinstance(qa, dict):
+                        for task, score in qa.items():
+                            if isinstance(score, (int, float)):
+                                wandb_metrics[f"{prefix}/QA/{task}"] = score
+                
+                # Evaluation metadata
+                wandb_metrics[f"{prefix}/Epoch"] = epoch
+                wandb_metrics[f"{prefix}/Evaluation_Type"] = "fast" if is_fast else "full"
+                
+                # Log all metrics at once
+                if wandb_metrics:
+                    wandb.log(wandb_metrics)
+                    logger.info(f"✅ Logged {len(wandb_metrics)} evaluation metrics to wandb for epoch {epoch}")
+                else:
+                    logger.warning(f"⚠️  No evaluation metrics found to log for epoch {epoch}")
+                
+                return  # Success, exit retry loop
+                
+            except Exception as e:
+                logger.warning(f"Wandb logging attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(1 * (attempt + 1))  # Exponential backoff
+                else:
+                    logger.error(f"Failed to log evaluation results to wandb after {max_retries} attempts: {e}")
     
     def _log_step_evaluation_results_to_wandb(self, results: dict, step: int, epoch: int, wandb_logger):
         """Log step evaluation results to wandb with proper categorization"""

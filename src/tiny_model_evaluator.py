@@ -96,7 +96,8 @@ class TinyModelEvaluator:
             process = psutil.Process(os.getpid())
             memory_info = process.memory_info()
             metrics['system_memory_mb'] = memory_info.rss / (1024 * 1024)
-        except:
+        except Exception as e:
+            logger.warning(f"System memory evaluation failed: {e}")
             metrics['system_memory_mb'] = 0
         
         return metrics
@@ -134,9 +135,17 @@ class TinyModelEvaluator:
             metrics['inference_efficiency_score'] = 1000 / metrics['avg_inference_time_ms']  # Higher is better
             
             self.model.train()
+            
+            # Clear GPU cache after evaluation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
         except Exception as e:
             logger.warning(f"Inference speed evaluation failed: {e}")
             metrics = {'inference_speed_available': False}
+            # Clear GPU cache even on failure
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         
         return metrics
     
