@@ -523,10 +523,19 @@ class BabyLMEvaluationPipeline:
                     else:
                         wandb_log["step_eval/text_status"] = 0
                     
-                    wandb.log(wandb_log, step=step)
-                    logger.info(f"Logged step {step} evaluation to WandB")
+                    try:
+                        wandb.log(wandb_log, step=step)
+                        logger.info(f"Logged step {step} evaluation to WandB")
+                    except Exception as wandb_e:
+                        logger.warning(f"Failed to log step evaluation to WandB with step: {wandb_e}")
+                        try:
+                            # Fallback without step parameter
+                            wandb.log(wandb_log)
+                            logger.info(f"Logged step {step} evaluation to WandB (fallback)")
+                        except Exception as wandb_e2:
+                            logger.error(f"Failed to log step evaluation to WandB even without step: {wandb_e2}")
                 except Exception as wandb_e:
-                    logger.warning(f"Failed to log step evaluation to WandB: {wandb_e}")
+                    logger.warning(f"Failed to create wandb log for step evaluation: {wandb_e}")
             
             # Save step results
             try:
@@ -567,7 +576,17 @@ class BabyLMEvaluationPipeline:
             if "multimodal_2024" in results and "status" in results["multimodal_2024"]:
                 wandb_log[f"{prefix}/multimodal_2024_status"] = 1 if results["multimodal_2024"]["status"] == "success" else 0
             
-            wandb.log(wandb_log, step=epoch)
+            try:
+                wandb.log(wandb_log, step=epoch)
+                logger.info(f"Logged epoch {epoch} evaluation to WandB")
+            except Exception as e:
+                logger.warning(f"Failed to log epoch evaluation to WandB with step: {e}")
+                try:
+                    # Fallback without step parameter
+                    wandb.log(wandb_log)
+                    logger.info(f"Logged epoch {epoch} evaluation to WandB (fallback)")
+                except Exception as e2:
+                    logger.error(f"Failed to log epoch evaluation to WandB even without step: {e2}")
             
             logger.info(f"Logged epoch {epoch} evaluation metrics to WandB")
             

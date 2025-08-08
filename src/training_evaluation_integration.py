@@ -515,12 +515,26 @@ class TrainingEvaluationIntegration:
                 wandb_metrics[f"{prefix}/Epoch"] = epoch
                 wandb_metrics[f"{prefix}/Evaluation_Type"] = "fast" if is_fast else "full"
                 
-                # Log all metrics at once
-                if wandb_metrics:
-                    wandb.log(wandb_metrics)
-                    logger.info(f"✅ Logged {len(wandb_metrics)} evaluation metrics to wandb for epoch {epoch}")
+                # Sanitize metrics before logging
+                sanitized_metrics = self._sanitize_wandb_metrics(wandb_metrics)
+                
+                # Log all metrics at once with error handling
+                if sanitized_metrics:
+                    try:
+                        wandb.log(sanitized_metrics)
+                        logger.info(f"✅ Logged {len(sanitized_metrics)} evaluation metrics to wandb for epoch {epoch}")
+                    except Exception as e:
+                        logger.warning(f"⚠️  Failed to log epoch evaluation metrics: {e}")
+                        # Try logging without step to avoid potential step conflicts
+                        try:
+                            # Remove any step-related keys and try again
+                            clean_metrics = {k: v for k, v in sanitized_metrics.items() if 'step' not in k.lower()}
+                            wandb.log(clean_metrics)
+                            logger.info(f"✅ Logged {len(clean_metrics)} evaluation metrics to wandb for epoch {epoch} (fallback)")
+                        except Exception as e2:
+                            logger.error(f"❌ Failed to log epoch evaluation metrics even with fallback: {e2}")
                 else:
-                    logger.warning(f"⚠️  No evaluation metrics found to log for epoch {epoch}")
+                    logger.warning(f"⚠️  No evaluation metrics found to log for epoch {epoch} after sanitization")
                 
                 return  # Success, exit retry loop
                 
@@ -531,6 +545,45 @@ class TrainingEvaluationIntegration:
                     time.sleep(1 * (attempt + 1))  # Exponential backoff
                 else:
                     logger.error(f"Failed to log evaluation results to wandb after {max_retries} attempts: {e}")
+    
+    def _sanitize_wandb_metrics(self, metrics: dict) -> dict:
+        """Sanitize metrics to prevent wandb plotting issues"""
+        sanitized = {}
+        
+        for key, value in metrics.items():
+            try:
+                # Only log numeric values that wandb can handle safely
+                if isinstance(value, (int, float)):
+                    # Check for NaN, infinity, or very large numbers
+                    if not isinstance(value, (int, float)) or \
+                       (isinstance(value, float) and (
+                           value != value or  # NaN check
+                           abs(value) == float('inf') or  # Infinity check
+                           abs(value) > 1e10  # Very large number check
+                       )):
+                        logger.warning(f"⚠️  Skipping problematic metric {key}: {value}")
+                        continue
+                    sanitized[key] = value
+                elif isinstance(value, dict):
+                    # Recursively sanitize nested dictionaries
+                    nested_sanitized = self._sanitize_wandb_metrics(value)
+                    if nested_sanitized:
+                        sanitized[key] = nested_sanitized
+                elif isinstance(value, str):
+                    # Keep string values that are reasonable length
+                    if len(value) < 1000:
+                        sanitized[key] = value
+                    else:
+                        logger.warning(f"⚠️  Skipping very long string metric {key}")
+                else:
+                    # Skip other types that might cause plotting issues
+                    logger.debug(f"Skipping metric {key} of type {type(value)}")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️  Error processing metric {key}: {e}")
+                continue
+                
+        return sanitized
     
     def _log_step_evaluation_results_to_wandb(self, results: dict, step: int, epoch: int, wandb_logger):
         """Log step evaluation results to wandb with proper categorization"""
@@ -571,18 +624,38 @@ class TrainingEvaluationIntegration:
             else:
                 wandb_metrics[f"{prefix}/Error"] = 0
             
-            # Log to wandb with debugging
-            if wandb_metrics:
-                logger.info(f"🔍 Logging {len(wandb_metrics)} step evaluation metrics to wandb:")
-                for key, value in list(wandb_metrics.items())[:5]:  # Show first 5 metrics
+            # Sanitize metrics before logging
+            sanitized_metrics = self._sanitize_wandb_metrics(wandb_metrics)
+            
+            # Log to wandb with debugging and error handling
+            if sanitized_metrics:
+                logger.info(f"🔍 Logging {len(sanitized_metrics)} step evaluation metrics to wandb:")
+                for key, value in list(sanitized_metrics.items())[:5]:  # Show first 5 metrics
                     logger.info(f"  • {key}: {value}")
-                if len(wandb_metrics) > 5:
-                    logger.info(f"  • ... and {len(wandb_metrics) - 5} more metrics")
-                    
-                wandb.log(wandb_metrics, step=step)
-                logger.info(f"✅ Successfully logged step {step} evaluation metrics to wandb")
+                if len(sanitized_metrics) > 5:
+                    logger.info(f"  • ... and {len(sanitized_metrics) - 5} more metrics")
+                
+                try:
+                    # Try logging with step first
+                    wandb.log(sanitized_metrics, step=step)
+                    logger.info(f"✅ Successfully logged step {step} evaluation metrics to wandb")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to log with step parameter: {e}")
+                    try:
+                        # Fallback: log without step parameter
+                        wandb.log(sanitized_metrics)
+                        logger.info(f"✅ Successfully logged step {step} evaluation metrics to wandb (fallback)")
+                    except Exception as e2:
+                        logger.error(f"❌ Failed to log evaluation metrics even without step: {e2}")
+                        # Try logging individual metrics to isolate the problem
+                        logger.info("🔍 Attempting to log metrics individually to identify problematic metric...")
+                        for key, value in sanitized_metrics.items():
+                            try:
+                                wandb.log({key: value}, step=step)
+                            except Exception as e3:
+                                logger.warning(f"⚠️  Failed to log metric {key}: {e3}")
             else:
-                logger.warning(f"⚠️  No metrics to log for step {step} evaluation")
+                logger.warning(f"⚠️  No metrics to log for step {step} evaluation after sanitization")
                 
         except Exception as e:
             logger.error(f"Failed to log step evaluation results to wandb: {e}")
