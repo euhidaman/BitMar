@@ -591,34 +591,16 @@ class TokenAwareTrainer:
             logger.warning(f"⚠️  Failed to initialize evaluation integration: {e}")
             self.evaluation_integration = None
 
-        # Setup tiny model evaluation
-        try:
-            if TINY_MODEL_EVALUATOR_AVAILABLE:
-                self.tiny_model_evaluator = TinyModelEvaluator(
-                    config=self.config,
-                    model=self.model,
-                    tokenizer=self.model.tokenizer,
-                    device=self.device
-                )
-                logger.info("✅ Tiny model evaluator initialized")
-            else:
-                self.tiny_model_evaluator = None
-                logger.info("⚠️  Tiny model evaluator not available")
-        except Exception as e:
-            logger.warning(f"⚠️  Failed to initialize tiny model evaluator: {e}")
-            self.tiny_model_evaluator = None
-
         # Setup tiny model evaluation integration
         try:
             if TINY_MODEL_EVAL_AVAILABLE:
                 tiny_eval_config = self.config.get('evaluation', {}).get('tiny_model_evaluations', {})
                 if tiny_eval_config.get('enabled', False):
                     self.tiny_model_evaluator = TinyModelEvaluator(
+                        config=self.config,
                         model=self.model,
                         tokenizer=self.model.tokenizer,
-                        device=str(self.device),
-                        save_dir=str(self.memory_dir / "tiny_model_eval"),
-                        config=self.config
+                        device=self.device
                     )
                     
                     # Setup BabyLM tiny model evaluator if configured
