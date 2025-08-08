@@ -18,9 +18,19 @@ from pathlib import Path
 from typing import Dict, Optional
 import numpy as np
 from tqdm import tqdm
+import json
+from datetime import datetime
+from collections import defaultdict
 import traceback
 import time
-from collections import defaultdict
+import json
+
+# Try to import transformers for HuggingFace model saving
+try:
+    from transformers import PreTrainedModel, PretrainedConfig, AutoTokenizer
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
@@ -235,6 +245,11 @@ class TokenAwareTrainer:
         self.eval_epochs = "all"  # Default to evaluate all epochs
         self.eval_start_step = 0  # Default to start evaluation from beginning
 
+        # Model saving control (will be set by main function)
+        self.save_steps = None    # Optional step-based saving
+        self.save_after_epochs = True  # Default to save after each epoch
+        self.hf_save_dir = "./saved_models"  # Default save directory
+
         # Setup directories
         self.setup_directories()
         
@@ -253,6 +268,11 @@ class TokenAwareTrainer:
             dir_path = Path(self.config['output'][dir_name])
             dir_path.mkdir(parents=True, exist_ok=True)
             setattr(self, dir_name, dir_path)
+        
+        # Create HuggingFace save directory
+        hf_save_path = Path(self.hf_save_dir)
+        hf_save_path.mkdir(parents=True, exist_ok=True)
+        self.hf_save_path = hf_save_path
 
     def setup_wandb(self):
         """Setup Weights & Biases logging"""
@@ -302,6 +322,101 @@ class TokenAwareTrainer:
         except Exception as e:
             logger.warning(f"Failed to setup carbon tracking: {e}")
             self.carbon_tracker = None
+
+    def save_model_to_huggingface(self, step: Optional[int] = None, epoch: Optional[int] = None):
+        """Save model weights to HuggingFace format"""
+        if not TRANSFORMERS_AVAILABLE:
+            logger.warning("HuggingFace transformers not available, skipping model save")
+            return
+            
+        try:
+            # Create checkpoint directory name
+            if step is not None:
+                checkpoint_name = f"checkpoint-step-{step}"
+            elif epoch is not None:
+                checkpoint_name = f"checkpoint-epoch-{epoch}"
+            else:
+                checkpoint_name = f"checkpoint-{self.global_step}"
+                
+            checkpoint_dir = self.hf_save_path / checkpoint_name
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"💾 Saving model to HuggingFace format: {checkpoint_dir}")
+            
+            # Save model state dict
+            model_path = checkpoint_dir / "pytorch_model.bin"
+            torch.save(self.model.state_dict(), model_path)
+            
+            # Create and save config
+            config_dict = {
+                "model_type": "bitmar",
+                "architectures": ["BitMarModel"],
+                "vocab_size": getattr(self.model, 'vocab_size', 50257),
+                "hidden_size": getattr(self.model, 'hidden_size', 768),
+                "num_hidden_layers": getattr(self.model, 'num_layers', 12),
+                "num_attention_heads": getattr(self.model, 'num_heads', 12),
+                "intermediate_size": getattr(self.model, 'intermediate_size', 3072),
+                "max_position_embeddings": getattr(self.model, 'max_seq_len', 1024),
+                "torch_dtype": "float32",
+                "use_cache": True,
+                "pad_token_id": 50256,
+                "bos_token_id": 50256,
+                "eos_token_id": 50256,
+                "training_step": step if step is not None else self.global_step,
+                "training_epoch": epoch if epoch is not None else self.current_epoch,
+                "total_tokens_processed": self.total_tokens_processed,
+                "bitmar_config": {
+                    "episodic_memory_size": getattr(self.model, 'episodic_memory_size', 1000),
+                    "memory_dim": getattr(self.model, 'memory_dim', 768),
+                    "cross_modal_fusion": getattr(self.model, 'cross_modal_fusion', False),
+                    "dynamic_routing": getattr(self.model, 'dynamic_routing', False)
+                }
+            }
+            
+            config_path = checkpoint_dir / "config.json"
+            with open(config_path, 'w') as f:
+                json.dump(config_dict, f, indent=2)
+            
+            # Save tokenizer if available
+            if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+                try:
+                    self.tokenizer.save_pretrained(str(checkpoint_dir))
+                except Exception as e:
+                    logger.warning(f"Failed to save tokenizer: {e}")
+            
+            # Save training info
+            training_info = {
+                "global_step": self.global_step,
+                "current_epoch": self.current_epoch,
+                "total_tokens_processed": self.total_tokens_processed,
+                "save_timestamp": datetime.now().isoformat(),
+                "device": str(self.device),
+                "model_parameters": sum(p.numel() for p in self.model.parameters()),
+                "trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            }
+            
+            training_info_path = checkpoint_dir / "training_info.json"
+            with open(training_info_path, 'w') as f:
+                json.dump(training_info, f, indent=2)
+            
+            logger.info(f"✅ Model saved successfully to {checkpoint_dir}")
+            
+            # Log to wandb if available
+            if self.use_wandb:
+                try:
+                    wandb_log = {
+                        "model_save/checkpoint": checkpoint_name,
+                        "model_save/step": step if step is not None else self.global_step,
+                        "model_save/epoch": epoch if epoch is not None else self.current_epoch,
+                        "model_save/tokens_processed": self.total_tokens_processed
+                    }
+                    self.wandb_logger.log(wandb_log, step=self.global_step)
+                except Exception as e:
+                    logger.warning(f"Failed to log model save to wandb: {e}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Failed to save model to HuggingFace format: {e}")
+            raise
 
     def custom_collate_fn(self, batch):
         """Custom collate function that handles missing keys gracefully and ensures proper padding"""
@@ -1550,19 +1665,28 @@ class TokenAwareTrainer:
 
                 self.global_step += 1
 
-                # Run step-based evaluation if configured
-                if self.should_run_evaluation_at_step():
-                    self.run_step_evaluation()
+                # Save model to HuggingFace format at specified steps if enabled
+                if self.save_steps and self.save_steps > 0 and self.global_step % self.save_steps == 0:
+                    try:
+                        logger.info(f"💾 Saving model to HuggingFace format at step {self.global_step}")
+                        self.save_model_to_huggingface(step=self.global_step)
+                    except Exception as e:
+                        logger.error(f"Failed to save model to HuggingFace format at step {self.global_step}: {e}")
+                        # Continue training even if save fails
 
-                # Run tiny model evaluation if configured
-                if self.should_run_tiny_model_evaluation_at_step():
-                    # Use current loss as performance indicator
-                    current_performance = max(0.1, 1.0 / (1.0 + loss.item()))
-                    self.run_tiny_model_evaluation(performance_score=current_performance)
+                # Run step-based evaluation if configured (DISABLED FOR SEPARATE EVALUATION)
+                # if self.should_run_evaluation_at_step():
+                #     self.run_step_evaluation()
 
-                # Run benchmark evaluation if configured
-                if self.should_run_benchmark_evaluation_at_step():
-                    self.run_benchmark_evaluation()
+                # Run tiny model evaluation if configured (DISABLED FOR SEPARATE EVALUATION)
+                # if self.should_run_tiny_model_evaluation_at_step():
+                #     # Use current loss as performance indicator
+                #     current_performance = max(0.1, 1.0 / (1.0 + loss.item()))
+                #     self.run_tiny_model_evaluation(performance_score=current_performance)
+
+                # Run benchmark evaluation if configured (DISABLED FOR SEPARATE EVALUATION)
+                # if self.should_run_benchmark_evaluation_at_step():
+                #     self.run_benchmark_evaluation()
 
                 # Save checkpoint periodically
                 if self.global_step % 5000 == 0:
@@ -1908,50 +2032,59 @@ class TokenAwareTrainer:
                 # Save checkpoint after each epoch
                 self.save_token_checkpoint()
 
-                # Run epoch evaluation if configured
-                if self.should_run_evaluation_at_epoch(epoch):
+                # Save model to HuggingFace format after each epoch if enabled
+                if self.save_after_epochs:
                     try:
-                        logger.info(f"🧪 Running epoch-based evaluation for epoch {epoch + 1}")
-                        eval_results = self.evaluation_integration.run_epoch_evaluation(
-                            epoch=epoch + 1,  # Use 1-indexed epochs for evaluation
-                            model_save_path=str(self.checkpoint_dir / "evaluation_models"),
-                            wandb_logger=self.wandb_logger if self.use_wandb else None
-                        )
-                        
-                        if eval_results is not None:
-                            logger.info(f"✅ Epoch {epoch + 1} evaluation completed")
-                            
-                            # Log evaluation summary to wandb
-                            if self.use_wandb and "error" not in eval_results:
-                                try:
-                                    eval_summary = {
-                                        f"evaluation/epoch": epoch + 1,
-                                        f"evaluation/completed": 1
-                                    }
-                                    
-                                    for eval_type, results in eval_results.items():
-                                        if isinstance(results, dict) and "status" in results:
-                                            eval_summary[f"evaluation/{eval_type}_success"] = 1 if results["status"] == "success" else 0
-                                    
-                                    self.wandb_logger.log(eval_summary, step=self.global_step)
-                                    
-                                except Exception as e:
-                                    logger.warning(f"Failed to log evaluation results to wandb: {e}")
-                        else:
-                            logger.info(f"No evaluation scheduled for epoch {epoch + 1}")
-                    
+                        logger.info(f"💾 Saving model to HuggingFace format after epoch {epoch + 1}")
+                        self.save_model_to_huggingface(epoch=epoch + 1)
                     except Exception as e:
-                        logger.error(f"Evaluation failed for epoch {epoch + 1}: {e}")
-                        # Continue training even if evaluation fails
+                        logger.error(f"Failed to save model to HuggingFace format: {e}")
+                        # Continue training even if save fails
 
-                # Run tiny model epoch evaluation if configured  
-                if self.should_run_tiny_model_evaluation_at_epoch(epoch):
-                    current_performance = max(0.1, 1.0 / (1.0 + epoch_metrics['train_loss']))
-                    self.run_tiny_model_evaluation(performance_score=current_performance)
+                # Run epoch evaluation if configured (DISABLED FOR SEPARATE EVALUATION)
+                # if self.should_run_evaluation_at_epoch(epoch):
+                #     try:
+                #         logger.info(f"🧪 Running epoch-based evaluation for epoch {epoch + 1}")
+                #         eval_results = self.evaluation_integration.run_epoch_evaluation(
+                #             epoch=epoch + 1,  # Use 1-indexed epochs for evaluation
+                #             model_save_path=str(self.checkpoint_dir / "evaluation_models"),
+                #             wandb_logger=self.wandb_logger if self.use_wandb else None
+                #         )
+                #         
+                #         if eval_results is not None:
+                #             logger.info(f"✅ Epoch {epoch + 1} evaluation completed")
+                #             
+                #             # Log evaluation summary to wandb
+                #             if self.use_wandb and "error" not in eval_results:
+                #                 try:
+                #                     eval_summary = {
+                #                         f"evaluation/epoch": epoch + 1,
+                #                         f"evaluation/completed": 1
+                #                     }
+                #                     
+                #                     for eval_type, results in eval_results.items():
+                #                         if isinstance(results, dict) and "status" in results:
+                #                             eval_summary[f"evaluation/{eval_type}_success"] = 1 if results["status"] == "success" else 0
+                #                     
+                #                     self.wandb_logger.log(eval_summary, step=self.global_step)
+                #                     
+                #                 except Exception as e:
+                #                     logger.warning(f"Failed to log evaluation results to wandb: {e}")
+                #         else:
+                #             logger.info(f"No evaluation scheduled for epoch {epoch + 1}")
+                #     
+                #     except Exception as e:
+                #         logger.error(f"Evaluation failed for epoch {epoch + 1}: {e}")
+                #         # Continue training even if evaluation fails
 
-                # Run benchmark evaluation if configured
-                if self.should_run_benchmark_evaluation_at_epoch(epoch):
-                    self.run_benchmark_evaluation()
+                # Run tiny model epoch evaluation if configured (DISABLED FOR SEPARATE EVALUATION)  
+                # if self.should_run_tiny_model_evaluation_at_epoch(epoch):
+                #     current_performance = max(0.1, 1.0 / (1.0 + epoch_metrics['train_loss']))
+                #     self.run_tiny_model_evaluation(performance_score=current_performance)
+
+                # Run benchmark evaluation if configured (DISABLED FOR SEPARATE EVALUATION)
+                # if self.should_run_benchmark_evaluation_at_epoch(epoch):
+                #     self.run_benchmark_evaluation()
                 
                 # Log epoch summary to wandb with error handling
                 if self.use_wandb:
@@ -2135,6 +2268,16 @@ def main():
     parser.add_argument("--disable_eval", action="store_true",
                        help="Completely disable evaluation (equivalent to --eval_mode=disabled)")
     
+    # Model saving arguments
+    parser.add_argument("--save_steps", type=int, default=None,
+                       help="Save model to HuggingFace format every N steps (optional)")
+    parser.add_argument("--save_after_epochs", action="store_true", default=True,
+                       help="Save model to HuggingFace format after each epoch (default: True)")
+    parser.add_argument("--no_save_after_epochs", action="store_true",
+                       help="Disable saving model after epochs")
+    parser.add_argument("--hf_save_dir", type=str, default="./saved_models",
+                       help="Directory to save HuggingFace models (default: ./saved_models)")
+    
     args = parser.parse_args()
     
     try:
@@ -2147,6 +2290,11 @@ def main():
         trainer.eval_steps = args.eval_steps
         trainer.eval_epochs = args.eval_epochs
         trainer.eval_start_step = args.eval_start_step
+        
+        # Pass model saving arguments to trainer
+        trainer.save_steps = args.save_steps
+        trainer.save_after_epochs = args.save_after_epochs and not args.no_save_after_epochs
+        trainer.hf_save_dir = args.hf_save_dir
         
         # Start training
         trainer.train()
