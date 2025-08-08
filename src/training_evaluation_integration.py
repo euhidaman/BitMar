@@ -221,13 +221,14 @@ class TrainingEvaluationIntegration:
         else:
             return False, False  # No evaluation
     
-    def run_epoch_evaluation(self, epoch: int, model_save_path: str = None) -> Optional[dict]:
+    def run_epoch_evaluation(self, epoch: int, model_save_path: str = None, wandb_logger=None) -> Optional[dict]:
         """
         Run evaluation for the current epoch if scheduled
         
         Args:
             epoch: Current training epoch
             model_save_path: Optional path to save model for evaluation
+            wandb_logger: Optional wandb logger for logging results
             
         Returns:
             Evaluation results dictionary or None if no evaluation was run
@@ -260,6 +261,10 @@ class TrainingEvaluationIntegration:
                 use_fast_eval=is_fast
             )
             
+            # Log results to wandb
+            if wandb_logger and results:
+                self._log_evaluation_results_to_wandb(results, epoch, is_fast, wandb_logger)
+            
             # Cleanup temporary files
             self.evaluation_pipeline.cleanup_temp_files(epoch)
             
@@ -270,7 +275,7 @@ class TrainingEvaluationIntegration:
             logger.error(f"Error in epoch {epoch} evaluation: {e}")
             return {"error": str(e), "epoch": epoch}
     
-    def run_step_evaluation(self, model, epoch: int, step: int, tokenizer, device, model_save_path: str = None) -> Optional[dict]:
+    def run_step_evaluation(self, model, epoch: int, step: int, tokenizer, device, model_save_path: str = None, wandb_logger=None) -> Optional[dict]:
         """
         Run a lightweight evaluation at a specific training step
         
@@ -281,6 +286,7 @@ class TrainingEvaluationIntegration:
             tokenizer: Model tokenizer
             device: Device model is on
             model_save_path: Optional path to save model for evaluation
+            wandb_logger: Optional wandb logger for logging results
             
         Returns:
             Evaluation results dictionary or None if evaluation failed
@@ -311,6 +317,10 @@ class TrainingEvaluationIntegration:
                 epoch=epoch,
                 use_fast_eval=True  # Always use fast evaluation for steps
             )
+            
+            # Log results to wandb
+            if wandb_logger and results:
+                self._log_step_evaluation_results_to_wandb(results, step, epoch, wandb_logger)
             
             # Cleanup temporary files immediately for step evaluations
             try:
@@ -343,3 +353,130 @@ class TrainingEvaluationIntegration:
             
         except Exception as e:
             logger.warning(f"Error finalizing evaluation pipeline: {e}")
+    
+    def _log_evaluation_results_to_wandb(self, results: dict, epoch: int, is_fast: bool, wandb_logger):
+        """Log evaluation results to wandb with proper categorization"""
+        try:
+            import wandb
+            
+            eval_type = "Fast" if is_fast else "Full"
+            prefix = f"Evaluation/{eval_type}"
+            
+            # Log overall evaluation metrics
+            wandb_metrics = {}
+            
+            # BabyLM Pipeline Results
+            if 'babylm_results' in results:
+                babylm_results = results['babylm_results']
+                
+                # 2024 Pipeline (Multimodal) Results
+                if 'pipeline_2024' in babylm_results:
+                    p2024 = babylm_results['pipeline_2024']
+                    for task, score in p2024.items():
+                        if isinstance(score, (int, float)):
+                            wandb_metrics[f"{prefix}/BabyLM_2024/{task}"] = score
+                
+                # 2025 Pipeline (Text) Results  
+                if 'pipeline_2025' in babylm_results:
+                    p2025 = babylm_results['pipeline_2025']
+                    for task, score in p2025.items():
+                        if isinstance(score, (int, float)):
+                            wandb_metrics[f"{prefix}/BabyLM_2025/{task}"] = score
+            
+            # Overall scores
+            if 'overall_score' in results:
+                wandb_metrics[f"{prefix}/Overall_Score"] = results['overall_score']
+            
+            if 'average_score' in results:
+                wandb_metrics[f"{prefix}/Average_Score"] = results['average_score']
+            
+            # BLIMP results
+            if 'blimp_results' in results:
+                blimp = results['blimp_results']
+                if isinstance(blimp, dict):
+                    for category, score in blimp.items():
+                        if isinstance(score, (int, float)):
+                            wandb_metrics[f"{prefix}/BLIMP/{category}"] = score
+            
+            # GLUE results
+            if 'glue_results' in results:
+                glue = results['glue_results']
+                if isinstance(glue, dict):
+                    for task, score in glue.items():
+                        if isinstance(score, (int, float)):
+                            wandb_metrics[f"{prefix}/GLUE/{task}"] = score
+            
+            # Multimodal results
+            if 'multimodal_results' in results:
+                mm = results['multimodal_results']
+                if isinstance(mm, dict):
+                    for task, score in mm.items():
+                        if isinstance(score, (int, float)):
+                            wandb_metrics[f"{prefix}/Multimodal/{task}"] = score
+            
+            # QA results
+            if 'qa_results' in results:
+                qa = results['qa_results']
+                if isinstance(qa, dict):
+                    for task, score in qa.items():
+                        if isinstance(score, (int, float)):
+                            wandb_metrics[f"{prefix}/QA/{task}"] = score
+            
+            # Evaluation metadata
+            wandb_metrics[f"{prefix}/Epoch"] = epoch
+            wandb_metrics[f"{prefix}/Evaluation_Type"] = "fast" if is_fast else "full"
+            
+            # Log all metrics at once
+            if wandb_metrics:
+                wandb.log(wandb_metrics)
+                logger.info(f"✅ Logged {len(wandb_metrics)} evaluation metrics to wandb for epoch {epoch}")
+            else:
+                logger.warning(f"⚠️  No evaluation metrics found to log for epoch {epoch}")
+                
+        except Exception as e:
+            logger.error(f"Failed to log evaluation results to wandb: {e}")
+    
+    def _log_step_evaluation_results_to_wandb(self, results: dict, step: int, epoch: int, wandb_logger):
+        """Log step evaluation results to wandb with proper categorization"""
+        try:
+            import wandb
+            
+            prefix = "Evaluation/Step"
+            wandb_metrics = {}
+            
+            # Log step evaluation results (typically a subset of full evaluation)
+            if 'step_results' in results:
+                step_results = results['step_results']
+                for task, score in step_results.items():
+                    if isinstance(score, (int, float)):
+                        wandb_metrics[f"{prefix}/{task}"] = score
+            
+            # Quick evaluation metrics
+            if 'quick_eval' in results:
+                quick = results['quick_eval']
+                if isinstance(quick, dict):
+                    for metric, value in quick.items():
+                        if isinstance(value, (int, float)):
+                            wandb_metrics[f"{prefix}/Quick/{metric}"] = value
+            
+            # Performance metrics for step evaluation
+            if 'performance' in results:
+                perf = results['performance']
+                if isinstance(perf, dict):
+                    for metric, value in perf.items():
+                        if isinstance(value, (int, float)):
+                            wandb_metrics[f"{prefix}/Performance/{metric}"] = value
+            
+            # Evaluation metadata
+            wandb_metrics[f"{prefix}/Step"] = step
+            wandb_metrics[f"{prefix}/Epoch"] = epoch
+            
+            # Log all metrics at once
+            if wandb_metrics:
+                wandb.log(wandb_metrics)
+                logger.info(f"✅ Logged {len(wandb_metrics)} step evaluation metrics to wandb for step {step}")
+            else:
+                logger.warning(f"⚠️  No step evaluation metrics found to log for step {step}")
+                
+        except Exception as e:
+            logger.error(f"Failed to log step evaluation results to wandb: {e}")

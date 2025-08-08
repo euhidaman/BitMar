@@ -5,6 +5,7 @@ Compatible with existing BitMar training pipeline
 """
 
 import torch
+import torch.nn.functional as F
 import time
 import psutil
 import os
@@ -283,7 +284,7 @@ class TinyModelEvaluator:
         
         return metrics
     
-    def run_step_evaluation(self, step: int, loss: float, outputs: Dict, sample_inputs: Dict, loss_history: List[float]) -> Dict[str, Any]:
+    def run_step_evaluation(self, step: int, loss: float, outputs: Dict, sample_inputs: Dict, loss_history: List[float], wandb_logger=None) -> Dict[str, Any]:
         """Run comprehensive tiny model evaluation at step level"""
         if not self.should_evaluate_at_step(step):
             return {}
@@ -328,6 +329,10 @@ class TinyModelEvaluator:
             # Log key metrics
             self._log_evaluation_summary(results, step)
             
+            # Log to wandb if available
+            if wandb_logger:
+                self._log_step_results_to_wandb(results, step, wandb_logger)
+            
             logger.info(f"✅ Tiny model evaluation completed at step {step}")
             
         except Exception as e:
@@ -336,7 +341,7 @@ class TinyModelEvaluator:
         
         return results
     
-    def run_epoch_evaluation(self, epoch: int, epoch_metrics: Dict) -> Dict[str, Any]:
+    def run_epoch_evaluation(self, epoch: int, epoch_metrics: Dict, wandb_logger=None) -> Dict[str, Any]:
         """Run tiny model evaluation at epoch level"""
         if not self.should_evaluate_at_epoch(epoch):
             return {}
@@ -372,6 +377,10 @@ class TinyModelEvaluator:
                         epoch_summary[eval_type][metric] = np.mean(values)
                 
                 results['epoch_summary'] = epoch_summary
+            
+            # Log to wandb if available
+            if wandb_logger:
+                self._log_epoch_results_to_wandb(results, epoch, wandb_logger)
             
             logger.info(f"✅ Tiny model epoch evaluation completed at epoch {epoch}")
             
@@ -913,6 +922,119 @@ class TinyModelEvaluator:
         except Exception as e:
             logger.error(f"Failed to generate tiny model report: {e}")
             return f"Report generation failed: {e}"
+    
+    def _log_step_results_to_wandb(self, results: Dict, step: int, wandb_logger):
+        """Log step evaluation results to wandb"""
+        try:
+            import wandb
+            
+            wandb_metrics = {}
+            evaluations = results.get('evaluations', {})
+            
+            # Parameter efficiency metrics
+            if 'parameter_efficiency' in evaluations:
+                pe = evaluations['parameter_efficiency']
+                for metric, value in pe.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"TinyModel/Parameter_Efficiency/{metric}"] = value
+            
+            # Memory efficiency metrics
+            if 'memory_efficiency' in evaluations:
+                me = evaluations['memory_efficiency']
+                for metric, value in me.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"TinyModel/Memory_Efficiency/{metric}"] = value
+            
+            # Inference speed metrics
+            if 'inference_speed' in evaluations:
+                ie = evaluations['inference_speed']
+                for metric, value in ie.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"TinyModel/Inference_Speed/{metric}"] = value
+            
+            # Convergence speed metrics
+            if 'convergence_speed' in evaluations:
+                cs = evaluations['convergence_speed']
+                for metric, value in cs.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"TinyModel/Convergence/{metric}"] = value
+            
+            # Episodic efficiency metrics
+            if 'episodic_efficiency' in evaluations:
+                ee = evaluations['episodic_efficiency']
+                for metric, value in ee.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"TinyModel/Episodic/{metric}"] = value
+            
+            # Cross-modal efficiency metrics
+            if 'cross_modal_efficiency' in evaluations:
+                cme = evaluations['cross_modal_efficiency']
+                for metric, value in cme.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"TinyModel/CrossModal/{metric}"] = value
+            
+            # SD card readiness metrics
+            if 'sd_card_readiness' in evaluations:
+                sdr = evaluations['sd_card_readiness']
+                for metric, value in sdr.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"TinyModel/Deployment/{metric}"] = value
+            
+            # Overall efficiency score
+            wandb_metrics[f"TinyModel/Overall/evaluation_step"] = step
+            
+            # Log all metrics
+            if wandb_metrics:
+                wandb.log(wandb_metrics)
+                logger.info(f"✅ Logged {len(wandb_metrics)} tiny model metrics to wandb for step {step}")
+            
+        except Exception as e:
+            logger.error(f"Failed to log tiny model step results to wandb: {e}")
+    
+    def _log_epoch_results_to_wandb(self, results: Dict, epoch: int, wandb_logger):
+        """Log epoch evaluation results to wandb"""
+        try:
+            import wandb
+            
+            wandb_metrics = {}
+            epoch_summary = results.get('epoch_summary', {})
+            
+            # Log averaged metrics for the epoch
+            for eval_type, metrics in epoch_summary.items():
+                for metric, value in metrics.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"TinyModel/Epoch_{eval_type}/{metric}"] = value
+            
+            # Overall epoch metrics
+            wandb_metrics[f"TinyModel/Epoch/evaluation_epoch"] = epoch
+            
+            # Calculate summary scores
+            if epoch_summary:
+                # Overall efficiency score (combine parameter, memory, and speed)
+                efficiency_scores = []
+                if 'parameter_efficiency' in epoch_summary:
+                    pe_score = epoch_summary['parameter_efficiency'].get('parameter_efficiency_score', 0)
+                    efficiency_scores.append(pe_score)
+                
+                if 'memory_efficiency' in epoch_summary:
+                    me_score = epoch_summary['memory_efficiency'].get('memory_efficiency_score', 0)
+                    efficiency_scores.append(me_score)
+                
+                if 'inference_speed' in epoch_summary:
+                    ie_score = epoch_summary['inference_speed'].get('tokens_per_second', 0) / 1000  # Normalize
+                    efficiency_scores.append(ie_score)
+                
+                if efficiency_scores:
+                    overall_efficiency = np.mean(efficiency_scores)
+                    wandb_metrics[f"TinyModel/Epoch/overall_efficiency_score"] = overall_efficiency
+            
+            # Log all metrics
+            if wandb_metrics:
+                wandb.log(wandb_metrics)
+                logger.info(f"✅ Logged {len(wandb_metrics)} tiny model epoch metrics to wandb for epoch {epoch}")
+            
+        except Exception as e:
+            logger.error(f"Failed to log tiny model epoch results to wandb: {e}")
 
 
 class TinyModelBabyLMEvaluator:

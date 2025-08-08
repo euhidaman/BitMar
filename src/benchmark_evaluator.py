@@ -27,6 +27,7 @@ try:
     TINY_BENCHMARKS_AVAILABLE = True
 except ImportError:
     TINY_BENCHMARKS_AVAILABLE = False
+    tb = None
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,11 @@ class BenchmarkEvaluator:
                 )
                 
                 # Evaluate using tinyBenchmarks IRT methods
-                benchmark_results = tb.evaluate(predictions, benchmark)
+                if tb is not None:
+                    benchmark_results = tb.evaluate(predictions, benchmark)
+                else:
+                    # Fallback evaluation when tinyBenchmarks is not available
+                    benchmark_results = {benchmark: {'irt': 0.0, 'pirt': 0.0, 'gpirt': 0.0}}
                 
                 # Store results
                 results['benchmarks'][benchmark] = {
@@ -361,7 +366,7 @@ class BenchmarkEvaluator:
             logger.error(f"❌ Episodic memory benchmarks failed: {e}")
             return {'error': str(e)}
     
-    def run_comprehensive_benchmark_evaluation(self, step: int, epoch: int) -> Dict[str, Any]:
+    def run_comprehensive_benchmark_evaluation(self, step: int, epoch: int, wandb_logger=None) -> Dict[str, Any]:
         """Run all benchmark evaluations"""
         if not self.enabled:
             return {'disabled': True}
@@ -396,6 +401,10 @@ class BenchmarkEvaluator:
         
         # Calculate overall benchmark score
         results['overall_benchmark_score'] = self._calculate_overall_score(results['benchmarks'])
+        
+        # Log to wandb if available
+        if wandb_logger:
+            self._log_benchmark_results_to_wandb(results, step, epoch, wandb_logger)
         
         # Save results
         self._save_benchmark_results(results)
@@ -1222,3 +1231,78 @@ class BenchmarkEvaluator:
         ])
         
         return "\n".join(summary_lines)
+    
+    def _log_benchmark_results_to_wandb(self, results: Dict, step: int, epoch: int, wandb_logger):
+        """Log benchmark evaluation results to wandb"""
+        try:
+            import wandb
+            
+            wandb_metrics = {}
+            benchmarks = results.get('benchmarks', {})
+            
+            # tinyBenchmarks (official package) results
+            if 'tiny_benchmarks' in benchmarks:
+                tb_results = benchmarks['tiny_benchmarks']
+                if 'benchmarks' in tb_results:
+                    for benchmark, scores in tb_results['benchmarks'].items():
+                        if isinstance(scores, dict):
+                            for metric, value in scores.items():
+                                if isinstance(value, (int, float)) and metric != 'predictions':
+                                    wandb_metrics[f"Benchmarks/tinyBenchmarks/{benchmark}/{metric}"] = value
+                
+                # Overall tinyBenchmarks scores
+                if 'overall_scores' in tb_results:
+                    for metric, value in tb_results['overall_scores'].items():
+                        if isinstance(value, (int, float)):
+                            wandb_metrics[f"Benchmarks/tinyBenchmarks/Overall/{metric}"] = value
+            
+            # WildChat TinyLLM results
+            if 'wildchat_tinyllm' in benchmarks:
+                wc_results = benchmarks['wildchat_tinyllm']
+                for metric, value in wc_results.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"Benchmarks/WildChat_TinyLLM/{metric}"] = value
+            
+            # Legacy benchmark results
+            if 'tiny_mmlu' in benchmarks:
+                mmlu_results = benchmarks['tiny_mmlu']
+                for metric, value in mmlu_results.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"Benchmarks/Legacy_tinyMMLU/{metric}"] = value
+            
+            if 'wildchat_50m' in benchmarks:
+                wc50_results = benchmarks['wildchat_50m']
+                for metric, value in wc50_results.items():
+                    if isinstance(value, (int, float)):
+                        wandb_metrics[f"Benchmarks/Legacy_WildChat/{metric}"] = value
+                    elif isinstance(value, dict):
+                        for sub_metric, sub_value in value.items():
+                            if isinstance(sub_value, (int, float)):
+                                wandb_metrics[f"Benchmarks/Legacy_WildChat/{metric}_{sub_metric}"] = sub_value
+            
+            # Episodic memory benchmark results
+            if 'episodic_memory' in benchmarks:
+                em_results = benchmarks['episodic_memory']
+                for category, metrics in em_results.items():
+                    if isinstance(metrics, dict):
+                        for metric, value in metrics.items():
+                            if isinstance(value, (int, float)):
+                                wandb_metrics[f"Benchmarks/Episodic_Memory/{category}/{metric}"] = value
+            
+            # Overall benchmark score
+            if 'overall_benchmark_score' in results:
+                wandb_metrics[f"Benchmarks/Overall/benchmark_score"] = results['overall_benchmark_score']
+            
+            # Metadata
+            wandb_metrics[f"Benchmarks/Meta/evaluation_step"] = step
+            wandb_metrics[f"Benchmarks/Meta/evaluation_epoch"] = epoch
+            
+            # Log all metrics
+            if wandb_metrics:
+                wandb.log(wandb_metrics)
+                logger.info(f"✅ Logged {len(wandb_metrics)} benchmark metrics to wandb for step {step}")
+            else:
+                logger.warning(f"⚠️  No benchmark metrics found to log for step {step}")
+                
+        except Exception as e:
+            logger.error(f"Failed to log benchmark results to wandb: {e}")

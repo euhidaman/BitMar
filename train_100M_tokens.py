@@ -943,7 +943,8 @@ class TokenAwareTrainer:
                 epoch=self.current_epoch,
                 step=self.global_step,
                 tokenizer=self.model.tokenizer,
-                device=self.device
+                device=self.device,
+                wandb_logger=self.wandb_logger if self.use_wandb else None
             )
             
             # Log results to wandb
@@ -1010,8 +1011,17 @@ class TokenAwareTrainer:
                 loss=self.loss_history[-1] if self.loss_history else 1.0,
                 outputs={'loss': torch.tensor(self.loss_history[-1] if self.loss_history else 1.0)},
                 sample_inputs=sample_inputs,
-                loss_history=self.loss_history
+                loss_history=self.loss_history,
+                wandb_logger=self.wandb_logger if self.use_wandb else None
             )
+            
+            # Run epoch evaluation if appropriate
+            if hasattr(self.tiny_model_evaluator, 'run_epoch_evaluation'):
+                epoch_results = self.tiny_model_evaluator.run_epoch_evaluation(
+                    epoch=self.current_epoch,
+                    epoch_metrics={'train_loss': self.loss_history[-1] if self.loss_history else 1.0},
+                    wandb_logger=self.wandb_logger if self.use_wandb else None
+                )
             
             # Run BabyLM tiny model evaluation if available
             if self.tiny_babylm_evaluator is not None:
@@ -1067,7 +1077,8 @@ class TokenAwareTrainer:
             # Run benchmark evaluation
             benchmark_results = self.benchmark_evaluator.run_comprehensive_benchmark_evaluation(
                 step=self.global_step,
-                epoch=self.current_epoch
+                epoch=self.current_epoch,
+                wandb_logger=self.wandb_logger if self.use_wandb else None
             )
             
             # Log key results to wandb if available
@@ -1177,7 +1188,7 @@ class TokenAwareTrainer:
             'tokens_in_epoch': 0
         }
 
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch} | Tokens: {self.tokens_processed:,}")
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}")
 
         for batch_idx, batch in enumerate(progress_bar):
             # Count tokens in this batch for logging purposes
@@ -1877,7 +1888,8 @@ class TokenAwareTrainer:
                         logger.info(f"🧪 Running epoch-based evaluation for epoch {epoch + 1}")
                         eval_results = self.evaluation_integration.run_epoch_evaluation(
                             epoch=epoch + 1,  # Use 1-indexed epochs for evaluation
-                            model_save_path=str(self.checkpoint_dir / "evaluation_models")
+                            model_save_path=str(self.checkpoint_dir / "evaluation_models"),
+                            wandb_logger=self.wandb_logger if self.use_wandb else None
                         )
                         
                         if eval_results is not None:
