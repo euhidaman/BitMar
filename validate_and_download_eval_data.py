@@ -21,16 +21,96 @@ logger = logging.getLogger(__name__)
 class EvaluationDataValidator:
     """Validates and downloads missing evaluation data"""
 
-    def __init__(self, base_path: str = "D:/BabyLM"):
-        self.base_path = Path(base_path)
-        self.eval_data_path = self.base_path / "evaluation_data"
-        self.pipeline_2024_path = self.base_path / "evaluation-pipeline-2024"
-        self.pipeline_2025_path = self.base_path / "evaluation-pipeline-2025"
+    def __init__(self, base_path: str = None):
+        # Auto-detect the correct base path if not provided
+        if base_path is None:
+            # Check if we're in a workspace environment (like RunPod/Docker)
+            if os.path.exists('/workspace'):
+                base_path = '/workspace'
+            # Check if we're in the BitMar directory already
+            elif os.path.exists('./configs') and os.path.exists('./src'):
+                base_path = '..'  # Go up one level to find evaluation_data
+            # Check if evaluation_data exists in current directory
+            elif os.path.exists('./evaluation_data'):
+                base_path = '.'
+            # Check if we're already in the parent directory
+            elif os.path.exists('./BitMar') and os.path.exists('./evaluation_data'):
+                base_path = '.'
+            # Default fallback
+            else:
+                base_path = "."
+
+        self.base_path = Path(base_path).resolve()
+
+        # Look for evaluation_data in multiple possible locations
+        possible_eval_paths = [
+            self.base_path / "evaluation_data",
+            self.base_path / "BitMar" / "evaluation_data",
+            self.base_path / ".." / "evaluation_data",
+            Path("/workspace/evaluation_data"),
+            Path("./evaluation_data"),
+            Path("../evaluation_data")
+        ]
+
+        # Find existing evaluation_data or use the first logical location
+        self.eval_data_path = None
+        for path in possible_eval_paths:
+            if path.exists():
+                self.eval_data_path = path.resolve()
+                logger.info(f"Found existing evaluation_data at: {self.eval_data_path}")
+                break
+
+        # If no existing path found, use the most appropriate location
+        if self.eval_data_path is None:
+            if os.path.exists('/workspace'):
+                self.eval_data_path = Path("/workspace/evaluation_data")
+            else:
+                self.eval_data_path = self.base_path / "evaluation_data"
+            logger.info(f"Using evaluation_data location: {self.eval_data_path}")
+
+        # Look for pipeline directories
+        possible_pipeline_paths = [
+            self.base_path / "evaluation-pipeline-2024",
+            self.base_path / "BitMar" / "evaluation-pipeline-2024",
+            self.base_path / ".." / "evaluation-pipeline-2024",
+            Path("/workspace/evaluation-pipeline-2024")
+        ]
+
+        self.pipeline_2024_path = None
+        for path in possible_pipeline_paths:
+            if path.exists():
+                self.pipeline_2024_path = path.resolve()
+                break
+
+        possible_pipeline_2025_paths = [
+            self.base_path / "evaluation-pipeline-2025",
+            self.base_path / "BitMar" / "evaluation-pipeline-2025",
+            self.base_path / ".." / "evaluation-pipeline-2025",
+            Path("/workspace/evaluation-pipeline-2025")
+        ]
+
+        self.pipeline_2025_path = None
+        for path in possible_pipeline_2025_paths:
+            if path.exists():
+                self.pipeline_2025_path = path.resolve()
+                break
 
         # Create directories if they don't exist
-        self.eval_data_path.mkdir(exist_ok=True)
-        (self.eval_data_path / "fast_eval").mkdir(exist_ok=True)
-        (self.eval_data_path / "full_eval").mkdir(exist_ok=True)
+        try:
+            self.eval_data_path.mkdir(parents=True, exist_ok=True)
+            (self.eval_data_path / "fast_eval").mkdir(exist_ok=True)
+            (self.eval_data_path / "full_eval").mkdir(exist_ok=True)
+            logger.info(f"✅ Evaluation data directories created/verified at: {self.eval_data_path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to create evaluation data directories: {e}")
+            raise
+
+        # Log discovered paths
+        logger.info(f"📁 Path Discovery:")
+        logger.info(f"  • Base path: {self.base_path}")
+        logger.info(f"  • Evaluation data: {self.eval_data_path}")
+        logger.info(f"  • 2024 pipeline: {self.pipeline_2024_path if self.pipeline_2024_path else 'Not found'}")
+        logger.info(f"  • 2025 pipeline: {self.pipeline_2025_path if self.pipeline_2025_path else 'Not found'}")
 
     def check_required_files(self) -> Dict[str, Dict[str, bool]]:
         """Check which required evaluation files exist"""
