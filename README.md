@@ -3,76 +3,19 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
-BitMar is a **Vision-Language Episodic Memory Transformer** that combines BitNet-quantized text processing, DiNOv2 vision encoding, and Larimar's episodic memory mechanism. The model maintains cross-modal episodic memories to improve zero-shot image-language understanding.
-
-## 🛠️ Recent Fixes & Enhancements
-
-### ✅ Enhanced Memory Visualization (NEW!)
-- **Memory Evolution Tracking**: Track how memory slots evolve over training epochs
-- **Memory Diversity Metrics**: Monitor memory slot specialization and diversity
-- **Access Pattern Analysis**: Visualize which memory slots are used most frequently
-- **Cross-Modal Memory Distribution**: Track text-only vs multimodal memory specialization
-- **Learning Trajectory Visualization**: 2D visualization of memory learning progress
-- **WandB Integration**: All visualizations automatically logged to Weights & Biases
-- **Configurable Frequency**: Customizable snapshot and visualization frequencies
-
-### ✅ Fixed Training Issues
-- **Fixed NameError**: Resolved `input_ids` not defined error in training loop
-- **Enhanced Error Handling**: Added try-catch blocks for visualization and attention analysis
-- **Safe Memory Heatmaps**: Fixed reshape issues for non-square memory slots
-- **Robust Logging**: Improved wandb logger with better error handling
-
-### � Enhanced Wandb Logging (`src/wandb_logger.py`)
-- **Properly Labeled Axes**: All plots have clear X/Y axis labels as requested
-- **Categorized Metrics**: Organized into Training/, Memory/, Attention/, Features/, Quantization/, Gradients/
-- **Comprehensive Visualizations**: Memory heatmaps, attention distributions, quantization plots
-- **Safe Plotting**: Error handling for visualization creation
-
-### 🧠 Attention Head Analysis (`src/attention_visualizer.py`) 
-- **Lo-fit Inspired**: Attention head tracking methodology based on lo-fit repository analysis
-- **Head Importance Scoring**: Track individual attention heads during training
-- **Timeline Visualizations**: Attention evolution plots over training steps
-- **Top-K Head Selection**: Save and analyze most important attention heads
-- **Cross-modal Analysis**: Specialized analysis for multimodal attention patterns
-
-## �🏗️ Architecture
-
-```text
-Text Input → BitNet Text Encoder → Text Latent (768D)
-                                        ↓
-Vision Input → Quantized ViT → Vision Latent (768D)  
-                                        ↓
-                            Cross-Modal Fusion
-                                        ↓
-                            Multimodal Latent (768D)
-                                        ↓
-                         Episodic Memory (512 slots)
-                                        ↓
-                         BitNet Decoder → Generated Text
-```
+BitMar is a **Vision-Language Episodic Memory Transformer** designed for the BabyLM Challenge. It combines BitNet-quantized text processing, DiNOv2 vision encoding, and episodic memory mechanisms to achieve efficient multimodal understanding with exactly 100M tokens.
 
 ## 🌟 Key Features
 
+- **Token-Constrained Training**: Exactly 100M tokens with perfect alignment
 - **BitNet Quantization**: 1.58-bit quantized text encoder/decoder for efficient inference
-- **Vision Processing**: Quantized Vision Transformer using pre-computed DiNOv2 features
-- **Episodic Memory**: Larimar-inspired memory mechanism for cross-modal associations
-- **Memory Visualization**: Comprehensive tracking and visualization of episodic memory evolution
-- **Enhanced Logging**: Comprehensive wandb logging with proper axis labels and categorization
-- **Attention Analysis**: Lo-fit style attention head analysis and visualization
-- **BabyLM Optimized**: Trained within BabyLM constraints (10 epochs max)
-- **Cloud-Ready**: Designed for RunPod GPU training with local CPU testing
+- **Episodic Memory**: Cross-modal memory system for visual-text associations
+- **Comprehensive Logging**: Detailed WandB visualizations and metrics tracking
+- **Automatic Evaluation**: Built-in evaluation pipelines for both 2024 and 2025 tracks
+- **Hugging Face Integration**: Automatic model uploads after each epoch
+- **Carbon Tracking**: Environmental impact monitoring
 
-## 📋 Requirements
-
-- Python 3.9+
-- PyTorch 2.0+
-- CUDA-capable GPU (for training on RunPod)
-- 16GB+ RAM recommended
-- Wandb account (for enhanced logging)
-
-## 🚀 Quick Start
-
-### 1. Installation
+## 🛠️ Installation
 
 ```bash
 git clone <your-repo-url>
@@ -82,474 +25,185 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. CPU Compatibility Test
+## 🚀 Training Commands
+
+### Basic Training (100M Tokens)
 
 ```bash
-python test_cpu_compatibility.py
+# Standard training with all features enabled
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
+
+# Training with specific GPU device
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --device cuda:0
+
+# Training with cache rebuild (if dataset changes)
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --rebuild_cache
 ```
 
-### 3. Dataset Compatibility Test
+### Training with Custom Checkpoint Frequency
 
 ```bash
-python test_dataset_compatibility.py
+# Save checkpoint every 1000 steps (in addition to epoch-based saves)
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 1000
+
+# Save checkpoint every 500 steps for frequent monitoring
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --save_every_n_steps 500
 ```
 
-### 4. Training (RunPod/GPU)
+### Training with Evaluation Control
 
 ```bash
-# Full training with wandb logging
-python train_bitmar.py --config configs/bitmar_config.yaml
+# Enable fast evaluation after each epoch (default: enabled)
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --enable_fast_eval
 
-# Quick test training (1 epoch)
-python train_bitmar.py --config configs/bitmar_config.yaml --max_epochs 1 --batch_size 4
+# Disable fast evaluation to speed up training
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --disable_fast_eval
+
+# Enable full evaluation at the end (default: enabled)
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --enable_full_eval
+
+# Disable full evaluation to save time
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --disable_full_eval
+
+# Custom evaluation setup
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml --disable_fast_eval --enable_full_eval
 ```
 
-## 📊 BabyLM Multimodal Dataset
-
-BitMar is designed for the **BabyLM Challenge Multimodal Track**, using the official dataset structure:
-
-### Dataset Components
-
-**Text-only Data:**
-- `train_50M.zip` - 50M tokens of text-only training data
-
-**Image-Caption Pairs:**
-- **Captions**: `cc_3M_captions.json` - Conceptual Captions 3M captions
-- **Visual Features**: Precomputed DiNOv2 embeddings (768D)
-  - `cc_3M_dino_v2_states_1of2.npy` - First half of visual embeddings
-  - `cc_3M_dino_v2_states_2of2.npy` - Second half of visual embeddings
-
-### Data Sources
-- **Localized Narratives**: OpenImage + MSCOCO training sets
-- **Conceptual Captions 3M**: Training split only
-- **Visual Embeddings**: DiNOv2 ViT-Base model (`facebook/dinov2-base`)
-
-### Dataset Setup
-
-1. **Automatic Setup** (if you have the files):
-```bash
-python download_babylm_data.py
-```
-
-2. **Manual Download** (recommended):
-   - Download the files to `../babylm_dataset/`
-   - Ensure files match the expected structure
-
-3. **Test Dataset** (for development):
-```bash
-python download_babylm_data.py --test
-```
-
-### Data Verification
-```bash
-python test_dataset_compatibility.py
-```
-
-## 📊 Model Architecture Details
-
-### BitNet Text Processing
-- **Encoder**: 1.58-bit quantized transformer (based on BitNet b1.58)
-- **Decoder**: 1.58-bit quantized GPT-style decoder
-- **Quantization**: Ternary weights {-1, 0, +1} with 8-bit activations
-
-### Vision Processing
-- **Input**: Pre-computed DiNOv2 features (768D)
-- **Encoder**: Quantized Vision Transformer
-- **Features**: 3M image-caption pairs from BabyLM dataset
-
-### Episodic Memory System
-- **Memory Size**: 512 episodic slots
-- **Content**: Cross-modal (text + vision) episode embeddings
-- **Access**: Attention-based retrieval during inference
-- **Updates**: Gradient-based memory writing during training
-
-### Attention Analysis
-- **Head Selection**: Identifies most important attention heads
-- **Cross-Modal Attention**: Tracks vision-to-text attention patterns
-- **Memory Attention**: Analyzes episodic memory access patterns
-
-## 🔧 Configuration
-
-Key parameters in `configs/bitmar_config.yaml`:
-
-```yaml
-model:
-  # Text processing
-  text_encoder: "microsoft/bitnet-b1.58-large"
-  text_decoder: "microsoft/bitnet-b1.58-large"
-  text_latent_size: 768
-  
-  # Vision processing
-  vision_encoder_dim: 768
-  vision_latent_size: 768
-  vision_quantization: true
-  
-  # Memory system
-  memory_size: 512
-  episode_dim: 768
-  memory_alpha: 0.1
-  
-  # Training
-  learning_rate: 1e-4
-  batch_size: 16
-  max_epochs: 10
-  gradient_clip: 1.0
-
-# Enhanced WandB logging configuration
-wandb:
-  project: "bitmar-babylm"
-  entity: "babylm-ntust-org"
-  log_every_n_steps: 50        # Log metrics every N steps
-  log_attention: true          # Enable attention logging
-  log_memory: true            # Enable memory analysis
-  log_gradients: true         # Enable gradient tracking
-  log_quantization: true      # Enable quantization analysis
-  log_features: true          # Enable feature statistics
-  create_plots: true          # Enable visualization creation
-  plot_attention_heatmaps: true   # Create attention heatmaps
-  plot_memory_usage: true     # Create memory usage plots
-  plot_quantization_dist: true    # Create quantization distribution plots
-
-# Enhanced attention analysis configuration
-attention_analysis:
-  track_top_k: 20            # Track top 20 most important heads
-  log_every_n_steps: 100     # Analyze attention every 100 steps
-  viz_every_n_epochs: 2      # Create visualizations every 2 epochs
-  save_head_patterns: true   # Save attention head patterns
-  analyze_memory_attention: true     # Analyze memory attention
-  analyze_cross_modal: true  # Analyze cross-modal attention
-```
-
-## 📊 Enhanced Logging Features
-
-### Wandb Dashboard Categories
-
-The enhanced logging system organizes metrics into clear categories with proper axis labels:
-
-**Training Metrics:**
-- `Training/Loss` - Training loss over steps
-- `Training/Learning_Rate` - Learning rate schedule
-- `Training/Epoch` - Current epoch
-- `Training/Step` - Global training step
-
-**Memory Analysis:**
-- `Memory/Usage_Mean` - Average memory slot utilization
-- `Memory/Active_Slots_Percentage` - Percentage of active memory slots
-- `Memory/Analysis_Avg_Similarity` - Average similarity between memory slots
-- `Memory/Top_5_Slot_Access` - Access patterns for most used slots
-
-**Attention Patterns:**
-- `Attention/CrossModal_layer_X_Entropy` - Cross-modal attention entropy by layer
-- `Attention/Memory_Mean` - Average memory attention weights
-- `Attention/Memory_Entropy` - Memory attention distribution entropy
-
-**Feature Statistics:**
-- `Features/Text_Mean, Text_Std, Text_Norm` - Text feature statistics
-- `Features/Vision_Mean, Vision_Std, Vision_Norm` - Vision feature statistics
-- `Features/CrossModal_Similarity` - Cross-modal feature similarity
-
-**Quantization Analysis:**
-- `Quantization/WeightScale_*` - BitNet weight scaling factors
-- `Quantization/Sparsity_*` - Sparsity ratios for quantized layers
-- `Quantization/Compression_Ratio` - Model compression achieved
-
-**Gradient Tracking:**
-- `Gradients/Total_Norm` - Overall gradient norm
-- `Gradients/Encoder_Norm` - Text encoder gradient norm
-- `Gradients/Decoder_Norm` - Text decoder gradient norm
-- `Gradients/Fusion_Norm` - Cross-modal fusion gradient norm
-
-### Visualizations Created
-
-**Memory Heatmaps:**
-- Memory slot usage patterns over time
-- Memory age distribution visualization
-- Proper X/Y axis labels (Memory Slot X/Y, Usage Count/Age)
-
-**Attention Analysis:**
-- Attention head importance heatmaps (inspired by lo-fit methodology)
-- Timeline plots showing attention evolution during training
-- Cross-modal attention pattern visualization
-- Individual head attention pattern tracking
-
-**Quantization Plots:**
-- Weight distribution after BitNet quantization
-- Ternary weight statistics (-1, 0, +1)
-- Compression ratio analysis
-
-### Attention Head Analysis Files
-
-The system saves detailed attention analysis files:
-
-- `attention_analysis/top_heads_encoder_step_X.npy` - Top attention heads for encoder
-- `attention_analysis/attention_heads_encoder_step_X.png` - Attention heatmaps
-- `attention_analysis/attention_timeline_step_X.png` - Timeline evolution plots
-- `attention_analysis/reports/` - Comprehensive analysis reports
-
-## 📈 Training Details
-## 🚀 Usage
-
-### Enhanced Training with Logging
+### Environment Variable Control
 
 ```bash
-# Set wandb API key for enhanced logging
-export WANDB_API_KEY="your_api_key_here"
-
-# Train with comprehensive logging and attention analysis
-python train_bitmar.py --config configs/bitmar_config.yaml
-
-# The training will automatically:
-# - Log categorized metrics to wandb with proper axis labels
-# - Create attention head visualizations every 2 epochs
-# - Save memory usage heatmaps
-# - Track quantization statistics
-# - Analyze gradient flows by component
+# Set evaluation flags via environment variables (useful for bash scripts)
+export BITMAR_ENABLE_FAST_EVAL=true
+export BITMAR_ENABLE_FULL_EVAL=false
+python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
 ```
 
-### Post-Training Analysis
+### Complete Training Command with All Options
 
 ```bash
-# Analyze attention heads after training
-python analyze_attention_heads.py --analysis_dir ./attention_analysis --attention_type all
-
-# Generate comprehensive attention reports
-python analyze_attention_heads.py --analysis_dir ./attention_analysis --attention_type encoder --create_report
+python train_100M_tokens.py \
+    --config configs/bitmar_100M_tokens.yaml \
+    --device cuda:0 \
+    --save_every_n_steps 1000 \
+    --enable_fast_eval \
+    --enable_full_eval
 ```
 
-### What Gets Logged
+## 📊 WandB Logging & Visualizations
 
-**Step-level metrics (every 50 steps):**
-- Training loss, learning rate with proper X-axis (steps)
-- Memory usage statistics with slot-wise analysis
-- Attention entropy and concentration metrics
-- Cross-modal similarity scores
-- Gradient norms by component (encoder, decoder, fusion, memory)
-- Feature statistics (text, vision, cross-modal)
+BitMar includes comprehensive logging to Weights & Biases with detailed visualizations and metrics tracking. Here's what gets logged and how to interpret it:
 
-**Epoch-level metrics:**
-- Validation loss and perplexity
-- Epoch summary statistics
-- Model compression ratios
+### 🎯 Training Metrics
 
-**Visualizations (every 2 epochs):**
-- Attention head importance heatmaps (X: heads, Y: importance)
-- Memory usage/age heatmaps (X: slot X, Y: slot Y)
-- Quantization distribution plots (X: weight values, Y: frequency)
-- Attention timeline evolution (X: training steps, Y: attention scores)
+**train/loss**
+- **What**: Cross-entropy loss during training
+- **X-axis**: Training steps
+- **Y-axis**: Loss value
+- **Interpretation**: Should decrease over time; sudden spikes indicate potential issues
 
-### Files Generated
+**train/learning_rate**
+- **What**: Learning rate schedule (cosine annealing with warm restarts)
+- **X-axis**: Training steps
+- **Y-axis**: Learning rate value
+- **Interpretation**: Shows learning rate cycles; restarts help escape local minima
 
-**Attention Analysis:**
-- `attention_analysis/top_heads_encoder_step_X.npy` - Top attention heads
-- `attention_analysis/attention_heads_encoder_step_X.png` - Attention heatmaps  
-- `attention_analysis/attention_timeline_step_X.png` - Timeline plots
-- `attention_analysis/reports/attention_analysis_report.md` - Comprehensive analysis
+**train/cross_modal_similarity**
+- **What**: Cosine similarity between text and vision features
+- **X-axis**: Training steps
+- **Y-axis**: Similarity score (-1 to 1)
+- **Interpretation**: Higher values = better cross-modal alignment; key metric for multimodal understanding
 
-**Training Checkpoints:**
-- `outputs/checkpoints/bitmar_epoch_X.pt` - Model checkpoints
-- `outputs/logs/training.log` - Detailed training logs
-- Wandb dashboard with categorized metrics and visualizations
+### 📊 Token Tracking
 
-## 🛠️ Recent Fixes
+**tokens/processed**
+- **What**: Total number of tokens processed so far
+- **X-axis**: Training steps
+- **Y-axis**: Token count
+- **Interpretation**: Should reach exactly 100M tokens; tracks progress toward target
 
-### Fixed Training Issues ✅
-- **NameError Fix**: Resolved `input_ids` not defined error in training loop
-- **Memory Heatmap Fix**: Fixed reshape issues for non-square memory slot counts
-- **Error Handling**: Added comprehensive try-catch blocks for robustness
-- **Safe Logging**: Improved wandb logger with better error handling
+**tokens/batch_size**
+- **What**: Number of tokens in current batch
+- **X-axis**: Training steps
+- **Y-axis**: Token count per batch
+- **Interpretation**: Shows batch size variation; should be relatively consistent
 
-### Enhanced Visualization ✅
-- **Proper Axis Labels**: All plots now have clearly labeled X and Y axes
-- **Safe Plotting**: Added error handling for matplotlib operations
-- **Memory Layout**: Fixed memory heatmap creation for arbitrary slot counts
-- **Quantization Plots**: Robust quantization distribution visualization
+**token_progress/processed** and **token_progress/target**
+- **What**: Progress tracking toward 100M token goal
+- **X-axis**: Training steps
+- **Y-axis**: Token counts
+- **Interpretation**: Tracks completion percentage
 
-### Configuration Improvements ✅
-- **Missing Keys**: Added default values for missing configuration keys
-- **Safer Access**: Improved configuration key access with defaults
-- **Wandb Integration**: Enhanced wandb configuration options
+### 📈 Epoch-Level Metrics
 
-## 📈 Training Details
+**epoch/train_loss**
+- **What**: Average loss per epoch
+- **X-axis**: Epoch number
+- **Y-axis**: Loss value
+- **Interpretation**: Should show steady decrease across epochs
 
-### BabyLM Dataset
-- **Text**: 3M captions from CC3M dataset
-- **Vision**: Pre-computed DiNOv2 features (768D)
-- **Pairing**: Image-caption pairs for multimodal training
+**epoch/cross_modal_similarity**
+- **What**: Average cross-modal similarity per epoch
+- **X-axis**: Epoch number
+- **Y-axis**: Similarity score
+- **Interpretation**: Should increase as model learns better alignment
 
-### Training Strategy
-1. **Phase 1**: Text-only pretraining (2 epochs)
-2. **Phase 2**: Vision-text alignment (3 epochs)
-3. **Phase 3**: Episodic memory training (5 epochs)
+**epoch/tokens_processed** and **epoch/tokens_in_epoch**
+- **What**: Token consumption tracking per epoch
+- **X-axis**: Epoch number
+- **Y-axis**: Token counts
+- **Interpretation**: Shows token distribution across epochs
 
-### Memory Training
-- **Write Phase**: Store cross-modal episodes during training
-- **Read Phase**: Retrieve relevant episodes for generation
-- **Forgetting**: LRU-based memory slot replacement
+### 🤗 Hugging Face Integration Logs
 
-## 🔍 Attention Analysis Features
+**huggingface/upload_success**
+- **What**: Whether model upload to HF Hub succeeded
+- **X-axis**: Training steps
+- **Y-axis**: Boolean (True/False)
+- **Interpretation**: Tracks upload reliability
 
-### Important Attention Heads
-- **Cross-Modal Heads**: Vision-to-text attention patterns
-- **Memory Heads**: Episodic memory access patterns
-- **Generation Heads**: Text generation attention patterns
+**huggingface/repo_url**
+- **What**: Link to uploaded model repository
+- **Interpretation**: Direct link to view uploaded models
 
-### Visualization
-- Attention heatmaps for cross-modal understanding
-- Memory access patterns over time
-- Head importance rankings
+### 🧪 Evaluation Results
 
-## 💾 Model Outputs
+**epoch_X/eval_2025_success** and **epoch_X/eval_2024_success**
+- **What**: Success status of fast evaluation after each epoch
+- **X-axis**: Training steps
+- **Y-axis**: Boolean (True/False)
+- **Interpretation**: Tracks evaluation pipeline health
 
-### Training Artifacts
-- `checkpoints/`: Model checkpoints (best and last)
-- `logs/`: Training logs and metrics
-- `attention/`: Attention analysis results
-- `memory/`: Episodic memory visualizations
+**final/eval_2025_success** and **final/eval_2024_success**
+- **What**: Success status of full evaluation at training end
+- **Interpretation**: Final model evaluation results
 
-### Evaluation Metrics
-- **Cross-Modal Retrieval**: Image-text matching accuracy
-- **Generation Quality**: BLEU, ROUGE scores
-- **Memory Efficiency**: Memory access patterns
-- **Quantization Quality**: BitNet compression metrics
+### 🔧 Optional Advanced Metrics
 
-## 🌐 RunPod Training Guide
+The following comprehensive metrics are **now actively logged** to WandB during training:
 
-### Setup on RunPod
-1. **Instance**: RTX 4090 or A100 GPU pod
-2. **Image**: PyTorch 2.0+ with CUDA 11.8+
-3. **Storage**: 50GB+ for dataset and checkpoints
+**Memory Analysis**
+- **Memory/Usage_Mean, Memory/Usage_Max, Memory/Usage_Min**: Episodic memory slot utilization statistics
+- **Memory/Active_Slots_Percentage**: Percentage of memory slots being actively used  
+- **Memory/Analysis_Avg_Similarity**: Average similarity between active memory slots (lower = more diverse)
+- **Memory/Top_1_Slot_Access through Memory/Top_5_Slot_Access**: Access frequency for most-used memory slots
 
-### Training Commands
-```bash
-# Clone and setup
-git clone <your-repo-url>
-cd BitMar
-pip install -r requirements.txt
+**Attention Analysis**
+- **Attention/CrossModal_layer_X_Mean, Attention/CrossModal_layer_X_Max**: Cross-modal attention weights by layer
+- **Attention/CrossModal_layer_X_Entropy**: Attention distribution entropy (lower = more focused)
+- **Attention/Memory_Mean, Attention/Memory_Max, Attention/Memory_Entropy**: Memory attention patterns
 
-# Download dataset (if not present)
-python download_babylm_data.py
+**Quantization Metrics** ⚡
+- **Quantization/WeightScale_[module_name]**: BitNet weight scaling factors for each quantized module
+- **Quantization/Zeros_Ratio_[module_name], Quantization/Ones_Ratio_[module_name], Quantization/NegOnes_Ratio_[module_name]**: Distribution of ternary weights {-1, 0, +1}
+- **Quantization/Sparsity_[module_name]**: Percentage of zero weights (30-60% typical for BitNet)
 
-# Start training with wandb
-export WANDB_API_KEY="5fba3726e4e32540d9fcba403f880dfaad983051"
-python train_bitmar.py --config configs/bitmar_config.yaml
-```
+**Gradient Analysis**
+- **Gradients/Total_Norm**: L2 norm of all gradients (monitor for explosion/vanishing)
+- **Gradients/Encoder_Norm, Gradients/Decoder_Norm, Gradients/Fusion_Norm, Gradients/Memory_Norm**: Component-wise gradient norms
 
-## 📚 Research Context
+**Feature Statistics**
+- **Features/Text_Mean, Features/Text_Std, Features/Text_Norm**: Text feature representation statistics
+- **Features/Vision_Mean, Features/Vision_Std, Features/Vision_Norm**: Vision feature statistics  
+- **Features/Episode_Mean, Features/Episode_Std, Features/Episode_Norm**: Episodic memory feature statistics
 
-### Motivation
-Grounding language in vision requires linking to past visual experiences. Traditional approaches lack persistent memory of visual-text associations. BitMar addresses this through:
-
-1. **Episodic Memory**: Concrete visual-text associations storage
-2. **Quantization**: Efficient inference through BitNet compression
-3. **Cross-Modal Understanding**: Joint vision-language reasoning
-
-### Benefits
-- **Efficiency**: 1.58-bit quantization enables local deployment
-- **Interpretability**: Attention analysis reveals reasoning patterns
-- **Adaptability**: One-shot episodic memory updates
-- **Performance**: Strong zero-shot image-language tasks
-
-### Cognitive Alignment
-The episodic memory mechanism aligns with cognitive theories of grounding, where language understanding relies on recalled sensory experiences.
-
-## 🎯 Evaluation Tasks
-
-### Zero-Shot Capabilities
-- **Visual Question Answering**: Answer questions about images
-- **Image Captioning**: Generate descriptions for novel images
-- **Cross-Modal Retrieval**: Find relevant images for text queries
-
-### Memory Analysis
-- **Episodic Recall**: Retrieve similar visual experiences
-- **Memory Efficiency**: Utilization of memory slots
-- **Forgetting Patterns**: Memory replacement strategies
-
-## 🔬 Technical Implementation
-
-### Quantization Details
-- **Weights**: Ternary quantization {-1, 0, +1}
-- **Activations**: 8-bit integer quantization
-- **Gradients**: Full precision during training
-
-### Memory Implementation
-- **Storage**: Key-value memory with attention-based access
-- **Updates**: Gradient-based memory slot updates
-- **Retrieval**: Soft attention over memory slots
-
-## � Memory Visualization
-
-BitMar includes comprehensive memory visualization capabilities that track and visualize episodic memory evolution throughout training.
-
-### Available Visualizations
-
-1. **Memory Evolution Heatmap**: Shows how individual memory slots change over training epochs
-2. **Memory Diversity & Specialization**: Tracks how memory slots become specialized for different types of content
-3. **Memory Access Patterns**: Visualizes which memory slots are accessed most frequently
-4. **Cross-Modal Memory Distribution**: Shows the balance between text-only and multimodal memory usage
-5. **Learning Trajectory**: 2D visualization of memory learning progress using PCA
-
-### Configuration
-
-Enable memory visualization in your config file:
-
-```yaml
-wandb:
-  log_memory_evolution: true
-  plot_memory_evolution_heatmap: true
-  plot_memory_diversity: true
-  plot_memory_access_patterns: true
-  memory_visualization_frequency: 500
-  memory_snapshot_frequency: 100
-  
-  track_memory_metrics:
-    - "memory_diversity_score"
-    - "memory_specialization_score"
-    - "memory_usage_entropy"
-    - "cross_modal_memory_ratio"
-```
-
-### Key Metrics Tracked
-
-- **Diversity Score**: How different memory slots are from each other (higher = more diverse)
-- **Specialization Score**: How concentrated each slot's activation is (higher = more specialized)
-- **Usage Entropy**: Distribution of memory slot usage (higher = more balanced usage)
-- **Cross-Modal Ratio**: Proportion of text-only vs multimodal memory specialization
-
-### Testing Memory Visualization
-
-```bash
-python test_memory_visualization.py
-```
-
-This will create test visualizations in the `test_memory_plots/` directory and validate the integration.
-
-## �🐛 Troubleshooting
-
-### Common Issues
-1. **CUDA OOM**: Reduce batch size in config
-2. **Dataset Missing**: Run `download_babylm_data.py`
-3. **Quantization Errors**: Check PyTorch version compatibility
-
-### CPU Testing
-- Use `test_cpu_compatibility.py` for local testing
-- Reduced model size for CPU inference
-- Memory-efficient attention computation
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **BitNet**: Microsoft Research for 1-bit LLM quantization
-- **Larimar**: IBM Research for episodic memory mechanisms
-- **DiNOv2**: Meta AI for self-supervised vision features
-- **BabyLM**: EMNLP 2024 challenge for multimodal datasets
-
-## 📞 Contact
-
-For questions about this implementation, please open an issue or contact the development team.
-
----
-
-**Note**: This model is designed for research purposes and BabyLM challenge participation. For production use, additional optimization and validation may be required.
+> **Note**: These comprehensive metrics are logged every 100 training steps alongside the basic training metrics. This provides deep insights into model behavior, quantization efficiency, and memory utilization patterns.

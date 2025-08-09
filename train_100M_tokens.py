@@ -1190,29 +1190,78 @@ class TokenAwareTrainer:
 
                 # Enhanced wandb logging
                 if self.use_wandb and self.global_step % 100 == 0:
-                    log_dict = {
-                        'train/loss': loss.item(),
-                        'train/learning_rate': self.optimizer.param_groups[0]['lr'],
-                        'tokens/processed': self.tokens_processed,
-                        'tokens/batch_size': batch_tokens,
-                        'step': self.global_step
-                    }
-                    
-                    # Only add similarity if it was computed
-                    if outputs.get('text_features') is not None and outputs.get('vision_latent') is not None:
+                    # Use comprehensive WandB logging instead of basic logging
+                    if self.wandb_logger:
                         try:
-                            current_similarity = self._compute_cross_modal_similarity(
-                                outputs['text_features'], outputs['vision_latent']
+                            # Log comprehensive metrics including quantization
+                            self.wandb_logger.log_consolidated_metrics(
+                                outputs=outputs,
+                                epoch=epoch,
+                                step=self.global_step,
+                                lr=self.optimizer.param_groups[0]['lr'],
+                                model=self.model,
+                                memory_module=getattr(self.model, 'memory', None),
+                                log_quantization=True  # Enable quantization logging
                             )
-                            log_dict['train/cross_modal_similarity'] = current_similarity
-                        except Exception as e:
-                            logger.warning(f"Failed to compute similarity for wandb: {e}")
 
-                    try:
-                        wandb.log(log_dict, step=self.global_step)
-                    except Exception as e:
-                        logger.warning(f"Failed to log to wandb during training: {e}")
-                        self.use_wandb = False
+                            # Also log token-specific metrics
+                            wandb.log({
+                                'tokens/processed': self.tokens_processed,
+                                'tokens/batch_size': batch_tokens,
+                                'step': self.global_step
+                            }, step=self.global_step)
+
+                        except Exception as e:
+                            logger.warning(f"Failed to log comprehensive metrics to wandb: {e}")
+                            # Fallback to basic logging
+                            log_dict = {
+                                'train/loss': loss.item(),
+                                'train/learning_rate': self.optimizer.param_groups[0]['lr'],
+                                'tokens/processed': self.tokens_processed,
+                                'tokens/batch_size': batch_tokens,
+                                'step': self.global_step
+                            }
+
+                            # Only add similarity if it was computed
+                            if outputs.get('text_features') is not None and outputs.get('vision_latent') is not None:
+                                try:
+                                    current_similarity = self._compute_cross_modal_similarity(
+                                        outputs['text_features'], outputs['vision_latent']
+                                    )
+                                    log_dict['train/cross_modal_similarity'] = current_similarity
+                                except Exception as e:
+                                    logger.warning(f"Failed to compute similarity for wandb: {e}")
+
+                            try:
+                                wandb.log(log_dict, step=self.global_step)
+                            except Exception as e:
+                                logger.warning(f"Failed to log to wandb during training: {e}")
+                                self.use_wandb = False
+                    else:
+                        # Fallback when wandb_logger is not available
+                        log_dict = {
+                            'train/loss': loss.item(),
+                            'train/learning_rate': self.optimizer.param_groups[0]['lr'],
+                            'tokens/processed': self.tokens_processed,
+                            'tokens/batch_size': batch_tokens,
+                            'step': self.global_step
+                        }
+
+                        # Only add similarity if it was computed
+                        if outputs.get('text_features') is not None and outputs.get('vision_latent') is not None:
+                            try:
+                                current_similarity = self._compute_cross_modal_similarity(
+                                    outputs['text_features'], outputs['vision_latent']
+                                )
+                                log_dict['train/cross_modal_similarity'] = current_similarity
+                            except Exception as e:
+                                logger.warning(f"Failed to compute similarity for wandb: {e}")
+
+                        try:
+                            wandb.log(log_dict, step=self.global_step)
+                        except Exception as e:
+                            logger.warning(f"Failed to log to wandb during training: {e}")
+                            self.use_wandb = False
 
                 self.global_step += 1
 

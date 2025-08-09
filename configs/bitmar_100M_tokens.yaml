@@ -174,8 +174,8 @@ wandb:
   plot_memory_evolution_heatmap: true # Memory slot evolution heatmaps
   plot_memory_diversity: true # Track memory diversity and specialization
   plot_memory_access_patterns: true # Visualize memory access patterns
-  memory_visualization_frequency: 500 # Log memory visualizations every 500 steps
-  memory_snapshot_frequency: 100 # Take memory snapshots every 100 steps
+  memory_visualization_frequency: 5000 # Log memory visualizations every 500 steps
+  memory_snapshot_frequency: 10000 # Take memory snapshots every 100 steps
 
   # Memory-specific metrics to track
   track_memory_metrics:
@@ -286,7 +286,7 @@ token_tracking:
 # Hugging Face Hub integration for model checkpoint saving
 huggingface_hub:
   enabled: true # Enable automatic uploads to HF Hub
-  repo_id: "euhidaman/bitmar-100m-tokens" # Replace with your HF repo ID
+  repo_id: "euhidaman/bitmar-multimodal" # Replace with your HF repo ID
   private: true # Keep repo private by default
   upload_after_epoch: true # Upload checkpoint after each epoch
   upload_final_model: true # Upload final model at end
