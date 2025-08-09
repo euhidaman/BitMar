@@ -825,7 +825,7 @@ class VisionEncoder(nn.Module):
             # Flatten any extra dimensions except batch
             original_shape = vision_features.shape
             vision_features = vision_features.view(original_shape[0], -1)
-            
+
             # Ensure we have the expected input dimension
             if vision_features.size(-1) != self.layers[0].in_features:
                 # Take only the first input_dim features if we have more

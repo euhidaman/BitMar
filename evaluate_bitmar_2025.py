@@ -398,10 +398,19 @@ def evaluate_bitmar_2025(
     logger.info(f"📂 Pipeline: {evaluation_pipeline_path}")
     logger.info(f"💾 Output: {output_dir}")
 
-    # Convert paths
+    # Convert paths to absolute paths BEFORE changing directory
     pipeline_path = Path(evaluation_pipeline_path).resolve()
     model_path = Path(model_path).resolve()
-    output_path = Path(output_dir)
+
+    # Convert output path to absolute path before any directory changes
+    if Path(output_dir).is_absolute():
+        output_path = Path(output_dir)
+    else:
+        # Make relative path absolute based on current working directory
+        output_path = Path.cwd() / output_dir
+    output_path = output_path.resolve()
+
+    logger.info(f"📂 Resolved output path: {output_path}")
 
     # Validate paths
     if not pipeline_path.exists():
@@ -410,8 +419,9 @@ def evaluate_bitmar_2025(
     if not model_path.exists():
         raise FileNotFoundError(f"Model path not found: {model_path}")
 
-    # Create output directory
+    # Create output directory with absolute path
     output_path.mkdir(parents=True, exist_ok=True)
+    logger.info(f"✅ Created output directory: {output_path}")
 
     # Find evaluation data
     eval_data_paths = [
