@@ -78,7 +78,7 @@ export BITMAR_ENABLE_FULL_EVAL=false
 python train_100M_tokens.py --config configs/bitmar_100M_tokens.yaml
 ```
 
-### Complete Training Command with All Options
+### WandB Complete Training Command with All Options
 
 ```bash
 python train_100M_tokens.py \
@@ -89,124 +89,230 @@ python train_100M_tokens.py \
     --enable_full_eval
 ```
 
-## 📊 WandB Logging & Visualizations
+## 📊 Comprehensive Visualization Guide
 
-BitMar includes comprehensive logging to Weights & Biases with detailed visualizations and metrics tracking. Here's what gets logged and how to interpret it:
+BitMar generates extensive visualizations and metrics during training to monitor model performance, memory utilization, attention patterns, and computational efficiency. This guide explains every graph and chart produced by the system.
 
-### 🎯 Training Metrics
+### 🎯 Training Metrics Dashboard
 
-**train/loss**
-- **What**: Cross-entropy loss during training
-- **X-axis**: Training steps
-- **Y-axis**: Loss value
-- **Interpretation**: Should decrease over time; sudden spikes indicate potential issues
+#### Loss Curves
+- **Training/Loss**: Primary training loss over time
+  - **X-axis**: Training step
+  - **Y-axis**: Cross-entropy loss value
+  - **Interpretation**: Should decrease steadily; spikes indicate instability
+  - **Expected Range**: 2.0-8.0 initially, converging to 1.5-3.0
 
-**train/learning_rate**
-- **What**: Learning rate schedule (cosine annealing with warm restarts)
-- **X-axis**: Training steps
-- **Y-axis**: Learning rate value
-- **Interpretation**: Shows learning rate cycles; restarts help escape local minima
+- **Training/Learning_Rate**: Learning rate schedule visualization
+  - **X-axis**: Training step
+  - **Y-axis**: Learning rate value
+  - **Interpretation**: Shows cosine annealing with restarts; restarts appear as sudden jumps back to higher values
+  - **Pattern**: Smooth decay with periodic restarts every T_0 steps
 
-**train/cross_modal_similarity**
-- **What**: Cosine similarity between text and vision features
-- **X-axis**: Training steps
-- **Y-axis**: Similarity score (-1 to 1)
-- **Interpretation**: Higher values = better cross-modal alignment; key metric for multimodal understanding
+#### Cross-Modal Alignment Metrics
+- **Features/CrossModal_Similarity**: Cosine similarity between text and vision features
+  - **X-axis**: Training step
+  - **Y-axis**: Similarity score (0.0 to 1.0)
+  - **Interpretation**: Higher values indicate better alignment; target >0.75
+  - **Critical**: This is the key metric for multimodal understanding quality
 
-### 📊 Token Tracking
+### 🧠 Memory System Visualizations
 
-**tokens/processed**
-- **What**: Total number of tokens processed so far
-- **X-axis**: Training steps
-- **Y-axis**: Token count
-- **Interpretation**: Should reach exactly 100M tokens; tracks progress toward target
+#### Memory Utilization Tracking
+- **Memory/Active_Slots_Percentage**: Percentage of memory slots actively used
+  - **X-axis**: Training step
+  - **Y-axis**: Percentage (0-100%)
+  - **Interpretation**: Shows how efficiently the model uses available memory slots
+  - **Healthy Range**: 60-90% (too low = underutilization, too high = potential conflicts)
 
-**tokens/batch_size**
-- **What**: Number of tokens in current batch
-- **X-axis**: Training steps
-- **Y-axis**: Token count per batch
-- **Interpretation**: Shows batch size variation; should be relatively consistent
+- **Memory/Usage_Mean/Max/Min/Std**: Statistical distribution of memory slot usage
+  - **Usage_Mean**: Average usage across all slots
+  - **Usage_Max**: Most heavily used slot
+  - **Usage_Min**: Least used slot
+  - **Usage_Std**: Variance in usage (higher = more specialization)
 
-**token_progress/processed** and **token_progress/target**
-- **What**: Progress tracking toward 100M token goal
-- **X-axis**: Training steps
-- **Y-axis**: Token counts
-- **Interpretation**: Tracks completion percentage
+#### Memory Evolution Heatmaps
+- **Memory Slot Evolution**: 2D heatmap showing memory slot values over time
+  - **X-axis**: Training step
+  - **Y-axis**: Memory slot index (0 to memory_size-1)
+  - **Color**: Memory activation strength (darker = higher activation)
+  - **Interpretation**: Shows which slots specialize for different content types
+  - **Patterns to Look For**: Vertical stripes indicate slot specialization
 
-### 📈 Epoch-Level Metrics
+#### Memory Access Patterns
+- **Memory/Top_1_Slot_Access** through **Memory/Top_5_Slot_Access**: Access frequency for most-used slots
+  - **X-axis**: Training step
+  - **Y-axis**: Access frequency
+  - **Interpretation**: Shows which memory slots the model relies on most
+  - **Healthy Pattern**: Gradual specialization with some slots becoming dominant
 
-**epoch/train_loss**
-- **What**: Average loss per epoch
-- **X-axis**: Epoch number
-- **Y-axis**: Loss value
-- **Interpretation**: Should show steady decrease across epochs
+#### Memory Diversity and Specialization
+- **Memory/Analysis_Avg_Similarity**: Average similarity between active memory slots
+  - **Range**: 0.0-1.0 (lower = more diverse)
+  - **Interpretation**: Measures how different memory slots are from each other
+  - **Target**: 0.3-0.7 (too low = chaotic, too high = redundant)
 
-**epoch/cross_modal_similarity**
-- **What**: Average cross-modal similarity per epoch
-- **X-axis**: Epoch number
-- **Y-axis**: Similarity score
-- **Interpretation**: Should increase as model learns better alignment
+- **Memory/Analysis_Age_Distribution**: Age of memory slots
+  - **Avg_Age**: Average age of all slots
+  - **Max_Age**: Oldest memory slot
+  - **Interpretation**: Shows memory turnover rate; very old slots may indicate stagnation
 
-**epoch/tokens_processed** and **epoch/tokens_in_epoch**
-- **What**: Token consumption tracking per epoch
-- **X-axis**: Epoch number
-- **Y-axis**: Token counts
-- **Interpretation**: Shows token distribution across epochs
+### 🔍 Attention Analysis Visualizations
 
-### 🤗 Hugging Face Integration Logs
+#### Multi-Head Attention Patterns
+- **Attention/CrossModal_[Layer]_Mean/Max/Entropy**: Cross-modal attention statistics per layer
+  - **Mean**: Average attention weight
+  - **Max**: Peak attention weight
+  - **Entropy**: Attention distribution sharpness (higher = more distributed)
+  - **Interpretation**: Shows how focused the model's attention is
 
-**huggingface/upload_success**
-- **What**: Whether model upload to HF Hub succeeded
-- **X-axis**: Training steps
-- **Y-axis**: Boolean (True/False)
-- **Interpretation**: Tracks upload reliability
+#### Attention Head Heatmaps
+- **Attention Evolution Heatmaps**: 2D visualization of attention heads over time
+  - **X-axis**: Training step
+  - **Y-axis**: Attention head index
+  - **Color**: Attention strength
+  - **Interpretation**: Shows which heads become specialized for different tasks
 
-**huggingface/repo_url**
-- **What**: Link to uploaded model repository
-- **Interpretation**: Direct link to view uploaded models
+#### Token-to-Pixel Attention Maps
+- **Cross-Modal Attention Visualization**: Shows how text tokens attend to image regions
+  - **Rows**: Text tokens
+  - **Columns**: Image patch features
+  - **Color Intensity**: Attention weight
+  - **Interpretation**: Reveals which image regions are relevant for each word
 
-### 🧪 Evaluation Results
+### ⚡ Computational Efficiency Metrics
 
-**epoch_X/eval_2025_success** and **epoch_X/eval_2024_success**
-- **What**: Success status of fast evaluation after each epoch
-- **X-axis**: Training steps
-- **Y-axis**: Boolean (True/False)
-- **Interpretation**: Tracks evaluation pipeline health
+#### FLOPS Tracking
+- **FLOPS/Total_Per_Step**: Floating point operations per training step
+  - **X-axis**: Training step
+  - **Y-axis**: FLOPS count (formatted: K, M, G, T)
+  - **Interpretation**: Shows computational cost consistency
+  - **Expected**: Should be relatively stable after initial warmup
 
-**final/eval_2025_success** and **final/eval_2024_success**
-- **What**: Success status of full evaluation at training end
-- **Interpretation**: Final model evaluation results
+- **FLOPS/Component_Breakdown**: FLOPS distribution across model components
+  - **Components**: Attention, FFN, LayerNorm, Embeddings, Vision, Cross-Modal
+  - **Visualization**: Stacked bar chart or pie chart
+  - **Interpretation**: Shows which components are most computationally expensive
 
-### 🔧 Optional Advanced Metrics
+#### Throughput Analysis
+- **FLOPS/Throughput**: Model processing speed
+  - **X-axis**: Training step
+  - **Y-axis**: Samples/second or FLOPS/second
+  - **Interpretation**: Higher is better; drops may indicate bottlenecks
+  - **Monitoring**: Look for consistent performance vs hardware limits
 
-The following comprehensive metrics are **now actively logged** to WandB during training:
+### 🎨 Feature Space Visualizations
 
-**Memory Analysis**
-- **Memory/Usage_Mean, Memory/Usage_Max, Memory/Usage_Min**: Episodic memory slot utilization statistics
-- **Memory/Active_Slots_Percentage**: Percentage of memory slots being actively used  
-- **Memory/Analysis_Avg_Similarity**: Average similarity between active memory slots (lower = more diverse)
-- **Memory/Top_1_Slot_Access through Memory/Top_5_Slot_Access**: Access frequency for most-used memory slots
+#### Feature Distribution Analysis
+- **Features/Text_Mean/Std/Norm**: Text feature statistics
+- **Features/Vision_Mean/Std/Norm**: Vision feature statistics
+- **Features/Episode_Mean/Std/Norm**: Episode feature statistics
+  - **Mean**: Average activation (should be near 0 for normalized features)
+  - **Std**: Feature variance (healthy range: 0.5-2.0)
+  - **Norm**: Feature magnitude (indicates feature strength)
 
-**Attention Analysis**
-- **Attention/CrossModal_layer_X_Mean, Attention/CrossModal_layer_X_Max**: Cross-modal attention weights by layer
-- **Attention/CrossModal_layer_X_Entropy**: Attention distribution entropy (lower = more focused)
-- **Attention/Memory_Mean, Attention/Memory_Max, Attention/Memory_Entropy**: Memory attention patterns
+#### Feature Space Evolution
+- **Feature Trajectory Plots**: 2D/3D PCA visualization of feature evolution
+  - **Points**: Individual training steps
+  - **Color**: Training progress (early=blue, late=red)
+  - **Trajectory**: Shows how features evolve during training
+  - **Interpretation**: Smooth trajectories indicate stable learning
 
-**Quantization Metrics** ⚡
-- **Quantization/BitNet_Layer_Count**: Number of quantized layers in the model
-- **Quantization/Sparsity_Mean**: Average sparsity percentage across all BitNet layers (30-60% typical)
-- **Quantization/Distribution_Balance**: Balance between +1/-1 weights (closer to 1.0 = better balance)
-- **Quantization/Compression_Effectiveness**: Overall compression achieved through sparsity
-- **Quantization/WeightScale_Mean/Std**: BitNet weight scaling factor statistics
-- **Quantization/Zeros_Ratio_Mean/Std, Quantization/Ones_Ratio_Mean/Std, Quantization/NegOnes_Ratio_Mean/Std**: Aggregated ternary weight distribution statistics
+### 📈 Gradient Flow Analysis
 
-**Gradient Analysis**
-- **Gradients/Total_Norm**: L2 norm of all gradients (monitor for explosion/vanishing)
-- **Gradients/Encoder_Norm, Gradients/Decoder_Norm, Gradients/Fusion_Norm, Gradients/Memory_Norm**: Component-wise gradient norms
+#### Gradient Magnitude Tracking
+- **Gradients/Total_Norm**: Overall gradient magnitude
+  - **X-axis**: Training step
+  - **Y-axis**: Gradient norm
+  - **Interpretation**: Should decrease over time; spikes indicate instability
+  - **Warning Signs**: Values >1.0 or sudden spikes
 
-**Feature Statistics**
-- **Features/Text_Mean, Features/Text_Std, Features/Text_Norm**: Text feature representation statistics
-- **Features/Vision_Mean, Features/Vision_Std, Features/Vision_Norm**: Vision feature statistics  
-- **Features/Episode_Mean, Features/Episode_Std, Features/Episode_Norm**: Episodic memory feature statistics
+#### Component-Wise Gradient Analysis
+- **Gradients/[Component]_Norm**: Gradient norms for each model component
+  - **Components**: Encoder, Decoder, Fusion, Memory, Vision, Projection
+  - **Interpretation**: Shows which parts of the model are learning most actively
+  - **Balanced Learning**: All components should have non-zero gradients
 
-> **Note**: These comprehensive metrics are logged every 100 training steps alongside the basic training metrics. This provides deep insights into model behavior, quantization efficiency, and memory utilization patterns.
+### 🔧 Quantization Monitoring
+
+#### BitNet Quantization Effects
+- **Quantization/Weight_Distribution**: Distribution of quantized weights
+  - **Visualization**: Histogram showing weight value distribution
+  - **Expected**: Should show discrete values (-1, 0, +1 for ternary)
+  - **Quality Check**: Sharp peaks at expected quantization levels
+
+- **Quantization/Activation_Range**: Range of activation values before quantization
+  - **Interpretation**: Shows if activations are properly scaled for quantization
+  - **Optimal Range**: Values should utilize full quantization range
+
+### 🎯 Token Processing Analytics
+
+#### Token Distribution Tracking
+- **Tokens/Processed**: Cumulative token count
+  - **X-axis**: Training step
+  - **Y-axis**: Total tokens processed
+  - **Target Line**: 100M tokens (dataset size)
+  - **Interpretation**: Should increase linearly; shows progress toward token limit
+
+- **Tokens/Batch_Size**: Tokens per batch (after padding removal)
+  - **Interpretation**: Shows actual computational load per batch
+  - **Efficiency**: Higher values indicate better padding efficiency
+
+#### Token-Type Analysis
+- **Token/Caption_vs_Text_Ratio**: Distribution of caption vs text-only tokens
+  - **Target**: 50/50 split for balanced multimodal training
+  - **Interpretation**: Deviations indicate data loading imbalance
+
+### 🎪 Alignment Quality Metrics
+
+#### Image-Caption Alignment
+- **Alignment/Cosine_Similarity**: Similarity between image and caption embeddings
+  - **Range**: -1.0 to 1.0 (higher = better alignment)
+  - **Target**: >0.8 for well-aligned pairs
+  - **Distribution**: Should show bimodal distribution (aligned vs misaligned)
+
+- **Alignment/Retrieval_Accuracy**: Accuracy of cross-modal retrieval
+  - **Text→Image**: How often correct image is retrieved for caption
+  - **Image→Text**: How often correct caption is retrieved for image
+  - **Interpretation**: Higher percentages indicate better cross-modal understanding
+
+### 📊 Comprehensive Dashboard Layout
+
+The complete BitMar dashboard organizes these visualizations into logical sections:
+
+1. **Training Overview** (top row)
+   - Loss curves, learning rate, basic metrics
+
+2. **Memory System** (second row)
+   - Utilization, evolution heatmaps, access patterns
+
+3. **Attention Analysis** (third row)
+   - Cross-modal attention, head specialization
+
+4. **Computational Efficiency** (fourth row)
+   - FLOPS tracking, throughput analysis
+
+5. **Feature Analysis** (fifth row)
+   - Feature distributions, gradient flow
+
+6. **Quality Metrics** (bottom row)
+   - Alignment scores, retrieval accuracy
+
+### 🔍 Interpreting Common Patterns
+
+#### Healthy Training Patterns
+- **Smooth Loss Decrease**: Steady decline with occasional plateaus
+- **Stable Memory Usage**: 60-90% slot utilization
+- **Increasing Similarity**: Cross-modal similarity trending upward
+- **Balanced Gradients**: All components showing learning activity
+
+#### Warning Signs
+- **Loss Spikes**: Sudden increases may indicate instability
+- **Memory Saturation**: >95% utilization suggests inadequate capacity
+- **Gradient Explosion**: Norms >1.0 indicate unstable training
+- **Attention Collapse**: All heads showing similar patterns
+
+#### Optimization Indicators
+- **Memory Specialization**: Different slots showing distinct patterns
+- **Attention Focus**: Increasing entropy in cross-modal attention
+- **Feature Separation**: Clear clustering in feature space visualizations
+- **Consistent Throughput**: Stable FLOPS/second measurements
