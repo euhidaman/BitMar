@@ -99,89 +99,152 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
             results['text'] = {"error": f"HF adapter failed: {e}"}
             return results
 
-        # Determine eval script and arguments based on type
+        # Instead of running the batch script, run individual tasks with better error handling
+        eval_dir = "evaluation_data/fast_eval" if eval_type == "fast" else "evaluation_data/full_eval"
+
+        # Define evaluation tasks to run
         if eval_type == "fast":
-            eval_script = "eval_zero_shot_fast.sh"
-            # eval_zero_shot_fast.sh expects: MODEL_PATH REVISION_NAME BACKEND [EVAL_DIR]
-            cmd = [
-                "bash", eval_script,
-                hf_model_path,  # Use HF model path instead of original checkpoint
-                "main",  # revision_name
-                "causal",  # backend for BitMar (causal language model)
-                "evaluation_data/fast_eval"  # eval_dir
+            tasks = [
+                ("blimp", f"{eval_dir}/blimp_fast"),
+                ("supplement", f"{eval_dir}/supplement_fast"),
+                ("wug_adj", f"{eval_dir}/wug_adj_nominalization"),
+                ("wug_past", f"{eval_dir}/wug_past_tense"),
+                ("entity_tracking", f"{eval_dir}/entity_tracking_fast")
             ]
         else:
-            eval_script = "eval_zero_shot.sh"
-            # eval_zero_shot.sh expects: MODEL_PATH BACKEND [EVAL_DIR]
-            cmd = [
-                "bash", eval_script,
-                hf_model_path,  # Use HF model path instead of original checkpoint
-                "causal",  # backend for BitMar (causal language model)
-                "evaluation_data/full_eval"  # eval_dir
+            tasks = [
+                ("blimp", f"{eval_dir}/blimp_filtered"),
+                ("supplement", f"{eval_dir}/supplement_filtered"),
+                ("wug_adj", f"{eval_dir}/wug_adj_nominalization"),
+                ("wug_past", f"{eval_dir}/wug_past_tense"),
+                ("entity_tracking", f"{eval_dir}/entity_tracking")
             ]
 
-        # Check if script exists
-        if not Path(eval_script).exists():
-            logger.warning(f"⚠️ Evaluation script not found: {eval_script}")
-            # Cleanup temp HF model
-            if Path(hf_model_dir).exists():
-                shutil.rmtree(hf_model_dir)
-            return results
+        task_results = {}
+        successful_tasks = 0
 
-        logger.info(f"Running command: {' '.join(cmd)}")
+        for task_name, data_path in tasks:
+            try:
+                # Check if data path exists
+                if not Path(data_path).exists():
+                    logger.warning(f"⚠️ Data path not found: {data_path}")
+                    task_results[task_name] = {"error": f"Data path not found: {data_path}"}
+                    continue
 
-        # Set environment variables for output redirection
-        env = os.environ.copy()
-        env['PYTHONUNBUFFERED'] = '1'
+                logger.info(f"Running {task_name} evaluation...")
 
-        # Run the evaluation
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=3600,
-            env=env,
-            cwd=Path.cwd()
-        )
+                # Run individual task
+                cmd = [
+                    "python", "-m", "evaluation_pipeline.sentence_zero_shot.run",
+                    "--model_path_or_name", hf_model_path,
+                    "--backend", "causal",
+                    "--task", task_name if task_name != "supplement" else "blimp",  # supplement uses blimp task
+                    "--data_path", data_path,
+                    "--save_predictions",
+                    "--revision_name", "main"
+                ]
 
-        if result.returncode == 0:
-            logger.info("✅ Text evaluation completed successfully")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=1800,  # 30 minutes per task
+                    cwd=Path.cwd()
+                )
 
-            # The pipeline saves results in predictions/ directory, look for them
-            predictions_dir = Path("predictions")
-            if predictions_dir.exists():
-                # Collect all prediction files
-                prediction_files = list(predictions_dir.glob("*.json"))
-                results['text'] = {
-                    "status": "completed",
-                    "prediction_files": [str(f) for f in prediction_files],
-                    "stdout": result.stdout[:1000] if result.stdout else "",  # First 1000 chars
-                }
-                logger.info(f"Found {len(prediction_files)} prediction files")
+                if result.returncode == 0:
+                    logger.info(f"✅ {task_name} evaluation completed successfully")
+                    task_results[task_name] = {
+                        "status": "completed",
+                        "stdout": result.stdout[-500:] if result.stdout else ""
+                    }
+                    successful_tasks += 1
+                else:
+                    logger.warning(f"⚠️ {task_name} evaluation failed with return code {result.returncode}")
+                    logger.warning(f"STDERR: {result.stderr[:500]}")
+                    task_results[task_name] = {
+                        "error": f"Return code {result.returncode}",
+                        "stderr": result.stderr[:500] if result.stderr else "",
+                        "stdout": result.stdout[:500] if result.stdout else ""
+                    }
+
+            except subprocess.TimeoutExpired:
+                logger.warning(f"⚠️ {task_name} evaluation timed out")
+                task_results[task_name] = {"error": "Timeout after 30 minutes"}
+            except Exception as e:
+                logger.error(f"❌ {task_name} evaluation error: {e}")
+                task_results[task_name] = {"error": str(e)}
+
+        # Try reading evaluation if available
+        try:
+            reading_data_path = f"{eval_dir}/reading/reading_data.csv"
+            if Path(reading_data_path).exists():
+                logger.info("Running reading evaluation...")
+
+                cmd = [
+                    "python", "-m", "evaluation_pipeline.reading.run",
+                    "--model_path_or_name", hf_model_path,
+                    "--backend", "causal",
+                    "--data_path", reading_data_path,
+                    "--revision_name", "main"
+                ]
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=1800,
+                    cwd=Path.cwd()
+                )
+
+                if result.returncode == 0:
+                    logger.info("✅ Reading evaluation completed successfully")
+                    task_results["reading"] = {
+                        "status": "completed",
+                        "stdout": result.stdout[-500:] if result.stdout else ""
+                    }
+                    successful_tasks += 1
+                else:
+                    logger.warning(f"⚠️ Reading evaluation failed: {result.stderr[:500]}")
+                    task_results["reading"] = {
+                        "error": f"Return code {result.returncode}",
+                        "stderr": result.stderr[:500] if result.stderr else ""
+                    }
             else:
-                results['text'] = {
-                    "status": "completed",
-                    "stdout": result.stdout[:1000] if result.stdout else ""
-                }
-        else:
-            logger.warning(f"⚠️ Text evaluation failed with return code {result.returncode}")
-            logger.warning(f"STDERR: {result.stderr[:500]}")
+                logger.warning(f"⚠️ Reading data not found: {reading_data_path}")
+                task_results["reading"] = {"error": f"Data path not found: {reading_data_path}"}
+
+        except Exception as e:
+            logger.error(f"❌ Reading evaluation error: {e}")
+            task_results["reading"] = {"error": str(e)}
+
+        # Collect prediction files
+        predictions_dir = Path("predictions")
+        prediction_files = []
+        if predictions_dir.exists():
+            prediction_files = list(predictions_dir.glob("*.json"))
+
+        # Compile results
+        if successful_tasks > 0:
             results['text'] = {
-                "error": f"Return code {result.returncode}",
-                "stderr": result.stderr[:1000] if result.stderr else "",
-                "stdout": result.stdout[:1000] if result.stdout else ""
+                "status": "partially_completed" if successful_tasks < len(tasks) else "completed",
+                "successful_tasks": successful_tasks,
+                "total_tasks": len(tasks) + 1,  # +1 for reading
+                "task_results": task_results,
+                "prediction_files": [str(f) for f in prediction_files]
             }
+            logger.info(f"✅ Text evaluation completed: {successful_tasks}/{len(tasks)+1} tasks successful")
+        else:
+            results['text'] = {
+                "error": "All tasks failed",
+                "task_results": task_results
+            }
+            logger.error("❌ All text evaluation tasks failed")
 
         # Cleanup temp HF model
         if Path(hf_model_dir).exists():
             shutil.rmtree(hf_model_dir)
 
-    except subprocess.TimeoutExpired:
-        logger.error("❌ Text evaluation timed out after 1 hour")
-        results['text'] = {"error": "Timeout after 3600 seconds"}
-        # Cleanup temp HF model
-        if Path(hf_model_dir).exists():
-            shutil.rmtree(hf_model_dir)
     except Exception as e:
         logger.error(f"❌ Text evaluation error: {e}")
         results['text'] = {"error": str(e)}
