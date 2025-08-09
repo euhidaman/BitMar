@@ -193,9 +193,12 @@ The following comprehensive metrics are **now actively logged** to WandB during 
 - **Attention/Memory_Mean, Attention/Memory_Max, Attention/Memory_Entropy**: Memory attention patterns
 
 **Quantization Metrics** ⚡
-- **Quantization/WeightScale_[module_name]**: BitNet weight scaling factors for each quantized module
-- **Quantization/Zeros_Ratio_[module_name], Quantization/Ones_Ratio_[module_name], Quantization/NegOnes_Ratio_[module_name]**: Distribution of ternary weights {-1, 0, +1}
-- **Quantization/Sparsity_[module_name]**: Percentage of zero weights (30-60% typical for BitNet)
+- **Quantization/BitNet_Layer_Count**: Number of quantized layers in the model
+- **Quantization/Sparsity_Mean**: Average sparsity percentage across all BitNet layers (30-60% typical)
+- **Quantization/Distribution_Balance**: Balance between +1/-1 weights (closer to 1.0 = better balance)
+- **Quantization/Compression_Effectiveness**: Overall compression achieved through sparsity
+- **Quantization/WeightScale_Mean/Std**: BitNet weight scaling factor statistics
+- **Quantization/Zeros_Ratio_Mean/Std, Quantization/Ones_Ratio_Mean/Std, Quantization/NegOnes_Ratio_Mean/Std**: Aggregated ternary weight distribution statistics
 
 **Gradient Analysis**
 - **Gradients/Total_Norm**: L2 norm of all gradients (monitor for explosion/vanishing)

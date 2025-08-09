@@ -196,30 +196,10 @@ class BitMarWandbLogger:
         
         # Quantization metrics (if requested)
         if log_quantization:
-            for name, module in model.named_modules():
-                if hasattr(module, 'quantize_weights_1_58_bit'):
-                    module_name = name.replace('.', '_')
-                    
-                    if hasattr(module, 'weight_scale'):
-                        metrics[f'Quantization/WeightScale_{module_name}'] = module.weight_scale.item()
-                        
-                    if hasattr(module, 'input_scale'):
-                        metrics[f'Quantization/InputScale_{module_name}'] = module.input_scale.item()
-                        
-                    if hasattr(module, 'weight'):
-                        weight = module.weight.data
-                        quantized_weight = module.quantize_weights_1_58_bit(weight)
-                        
-                        total_weights = quantized_weight.numel()
-                        zeros = (quantized_weight == 0).float().sum().item() / total_weights
-                        ones = (quantized_weight == 1).float().sum().item() / total_weights
-                        neg_ones = (quantized_weight == -1).float().sum().item() / total_weights
-                        
-                        metrics[f'Quantization/Zeros_Ratio_{module_name}'] = zeros
-                        metrics[f'Quantization/Ones_Ratio_{module_name}'] = ones
-                        metrics[f'Quantization/NegOnes_Ratio_{module_name}'] = neg_ones
-                        metrics[f'Quantization/Sparsity_{module_name}'] = zeros * 100
-        
+            # Aggregate quantization metrics instead of per-module metrics
+            quantization_stats = self._compute_aggregated_quantization_metrics(model)
+            metrics.update(quantization_stats)
+
         # Add epoch and step info
         metrics['Training/Epoch'] = epoch
         metrics['Training/Step'] = step
@@ -627,7 +607,100 @@ class BitMarWandbLogger:
                     total_size += weight_numel * 4  # 32-bit floats
                     
         return total_size
-        
+
+    def _compute_aggregated_quantization_metrics(self, model: nn.Module) -> Dict[str, float]:
+        """Compute aggregated quantization metrics across all BitNet layers"""
+        metrics = {}
+
+        # Collect statistics from all BitNet layers
+        all_weight_scales = []
+        all_input_scales = []
+        all_zeros_ratios = []
+        all_ones_ratios = []
+        all_neg_ones_ratios = []
+        all_sparsity = []
+
+        bitnet_layer_count = 0
+
+        for name, module in model.named_modules():
+            if hasattr(module, 'quantize_weights_1_58_bit'):  # BitNet layer
+                bitnet_layer_count += 1
+
+                # Collect weight scale statistics
+                if hasattr(module, 'weight_scale'):
+                    all_weight_scales.append(module.weight_scale.item())
+
+                if hasattr(module, 'input_scale'):
+                    all_input_scales.append(module.input_scale.item())
+
+                # Weight distribution after quantization
+                if hasattr(module, 'weight'):
+                    weight = module.weight.data
+                    quantized_weight = module.quantize_weights_1_58_bit(weight)
+
+                    # Count ternary values
+                    total_weights = quantized_weight.numel()
+                    zeros = (quantized_weight == 0).float().sum().item() / total_weights
+                    ones = (quantized_weight == 1).float().sum().item() / total_weights
+                    neg_ones = (quantized_weight == -1).float().sum().item() / total_weights
+
+                    all_zeros_ratios.append(zeros)
+                    all_ones_ratios.append(ones)
+                    all_neg_ones_ratios.append(neg_ones)
+                    all_sparsity.append(zeros * 100)
+
+        # Create aggregated metrics only if we have BitNet layers
+        if bitnet_layer_count > 0:
+            metrics['Quantization/BitNet_Layer_Count'] = bitnet_layer_count
+
+            # Weight scale statistics
+            if all_weight_scales:
+                metrics['Quantization/WeightScale_Mean'] = np.mean(all_weight_scales)
+                metrics['Quantization/WeightScale_Std'] = np.std(all_weight_scales)
+                metrics['Quantization/WeightScale_Min'] = np.min(all_weight_scales)
+                metrics['Quantization/WeightScale_Max'] = np.max(all_weight_scales)
+
+            if all_input_scales:
+                metrics['Quantization/InputScale_Mean'] = np.mean(all_input_scales)
+                metrics['Quantization/InputScale_Std'] = np.std(all_input_scales)
+
+            # Weight distribution statistics (most important metrics)
+            if all_zeros_ratios:
+                metrics['Quantization/Zeros_Ratio_Mean'] = np.mean(all_zeros_ratios)
+                metrics['Quantization/Zeros_Ratio_Std'] = np.std(all_zeros_ratios)
+
+            if all_ones_ratios:
+                metrics['Quantization/Ones_Ratio_Mean'] = np.mean(all_ones_ratios)
+                metrics['Quantization/Ones_Ratio_Std'] = np.std(all_ones_ratios)
+
+            if all_neg_ones_ratios:
+                metrics['Quantization/NegOnes_Ratio_Mean'] = np.mean(all_neg_ones_ratios)
+                metrics['Quantization/NegOnes_Ratio_Std'] = np.std(all_neg_ones_ratios)
+
+            # Sparsity statistics (key compression metric)
+            if all_sparsity:
+                metrics['Quantization/Sparsity_Mean'] = np.mean(all_sparsity)
+                metrics['Quantization/Sparsity_Std'] = np.std(all_sparsity)
+                metrics['Quantization/Sparsity_Min'] = np.min(all_sparsity)
+                metrics['Quantization/Sparsity_Max'] = np.max(all_sparsity)
+
+            # Overall quantization health metrics
+            if all_zeros_ratios and all_ones_ratios and all_neg_ones_ratios:
+                # Check if distribution is balanced
+                avg_zeros = np.mean(all_zeros_ratios)
+                avg_ones = np.mean(all_ones_ratios)
+                avg_neg_ones = np.mean(all_neg_ones_ratios)
+
+                # Compute balance score (closer to 1.0 means more balanced)
+                total_non_zero = avg_ones + avg_neg_ones
+                balance_score = 1.0 - abs(avg_ones - avg_neg_ones) / (total_non_zero + 1e-8)
+                metrics['Quantization/Distribution_Balance'] = balance_score
+
+                # Compression effectiveness (higher sparsity = better compression)
+                metrics['Quantization/Compression_Effectiveness'] = avg_zeros
+
+        return metrics
+
     def finish(self):
         """Finish wandb run"""
         wandb.finish()
