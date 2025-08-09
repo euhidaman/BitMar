@@ -77,8 +77,8 @@ def setup_evaluation_environment(pipeline_path: Path, eval_data_path: Path):
 
 
 def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: str = "results_2025"):
-    """Run text-only evaluations (BLIMP, etc.)"""
-    logger.info(f"🔤 Running text evaluations ({eval_type})...")
+    """Run text-only evaluations (BLIMP, etc.) - main focus for 2025 pipeline"""
+    logger.info(f"🔤 Running text evaluations ({eval_type}) - Primary focus for 2025 pipeline...")
 
     results = {}
 
@@ -99,17 +99,18 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
             results['text'] = {"error": f"HF adapter failed: {e}"}
             return results
 
-        # Instead of running the batch script, run individual tasks with better error handling
+        # Focus on available text evaluation tasks based on actual data
         eval_dir = "evaluation_data/fast_eval" if eval_type == "fast" else "evaluation_data/full_eval"
 
-        # Define evaluation tasks to run
+        # Define core text evaluation tasks that are actually available
         if eval_type == "fast":
             tasks = [
                 ("blimp", f"{eval_dir}/blimp_fast"),
                 ("supplement", f"{eval_dir}/supplement_fast"),
                 ("wug_adj", f"{eval_dir}/wug_adj_nominalization"),
                 ("wug_past", f"{eval_dir}/wug_past_tense"),
-                ("entity_tracking", f"{eval_dir}/entity_tracking_fast")
+                ("entity_tracking", f"{eval_dir}/entity_tracking_fast"),
+                ("ewok", f"{eval_dir}/ewok_fast")  # Available in fast_eval
             ]
         else:
             tasks = [
@@ -117,23 +118,36 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
                 ("supplement", f"{eval_dir}/supplement_filtered"),
                 ("wug_adj", f"{eval_dir}/wug_adj_nominalization"),
                 ("wug_past", f"{eval_dir}/wug_past_tense"),
-                ("entity_tracking", f"{eval_dir}/entity_tracking")
+                ("entity_tracking", f"{eval_dir}/entity_tracking"),
+                ("cdi_childes", f"{eval_dir}/cdi_childes"),  # Available in full_eval
+                ("comps", f"{eval_dir}/comps"),  # Available in full_eval
+                ("glue_filtered", f"{eval_dir}/glue_filtered")  # Available in full_eval
             ]
+
+        # Validate available tasks
+        available_tasks = []
+        for task_name, data_path in tasks:
+            if Path(data_path).exists():
+                available_tasks.append((task_name, data_path))
+                logger.info(f"✅ Found data for {task_name}: {data_path}")
+            else:
+                logger.warning(f"⚠️ Data not found for {task_name}: {data_path}")
+
+        if not available_tasks:
+            logger.error("❌ No text evaluation data found!")
+            results['text'] = {"error": "No text evaluation data available"}
+            return results
+
+        logger.info(f"📊 Running {len(available_tasks)} available text evaluation tasks...")
 
         task_results = {}
         successful_tasks = 0
 
-        for task_name, data_path in tasks:
+        for task_name, data_path in available_tasks:
             try:
-                # Check if data path exists
-                if not Path(data_path).exists():
-                    logger.warning(f"⚠️ Data path not found: {data_path}")
-                    task_results[task_name] = {"error": f"Data path not found: {data_path}"}
-                    continue
+                logger.info(f"🔄 Running {task_name} evaluation...")
 
-                logger.info(f"Running {task_name} evaluation...")
-
-                # Run individual task
+                # Run individual task with enhanced error handling
                 cmd = [
                     "python", "-m", "evaluation_pipeline.sentence_zero_shot.run",
                     "--model_path_or_name", hf_model_path,
@@ -161,7 +175,7 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
                     successful_tasks += 1
                 else:
                     logger.warning(f"⚠️ {task_name} evaluation failed with return code {result.returncode}")
-                    logger.warning(f"STDERR: {result.stderr[:500]}")
+                    logger.warning(f"STDERR: {result.stderr[:500] if result.stderr else 'No stderr'}")
                     task_results[task_name] = {
                         "error": f"Return code {result.returncode}",
                         "stderr": result.stderr[:500] if result.stderr else "",
@@ -179,7 +193,7 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
         try:
             reading_data_path = f"{eval_dir}/reading/reading_data.csv"
             if Path(reading_data_path).exists():
-                logger.info("Running reading evaluation...")
+                logger.info("🔄 Running reading evaluation...")
 
                 cmd = [
                     "python", "-m", "evaluation_pipeline.reading.run",
@@ -205,17 +219,17 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
                     }
                     successful_tasks += 1
                 else:
-                    logger.warning(f"⚠️ Reading evaluation failed: {result.stderr[:500]}")
+                    logger.warning(f"⚠️ Reading evaluation failed: {result.stderr[:500] if result.stderr else 'No stderr'}")
                     task_results["reading"] = {
                         "error": f"Return code {result.returncode}",
                         "stderr": result.stderr[:500] if result.stderr else ""
                     }
             else:
-                logger.warning(f"⚠️ Reading data not found: {reading_data_path}")
-                task_results["reading"] = {"error": f"Data path not found: {reading_data_path}"}
+                logger.info(f"ℹ️ Reading data not found: {reading_data_path} (optional)")
+                task_results["reading"] = {"status": "skipped", "reason": "Data not available"}
 
         except Exception as e:
-            logger.error(f"❌ Reading evaluation error: {e}")
+            logger.warning(f"⚠️ Reading evaluation error: {e}")
             task_results["reading"] = {"error": str(e)}
 
         # Collect prediction files
@@ -225,19 +239,22 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
             prediction_files = list(predictions_dir.glob("*.json"))
 
         # Compile results
+        total_possible_tasks = len(available_tasks) + 1  # +1 for reading
         if successful_tasks > 0:
             results['text'] = {
-                "status": "partially_completed" if successful_tasks < len(tasks) else "completed",
+                "status": "partially_completed" if successful_tasks < total_possible_tasks else "completed",
                 "successful_tasks": successful_tasks,
-                "total_tasks": len(tasks) + 1,  # +1 for reading
+                "total_tasks": total_possible_tasks,
+                "available_tasks": len(available_tasks),
                 "task_results": task_results,
                 "prediction_files": [str(f) for f in prediction_files]
             }
-            logger.info(f"✅ Text evaluation completed: {successful_tasks}/{len(tasks)+1} tasks successful")
+            logger.info(f"✅ Text evaluation completed: {successful_tasks}/{total_possible_tasks} tasks successful")
         else:
             results['text'] = {
-                "error": "All tasks failed",
-                "task_results": task_results
+                "error": "All text tasks failed",
+                "task_results": task_results,
+                "available_tasks": len(available_tasks)
             }
             logger.error("❌ All text evaluation tasks failed")
 
@@ -256,39 +273,65 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
 
 
 def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_dir: str = "results_2025"):
-    """Run multimodal evaluations (VQA, Winoground, etc.)"""
-    logger.info(f"🖼️ Running multimodal evaluations ({eval_type})...")
+    """Run multimodal evaluations (VQA, Winoground, etc.) - Only available in full evaluation"""
+    logger.info(f"🖼️ Checking for multimodal evaluations ({eval_type}) - Only available in full evaluation...")
 
     results = {}
 
     try:
-        # Look for available multimodal evaluation tasks in the pipeline
-        multimodal_tasks = []
-
-        # Check for VQA evaluation
-        vqa_data_dir = f"evaluation_data/{'fast_eval' if eval_type == 'fast' else 'full_eval'}/vqa_filtered"
-        if Path(vqa_data_dir).exists():
-            multimodal_tasks.append(("vqa", vqa_data_dir))
-
-        # Check for Winoground evaluation
-        winoground_data_dir = f"evaluation_data/{'fast_eval' if eval_type == 'fast' else 'full_eval'}/winoground_filtered"
-        if Path(winoground_data_dir).exists():
-            multimodal_tasks.append(("winoground", winoground_data_dir))
-
-        if not multimodal_tasks:
-            logger.warning("⚠️ No multimodal evaluation data found")
-            results['multimodal'] = {"error": "No multimodal data found"}
+        # Multimodal tasks are only available in full evaluation
+        if eval_type == "fast":
+            logger.info("ℹ️ Multimodal evaluation not available in fast mode - VQA and Winoground only exist in full_eval")
+            results['multimodal'] = {
+                "status": "skipped",
+                "reason": "Multimodal tasks not available in fast evaluation mode",
+                "note": "VQA and Winoground are only available in full_eval, not fast_eval"
+            }
             return results
 
+        # Check if multimodal data is actually available in full evaluation
+        multimodal_tasks = []
+
+        # Check for VQA evaluation data (only in full_eval)
+        vqa_data_dir = "evaluation_data/full_eval/vqa_filtered"
+        if Path(vqa_data_dir).exists():
+            multimodal_tasks.append(("vqa", vqa_data_dir))
+            logger.info(f"✅ Found VQA data: {vqa_data_dir}")
+        else:
+            logger.info(f"ℹ️ VQA data not found: {vqa_data_dir}")
+
+        # Check for Winoground evaluation data (only in full_eval)
+        winoground_data_dir = "evaluation_data/full_eval/winoground_filtered"
+        if Path(winoground_data_dir).exists():
+            multimodal_tasks.append(("winoground", winoground_data_dir))
+            logger.info(f"✅ Found Winoground data: {winoground_data_dir}")
+        else:
+            logger.info(f"ℹ️ Winoground data not found: {winoground_data_dir}")
+
+        if not multimodal_tasks:
+            logger.info("ℹ️ No multimodal evaluation data found in full_eval")
+            results['multimodal'] = {
+                "status": "skipped",
+                "reason": "No multimodal data available in full_eval",
+                "note": "Expected VQA and Winoground data not found"
+            }
+            return results
+
+        logger.info(f"📊 Found {len(multimodal_tasks)} multimodal tasks available in full evaluation")
+
         # Convert BitMar model to HuggingFace format for evaluation
-        hf_model_dir = f"hf_model_temp_{eval_type}"
+        hf_model_dir = f"hf_model_temp_multimodal_{eval_type}"
         try:
             from bitmar_hf_adapter import save_hf_compatible_model
             hf_model_path = save_hf_compatible_model(model_path, hf_model_dir)
-            logger.info(f"✅ Created HuggingFace compatible model at: {hf_model_path}")
+            logger.info(f"✅ Created HuggingFace compatible model for multimodal evaluation at: {hf_model_path}")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to create HF adapter: {e}")
-            results['multimodal'] = {"error": f"HF adapter failed: {e}"}
+            logger.warning(f"⚠️ Failed to create HF adapter for multimodal evaluation: {e}")
+            results['multimodal'] = {
+                "error": f"HF adapter failed: {e}",
+                "status": "failed",
+                "note": "Multimodal evaluation failed but this is optional for 2025 pipeline"
+            }
             return results
 
         # Run each multimodal task with enhanced error handling
@@ -297,7 +340,7 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
 
         for task_name, data_dir in multimodal_tasks:
             try:
-                logger.info(f"Running {task_name} evaluation...")
+                logger.info(f"🔄 Running {task_name} evaluation...")
 
                 # Special handling for VQA which has known issues with result processing
                 if task_name == "vqa":
@@ -330,7 +373,6 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
                 else:
                     logger.warning(f"⚠️ {task_name} evaluation failed with return code {result.returncode}")
                     logger.warning(f"STDERR: {result.stderr[:500] if result.stderr else 'No stderr'}")
-                    logger.warning(f"STDOUT: {result.stdout[:500] if result.stdout else 'No stdout'}")
 
                     # Check for specific error patterns
                     error_msg = result.stderr if result.stderr else "Unknown error"
@@ -354,7 +396,7 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
                 logger.warning(f"⚠️ {task_name} evaluation timed out after 30 minutes")
                 task_results[task_name] = {"error": "Timeout after 30 minutes"}
             except Exception as e:
-                logger.error(f"❌ {task_name} evaluation error: {e}")
+                logger.warning(f"⚠️ {task_name} evaluation error: {e}")
                 task_results[task_name] = {"error": str(e)}
 
         # Compile results
@@ -363,23 +405,30 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
                 "status": "partially_completed" if successful_tasks < len(multimodal_tasks) else "completed",
                 "successful_tasks": successful_tasks,
                 "total_tasks": len(multimodal_tasks),
-                "task_results": task_results
+                "task_results": task_results,
+                "note": "Multimodal evaluation only available in full mode"
             }
             logger.info(f"✅ Multimodal evaluation completed: {successful_tasks}/{len(multimodal_tasks)} tasks successful")
         else:
             results['multimodal'] = {
                 "error": "All multimodal tasks failed",
-                "task_results": task_results
+                "task_results": task_results,
+                "status": "failed",
+                "note": "Multimodal evaluation failed but this is optional for 2025 pipeline"
             }
-            logger.error("❌ All multimodal evaluation tasks failed")
+            logger.warning("⚠️ All multimodal evaluation tasks failed (but this is optional for 2025 pipeline)")
 
         # Cleanup temp HF model
         if Path(hf_model_dir).exists():
             shutil.rmtree(hf_model_dir)
 
     except Exception as e:
-        logger.error(f"❌ Multimodal evaluation error: {e}")
-        results['multimodal'] = {"error": str(e)}
+        logger.warning(f"⚠️ Multimodal evaluation error: {e}")
+        results['multimodal'] = {
+            "error": str(e),
+            "status": "failed",
+            "note": "Multimodal evaluation failed but this is optional for 2025 pipeline"
+        }
 
     return results
 
@@ -584,7 +633,7 @@ def run_vqa_alternative_approach(hf_model_path: str, data_dir: str, eval_type: s
             "--max_length", "16"   # Shorter max length
         ]
 
-        logger.info(f"Running alternative VQA command: {' '.join(cmd)}")
+        logger.info(f"Running alternative VQA command: {' '.join(alternative_cmd)}")
         result = subprocess.run(alternative_cmd, capture_output=True, text=True, timeout=1800)
 
         # Check for predictions again
@@ -620,7 +669,6 @@ def run_vqa_alternative_approach(hf_model_path: str, data_dir: str, eval_type: s
             "error": f"Alternative VQA approach exception: {str(e)}",
             "method": "alternative_exception"
         }
-}
 
 
 def run_devbench_evaluation(model_path: str, output_dir: str = "results_2025"):
@@ -852,18 +900,16 @@ def evaluate_bitmar_2025(
     try:
         all_results = {}
 
-        # Run text evaluations
+        # Run text evaluations (primary focus)
         text_results = run_text_evaluations(str(model_path), eval_type, str(output_path))
         all_results.update(text_results)
 
-        # Run multimodal evaluations
+        # Run multimodal evaluations (only available in full mode)
         multimodal_results = run_multimodal_evaluations(str(model_path), eval_type, str(output_path))
         all_results.update(multimodal_results)
 
-        # Run DevBench if available
-        if eval_type == "full":
-            devbench_results = run_devbench_evaluation(str(model_path), str(output_path))
-            all_results.update(devbench_results)
+        # Note: DevBench is not available in the current evaluation data
+        logger.info("ℹ️ DevBench evaluation skipped - not available in current evaluation data")
 
         # Save combined results
         results_file = output_path / "combined_results_2025.json"

@@ -116,16 +116,18 @@ class EvaluationDataValidator:
         """Check which required evaluation files exist"""
         required_files = {
             "fast_eval": {
+                # Fast evaluation only needs text-based tasks
                 "blimp_fast": "blimp_fast/",
                 "supplement_fast": "supplement_fast/",
                 "entity_tracking_fast": "entity_tracking_fast/",
                 "reading": "reading/",
                 "wug_adj": "wug_adj_nominalization/",
-                "wug_past": "wug_past_tense/",
-                "vqa_filtered": "vqa_filtered/",
-                "winoground_filtered": "winoground_filtered/"
+                "wug_past": "wug_past_tense/"
+                # Note: vqa_filtered and winoground_filtered are NOT required for fast_eval
+                # Fast evaluation focuses on text-only tasks for speed
             },
             "full_eval": {
+                # Full evaluation includes all tasks except DevBench (which is optional)
                 "blimp_filtered": "blimp_filtered/",
                 "supplement_filtered": "supplement_filtered/",
                 "entity_tracking": "entity_tracking/",
@@ -134,10 +136,11 @@ class EvaluationDataValidator:
                 "wug_past": "wug_past_tense/",
                 "vqa_filtered": "vqa_filtered/",
                 "winoground_filtered": "winoground_filtered/",
-                "devbench": "devbench/",
                 "glue_filtered": "glue_filtered/",
                 "cdi_childes": "cdi_childes/",
                 "comps": "comps/"
+                # Note: devbench is optional and handled separately
+                # It requires special dependencies and large data files
             }
         }
 
