@@ -2,6 +2,7 @@
 BitMar Model Architecture
 BitNet-quantized Vision-Language Episodic Memory Transformer
 Combines 1.58-bit quantization, DiNOv2 vision, and Larimar episodic memory
+Enhanced with Attention Sinks for endless fluent generation
 """
 
 import torch
@@ -12,6 +13,15 @@ from typing import Dict, List, Optional, Tuple, Union
 from transformers import AutoTokenizer
 import math
 import logging
+
+# Import attention sinks integration
+from .attention_sinks_integration import (
+    BitMarAttentionSinksMixin,
+    AttentionSinkKVCache,
+    AttentionSinksConfig,
+    apply_attention_sinks_to_bitmar_model,
+    update_model_kwargs_for_generation_with_sinks
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +127,7 @@ class BitNetMLP(nn.Module):
         return self.norm(x + residual)
 
 
-class BitNetAttention(nn.Module):
+class BitNetAttention(nn.Module, BitMarAttentionSinksMixin):
     """Multi-head attention with BitNet quantization"""
 
     def __init__(
@@ -148,7 +158,8 @@ class BitNetAttention(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        mask: Optional[torch.Tensor] = None
+        mask: Optional[torch.Tensor] = None,
+        attention_sinks: Optional[AttentionSinkKVCache] = None  # NEW: Attention sinks support
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len = query.shape[:2]
 
@@ -208,6 +219,11 @@ class BitNetAttention(nn.Module):
             batch_size, seq_len, self.dim
         )
         output = self.out_proj(attended)
+
+        # Update attention sinks if provided
+        if attention_sinks is not None:
+            # Cache key and value projections for sinks
+            attention_sinks.update_cache(key, value, attention_weights)
 
         return output, attention_weights.mean(dim=1)  # Average across heads
 

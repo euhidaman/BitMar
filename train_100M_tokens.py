@@ -89,6 +89,19 @@ try:
 except ImportError:
     ADAPTIVE_TRAINING_AVAILABLE = False
 
+# Try to import attention sinks integration
+try:
+    from src.attention_sinks_integration import (
+        AttentionSinksConfig,
+        apply_attention_sinks_to_bitmar_model,
+        update_model_kwargs_for_generation_with_sinks
+    )
+    ATTENTION_SINKS_AVAILABLE = True
+    logger.info("✅ Attention Sinks integration available")
+except ImportError:
+    ATTENTION_SINKS_AVAILABLE = False
+    logger.warning("⚠️  Attention Sinks integration not available")
+
 
 class TokenAwareTrainer:
     """Token-aware trainer for exactly 100M tokens"""
@@ -727,6 +740,57 @@ class TokenAwareTrainer:
         logger.info(f"  • episode_dim: {self.config['model']['episode_dim']}")
         
         self.model = create_bitmar_model(self.config['model'])
+
+        # Apply attention sinks if enabled and available
+        if ATTENTION_SINKS_AVAILABLE and self.config.get('attention_sinks', {}).get('enabled', False):
+            try:
+                logger.info("🔄 Applying attention sinks to BitMar model...")
+
+                # Create attention sinks configuration
+                attention_sinks_config = AttentionSinksConfig(
+                    enable_attention_sinks=True,
+                    attention_sink_size=self.config['attention_sinks'].get('attention_sink_size', 4),
+                    attention_sink_window_size=self.config['attention_sinks'].get('attention_sink_window_size', 1020),
+                    inject_to_text_encoder=self.config['attention_sinks'].get('inject_to_text_encoder', True),
+                    inject_to_text_decoder=self.config['attention_sinks'].get('inject_to_text_decoder', True),
+                    position_shift_enabled=self.config['attention_sinks'].get('position_shift_enabled', True)
+                )
+
+                # Apply attention sinks to the model
+                self.model = apply_attention_sinks_to_bitmar_model(self.model, attention_sinks_config)
+
+                # Get attention sinks statistics
+                if hasattr(self.model, 'get_attention_sinks_stats'):
+                    stats = self.model.get_attention_sinks_stats()
+                    logger.info("✅ Attention Sinks successfully applied:")
+                    logger.info(f"  • Attention sink size: {stats.get('attention_sink_size', 'N/A')}")
+                    logger.info(f"  • Window size: {stats.get('attention_sink_window_size', 'N/A')}")
+                    logger.info(f"  • Cache size: {stats.get('cache_size', 'N/A')}")
+                    logger.info(f"  • Layers with sinks: {stats.get('layers_with_attention_sinks', 'N/A')}")
+
+                    # Log to wandb if available
+                    if self.use_wandb:
+                        try:
+                            wandb.log({
+                                'attention_sinks/enabled': True,
+                                'attention_sinks/sink_size': stats.get('attention_sink_size', 0),
+                                'attention_sinks/window_size': stats.get('attention_sink_window_size', 0),
+                                'attention_sinks/cache_size': stats.get('cache_size', 0),
+                                'attention_sinks/layers_count': stats.get('layers_with_attention_sinks', 0)
+                            })
+                        except Exception as e:
+                            logger.warning(f"Failed to log attention sinks stats to wandb: {e}")
+                else:
+                    logger.info("✅ Attention Sinks applied successfully")
+
+            except Exception as e:
+                logger.error(f"❌ Failed to apply attention sinks: {e}")
+                logger.warning("⚠️  Continuing training without attention sinks")
+        elif self.config.get('attention_sinks', {}).get('enabled', False):
+            logger.warning("⚠️  Attention sinks enabled in config but integration not available")
+        else:
+            logger.info("📝 Attention sinks disabled in configuration")
+
         self.model.to(self.device)
 
         # Verify model is on correct device
@@ -936,7 +1000,7 @@ class TokenAwareTrainer:
                 self.use_wandb = False
 
     def save_token_checkpoint(self):
-        """Save checkpoint with token information"""
+        """Save checkpoint with token information and automatic cleanup"""
         checkpoint = {
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
@@ -959,25 +1023,37 @@ class TokenAwareTrainer:
         
         logger.info(f"💾 Checkpoint saved: {checkpoint_path}")
 
-    def save_step_checkpoint(self):
-        """Save checkpoint based on current step"""
-        checkpoint = {
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
-            'epoch': self.current_epoch,
-            'global_step': self.global_step,
-            'tokens_processed': self.tokens_processed,
-            'target_tokens': self.target_tokens,
-            'best_similarity': self.best_similarity,
-            'config': self.config
-        }
+        # Cleanup old checkpoints - keep only top 5 most recent epoch checkpoints
+        self.cleanup_old_checkpoints()
 
-        # Save checkpoint with step information
-        step_checkpoint_path = self.checkpoint_dir / f'checkpoint_step_{self.global_step}_tokens_{self.tokens_processed}.pt'
-        torch.save(checkpoint, step_checkpoint_path)
+    def cleanup_old_checkpoints(self):
+        """Keep only the 5 most recent epoch checkpoints and delete older ones"""
+        try:
+            # Get all epoch checkpoint files
+            checkpoint_pattern = "checkpoint_epoch_*.pt"
+            checkpoint_files = list(self.checkpoint_dir.glob(checkpoint_pattern))
 
-        logger.info(f"💾 Step-based checkpoint saved: {step_checkpoint_path}")
+            if len(checkpoint_files) <= 5:
+                return  # No cleanup needed
+
+            # Sort by modification time (newest first)
+            checkpoint_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+
+            # Keep only the 5 most recent, delete the rest
+            files_to_delete = checkpoint_files[5:]
+
+            for old_checkpoint in files_to_delete:
+                try:
+                    old_checkpoint.unlink()  # Delete the file
+                    logger.info(f"🗑️  Deleted old checkpoint: {old_checkpoint.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete checkpoint {old_checkpoint.name}: {e}")
+
+            if files_to_delete:
+                logger.info(f"✅ Cleanup completed: kept {min(5, len(checkpoint_files))} checkpoints, deleted {len(files_to_delete)}")
+
+        except Exception as e:
+            logger.warning(f"Failed to cleanup old checkpoints: {e}")
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """Train one epoch with token awareness"""

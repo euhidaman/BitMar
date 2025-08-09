@@ -330,3 +330,22 @@ huggingface_hub:
     model = AutoModel.from_pretrained("{repo_id}")
     tokenizer = AutoTokenizer.from_pretrained("{repo_id}")
     ```
+
+# Attention Sinks configuration for endless fluent generation
+attention_sinks:
+  enabled: true # Enable attention sinks for improved long sequence generation
+  attention_sink_size: 4 # Number of initial tokens to use as attention sinks
+  attention_sink_window_size: 1020 # Size of sliding window for recent tokens
+  inject_to_text_encoder: true # Apply to text encoder
+  inject_to_text_decoder: true # Apply to text decoder
+  position_shift_enabled: true # Enable position shifting for proper handling
+
+  # Advanced attention sinks settings
+  cache_compression: true # Enable KV cache compression
+  adaptive_window_size: false # Experimental: adaptive window sizing
+  memory_efficient_attention: true # Use memory-efficient attention patterns
+
+  # Integration with existing BitMar features
+  preserve_episodic_memory: true # Ensure episodic memory functionality is preserved
+  preserve_quantization: true # Ensure BitNet quantization is preserved
+  preserve_cross_modal_fusion: true # Ensure cross-modal fusion is preserved
