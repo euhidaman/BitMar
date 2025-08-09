@@ -105,7 +105,7 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
         # Focus on available text evaluation tasks based on actual data
         eval_dir = "evaluation_data/fast_eval" if eval_type == "fast" else "evaluation_data/full_eval"
 
-        # Define core text evaluation tasks that are actually available
+        # Define core text evaluation tasks that are actually supported by 2025 pipeline
         if eval_type == "fast":
             tasks = [
                 ("blimp", f"{eval_dir}/blimp_fast"),
@@ -122,9 +122,10 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
                 ("wug_adj", f"{eval_dir}/wug_adj_nominalization"),
                 ("wug_past", f"{eval_dir}/wug_past_tense"),
                 ("entity_tracking", f"{eval_dir}/entity_tracking"),
-                ("cdi_childes", f"{eval_dir}/cdi_childes"),  # Available in full_eval
-                ("comps", f"{eval_dir}/comps"),  # Available in full_eval
-                ("glue_filtered", f"{eval_dir}/glue_filtered")  # Available in full_eval
+                ("comps", f"{eval_dir}/comps")  # Available in full_eval and supported by 2025 pipeline
+                # NOTE: cdi_childes removed - data exists but NOT supported by 2025 evaluation pipeline
+                # NOTE: glue_filtered removed - data exists but NOT supported by 2025 evaluation pipeline
+                # 2025 pipeline only supports: blimp, ewok, entity_tracking, wug_adj, wug_past, comps, vqa, winoground
             ]
 
         # Validate available tasks
@@ -857,17 +858,25 @@ def download_vqa_data_if_missing(vqa_data_dir: str):
             # Create the directory if it doesn't exist
             vqa_path.mkdir(parents=True, exist_ok=True)
 
-            # Try to download VQA data from common sources
+            # Try to download VQA data from working Hugging Face sources
             vqa_urls = [
                 {
-                    "name": "BabyLM VQA Dataset",
-                    "url": "https://github.com/babylm/evaluation-pipeline-2025/releases/download/v1.0/vqa_filtered.zip",
-                    "extract": True
+                    "name": "HuggingFace VQA Dataset (public)",
+                    "url": "https://huggingface.co/datasets/HuggingFaceM4/VQAv2/resolve/main/vqa_val_eval.json",
+                    "extract": False,
+                    "filename": "questions.json"
                 },
                 {
-                    "name": "Alternative VQA Source",
-                    "url": "https://huggingface.co/datasets/babylm/evaluation-data/resolve/main/vqa_filtered.tar.gz",
-                    "extract": True
+                    "name": "HuggingFace VQA Annotations (public)",
+                    "url": "https://huggingface.co/datasets/HuggingFaceM4/VQAv2/resolve/main/vqa_val_annotations.json",
+                    "extract": False,
+                    "filename": "annotations.json"
+                },
+                {
+                    "name": "Alternative VQA Source (GitHub)",
+                    "url": "https://raw.githubusercontent.com/babylm/evaluation-pipeline-2025/main/evaluation_data/full_eval/vqa_filtered/questions.json",
+                    "extract": False,
+                    "filename": "questions.json"
                 }
             ]
 
@@ -881,13 +890,8 @@ def download_vqa_data_if_missing(vqa_data_dir: str):
                     response = requests.get(source['url'], stream=True, timeout=300)
                     response.raise_for_status()
 
-                    # Determine file extension and path
-                    if source['url'].endswith('.zip'):
-                        download_path = vqa_path / "vqa_data.zip"
-                    elif source['url'].endswith('.tar.gz'):
-                        download_path = vqa_path / "vqa_data.tar.gz"
-                    else:
-                        download_path = vqa_path / "vqa_data"
+                    # Determine download path
+                    download_path = vqa_path / source.get('filename', 'vqa_data.json')
 
                     # Save the file
                     total_size = int(response.headers.get('content-length', 0))
@@ -904,22 +908,10 @@ def download_vqa_data_if_missing(vqa_data_dir: str):
 
                     logger.info(f"✅ Downloaded VQA data from {source['name']}")
 
-                    # Extract if needed
-                    if source.get('extract', False):
-                        if download_path.suffix == '.zip':
-                            with zipfile.ZipFile(download_path, 'r') as zip_ref:
-                                zip_ref.extractall(vqa_path)
-                            logger.info("✅ Extracted VQA data from ZIP")
-                        elif download_path.suffix == '.gz':
-                            with tarfile.open(download_path, 'r:gz') as tar_ref:
-                                tar_ref.extractall(vqa_path)
-                            logger.info("✅ Extracted VQA data from TAR.GZ")
-
-                        # Remove the downloaded archive
-                        download_path.unlink()
-
-                    download_success = True
-                    break
+                    # If we got at least one file, consider it a partial success
+                    if download_path.exists() and download_path.stat().st_size > 0:
+                        download_success = True
+                        # Don't break yet, try to get more files
 
                 except requests.exceptions.RequestException as e:
                     logger.warning(f"⚠️ Failed to download from {source['name']}: {e}")
@@ -927,6 +919,36 @@ def download_vqa_data_if_missing(vqa_data_dir: str):
                 except Exception as e:
                     logger.warning(f"⚠️ Error processing download from {source['name']}: {e}")
                     continue
+
+            # Try downloading from the evaluation pipeline repository directly
+            if not download_success:
+                logger.info("🔄 Trying to download from evaluation pipeline repository...")
+                try:
+                    # Try getting VQA files from the 2025 evaluation pipeline repository
+                    pipeline_vqa_files = [
+                        "https://github.com/babylm/evaluation-pipeline-2025/raw/main/evaluation_data/full_eval/vqa_filtered/vqa_test.jsonl",
+                        "https://github.com/babylm/evaluation-pipeline-2025/raw/main/evaluation_data/full_eval/vqa_filtered/vqa_train.jsonl",
+                        "https://github.com/babylm/evaluation-pipeline-2025/raw/main/evaluation_data/full_eval/vqa_filtered/vqa_val.jsonl"
+                    ]
+
+                    for file_url in pipeline_vqa_files:
+                        try:
+                            filename = file_url.split('/')[-1]
+                            response = requests.get(file_url, timeout=300)
+                            response.raise_for_status()
+
+                            with open(vqa_path / filename, 'wb') as f:
+                                f.write(response.content)
+
+                            logger.info(f"✅ Downloaded {filename}")
+                            download_success = True
+
+                        except Exception as e:
+                            logger.warning(f"⚠️ Failed to download {filename}: {e}")
+                            continue
+
+                except Exception as e:
+                    logger.warning(f"⚠️ Pipeline repository download failed: {e}")
 
             if not download_success:
                 logger.warning("⚠️ Could not download VQA data from any source")
