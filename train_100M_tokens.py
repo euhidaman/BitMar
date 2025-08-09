@@ -21,6 +21,16 @@ from tqdm import tqdm
 import time
 import traceback
 
+# Hugging Face Hub integration
+try:
+    from huggingface_hub import HfApi, create_repo, upload_folder
+    from transformers import AutoTokenizer, AutoConfig
+    HF_HUB_AVAILABLE = True
+    print("✅ Hugging Face Hub integration available")
+except ImportError:
+    HF_HUB_AVAILABLE = False
+    print("⚠️  Hugging Face Hub not available - install with: pip install huggingface_hub")
+
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
@@ -169,6 +179,9 @@ class TokenAwareTrainer:
         # Initialize carbon tracking if available
         self.setup_carbon_tracking()
 
+        # Setup Hugging Face Hub integration
+        self.setup_huggingface_hub()
+
         logger.info(f"🎯 Token-aware trainer initialized for {self.target_tokens:,} tokens")
         logger.info(f"Device: {self.device}")
 
@@ -227,6 +240,249 @@ class TokenAwareTrainer:
         except Exception as e:
             logger.warning(f"Failed to setup carbon tracking: {e}")
             self.carbon_tracker = None
+
+    def setup_huggingface_hub(self):
+        """Setup Hugging Face Hub integration"""
+        if not HF_HUB_AVAILABLE:
+            self.hf_hub_enabled = False
+            logger.warning("⚠️  Hugging Face Hub not available - model uploads disabled")
+            return
+
+        hf_config = self.config.get('huggingface_hub', {})
+
+        if not hf_config.get('enabled', False):
+            self.hf_hub_enabled = False
+            logger.info("📤 Hugging Face Hub uploads disabled in config")
+            return
+
+        # Get repository ID
+        self.hf_repo_id = hf_config.get('repo_id')
+        if not self.hf_repo_id:
+            self.hf_hub_enabled = False
+            logger.warning("⚠️  No Hugging Face repo_id specified - model uploads disabled")
+            return
+
+        # Get or set up authentication token
+        self.hf_token = hf_config.get('token') or os.getenv('HF_TOKEN')
+        if not self.hf_token:
+            self.hf_hub_enabled = False
+            logger.warning("⚠️  No Hugging Face token found - model uploads disabled")
+            logger.warning("   Set HF_TOKEN environment variable or add token to config")
+            return
+
+        try:
+            # Initialize Hugging Face API
+            self.hf_api = HfApi(token=self.hf_token)
+
+            # Test authentication
+            user_info = self.hf_api.whoami()
+            logger.info(f"✅ Authenticated with Hugging Face as: {user_info['name']}")
+
+            # Check if repository exists, create if not
+            try:
+                repo_info = self.hf_api.repo_info(self.hf_repo_id, token=self.hf_token)
+                logger.info(f"✅ Repository found: {self.hf_repo_id}")
+            except Exception:
+                logger.info(f"📤 Creating new repository: {self.hf_repo_id}")
+                try:
+                    create_repo(
+                        repo_id=self.hf_repo_id,
+                        token=self.hf_token,
+                        private=hf_config.get('private', True),
+                        exist_ok=True
+                    )
+                    logger.info(f"✅ Repository created: {self.hf_repo_id}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to create repository: {e}")
+                    self.hf_hub_enabled = False
+                    return
+
+            # Store configuration
+            self.hf_hub_enabled = True
+            self.hf_upload_after_epoch = hf_config.get('upload_after_epoch', True)
+            self.hf_upload_final_model = hf_config.get('upload_final_model', True)
+            self.hf_commit_message_template = hf_config.get('commit_message_template',
+                "BitMar 100M tokens - Epoch {epoch} - {tokens_processed:,} tokens processed")
+            self.hf_create_model_card = hf_config.get('create_model_card', True)
+            self.hf_model_card_template = hf_config.get('model_card_template', "")
+
+            logger.info("🤗 Hugging Face Hub integration initialized:")
+            logger.info(f"  • Repository: {self.hf_repo_id}")
+            logger.info(f"  • Upload after epoch: {self.hf_upload_after_epoch}")
+            logger.info(f"  • Upload final model: {self.hf_upload_final_model}")
+            logger.info(f"  • Create model card: {self.hf_create_model_card}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to setup Hugging Face Hub: {e}")
+            self.hf_hub_enabled = False
+
+    def create_model_card(self, epoch: int, final: bool = False) -> str:
+        """Create model card content"""
+        if not self.hf_model_card_template:
+            return ""
+
+        try:
+            # Format template with current training state
+            card_content = self.hf_model_card_template.format(
+                epoch=epoch + 1,
+                tokens_processed=self.tokens_processed,
+                best_similarity=self.best_similarity,
+                repo_id=self.hf_repo_id,
+                text_encoder_layers=self.config['model']['text_encoder_layers'],
+                text_encoder_dim=self.config['model']['text_encoder_dim'],
+                vision_latent_size=self.config['model']['vision_latent_size'],
+                memory_size=self.config['model']['memory_size']
+            )
+
+            # Add training status
+            if final:
+                card_content += f"\n\n## Training Status\n- **Status**: Completed\n"
+            else:
+                card_content += f"\n\n## Training Status\n- **Status**: In Progress (Epoch {epoch + 1})\n"
+
+            card_content += f"- **Tokens Processed**: {self.tokens_processed:,}\n"
+            card_content += f"- **Best Cross-modal Similarity**: {self.best_similarity:.4f}\n"
+
+            return card_content
+        except Exception as e:
+            logger.warning(f"Failed to create model card: {e}")
+            return ""
+
+    def prepare_model_for_upload(self, checkpoint_path: Path) -> Path:
+        """Prepare model files for Hugging Face upload"""
+        try:
+            # Create temporary directory for HF model files
+            hf_model_dir = self.checkpoint_dir / "hf_model_temp"
+            hf_model_dir.mkdir(exist_ok=True)
+
+            # Load checkpoint
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+
+            # Save model state dict in HF format
+            model_path = hf_model_dir / "pytorch_model.bin"
+            torch.save(checkpoint['model_state_dict'], model_path)
+
+            # Create config.json for the model
+            model_config = {
+                "architectures": ["BitMarModel"],
+                "model_type": "bitmar",
+                "vocab_size": self.config['model']['vocab_size'],
+                "text_encoder_dim": self.config['model']['text_encoder_dim'],
+                "text_encoder_layers": self.config['model']['text_encoder_layers'],
+                "text_encoder_heads": self.config['model']['text_encoder_heads'],
+                "vision_encoder_dim": self.config['model']['vision_encoder_dim'],
+                "vision_latent_size": self.config['model']['vision_latent_size'],
+                "fusion_hidden_size": self.config['model']['fusion_hidden_size'],
+                "memory_size": self.config['model']['memory_size'],
+                "episode_dim": self.config['model']['episode_dim'],
+                "max_seq_len": self.config['model']['max_seq_len'],
+                "dropout": self.config['model']['dropout'],
+                "torch_dtype": "float32",
+                "transformers_version": "4.0.0"
+            }
+
+            config_path = hf_model_dir / "config.json"
+            with open(config_path, 'w') as f:
+                import json
+                json.dump(model_config, f, indent=2)
+
+            # Save training metadata
+            training_metadata = {
+                "epoch": checkpoint['epoch'],
+                "global_step": checkpoint['global_step'],
+                "tokens_processed": checkpoint['tokens_processed'],
+                "target_tokens": checkpoint['target_tokens'],
+                "best_similarity": checkpoint['best_similarity'],
+                "training_config": self.config
+            }
+
+            metadata_path = hf_model_dir / "training_metadata.json"
+            with open(metadata_path, 'w') as f:
+                json.dump(training_metadata, f, indent=2)
+
+            logger.info(f"✅ Model prepared for upload in: {hf_model_dir}")
+            return hf_model_dir
+
+        except Exception as e:
+            logger.error(f"❌ Failed to prepare model for upload: {e}")
+            raise
+
+    def upload_checkpoint_to_hf(self, epoch: int, final: bool = False):
+        """Upload model checkpoint to Hugging Face Hub"""
+        if not self.hf_hub_enabled:
+            return
+
+        try:
+            logger.info(f"📤 Uploading {'final ' if final else ''}model to Hugging Face Hub...")
+
+            # Get checkpoint path
+            if final:
+                checkpoint_path = self.checkpoint_dir / 'latest_checkpoint.pt'
+            else:
+                checkpoint_path = self.checkpoint_dir / f'checkpoint_epoch_{epoch}_tokens_{self.tokens_processed}.pt'
+
+            if not checkpoint_path.exists():
+                logger.warning(f"⚠️  Checkpoint not found: {checkpoint_path}")
+                return
+
+            # Prepare model files
+            hf_model_dir = self.prepare_model_for_upload(checkpoint_path)
+
+            # Create model card if enabled
+            if self.hf_create_model_card:
+                model_card_content = self.create_model_card(epoch, final)
+                if model_card_content:
+                    readme_path = hf_model_dir / "README.md"
+                    with open(readme_path, 'w') as f:
+                        f.write(model_card_content)
+
+            # Create commit message
+            commit_message = self.hf_commit_message_template.format(
+                epoch=epoch + 1,
+                tokens_processed=self.tokens_processed
+            )
+
+            if final:
+                commit_message = f"Final model - {commit_message}"
+
+            # Upload to Hugging Face Hub
+            logger.info(f"📤 Uploading files to {self.hf_repo_id}...")
+            self.hf_api.upload_folder(
+                folder_path=str(hf_model_dir),
+                repo_id=self.hf_repo_id,
+                token=self.hf_token,
+                commit_message=commit_message
+            )
+
+            logger.info(f"✅ Model uploaded successfully to: https://huggingface.co/{self.hf_repo_id}")
+
+            # Log to wandb if available
+            if self.use_wandb:
+                try:
+                    wandb.log({
+                        f'huggingface/upload_success': True,
+                        f'huggingface/epoch': epoch + 1,
+                        f'huggingface/repo_url': f"https://huggingface.co/{self.hf_repo_id}"
+                    }, step=self.global_step)
+                except Exception as e:
+                    logger.warning(f"Failed to log HF upload to wandb: {e}")
+
+            # Cleanup temporary directory
+            import shutil
+            shutil.rmtree(hf_model_dir, ignore_errors=True)
+
+        except Exception as e:
+            logger.error(f"❌ Failed to upload model to Hugging Face Hub: {e}")
+
+            # Log failure to wandb if available
+            if self.use_wandb:
+                try:
+                    wandb.log({
+                        f'huggingface/upload_success': False,
+                        f'huggingface/error': str(e)
+                    }, step=self.global_step)
+                except Exception:
+                    pass
 
     def custom_collate_fn(self, batch):
         """Custom collate function that handles missing keys gracefully and ensures proper padding"""
@@ -1008,6 +1264,10 @@ class TokenAwareTrainer:
                 # Save checkpoint after each epoch
                 self.save_token_checkpoint()
 
+                # Upload checkpoint to Hugging Face Hub after each epoch
+                if self.hf_hub_enabled and self.hf_upload_after_epoch:
+                    self.upload_checkpoint_to_hf(epoch)
+
                 # Run fast evaluation after each epoch if enabled
                 if hasattr(self, 'enable_fast_eval') and self.enable_fast_eval:
                     self.run_fast_evaluation_after_epoch(epoch)
@@ -1041,6 +1301,10 @@ class TokenAwareTrainer:
 
             # Final checkpoint
             self.save_token_checkpoint()
+
+            # Upload final model to Hugging Face Hub
+            if self.hf_hub_enabled and self.hf_upload_final_model:
+                self.upload_checkpoint_to_hf(self.current_epoch, final=True)
 
             # Run full evaluation at the end if enabled
             if hasattr(self, 'enable_full_eval') and self.enable_full_eval:

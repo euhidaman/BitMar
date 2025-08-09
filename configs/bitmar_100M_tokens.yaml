@@ -282,3 +282,52 @@ token_tracking:
   correlate_flops_with_tokens: true # Track FLOPS per token processed
   log_computational_efficiency: true # Log computational efficiency metrics
   track_throughput_vs_quality: true # Monitor trade-offs between speed and quality
+
+# Hugging Face Hub integration for model checkpoint saving
+huggingface_hub:
+  enabled: true # Enable automatic uploads to HF Hub
+  repo_id: "euhidaman/bitmar-100m-tokens" # Replace with your HF repo ID
+  token: null # HF token (will use HF_TOKEN env var if not set)
+  private: true # Keep repo private by default
+  upload_after_epoch: true # Upload checkpoint after each epoch
+  upload_final_model: true # Upload final model at end
+  commit_message_template: "BitMar 100M tokens - Epoch {epoch} - {tokens_processed:,} tokens processed"
+  create_model_card: true # Generate model card automatically
+  model_card_template: |
+    ---
+    language: en
+    license: mit
+    tags:
+    - bitmar
+    - multimodal
+    - babylm
+    - cross-modal
+    datasets:
+    - babylm_multimodal
+    metrics:
+    - bleu
+    - cross_modal_similarity
+    ---
+    
+    # BitMar 100M Token Model
+    
+    This model was trained on exactly 100 million tokens as part of the BabyLM challenge.
+    
+    ## Training Details
+    - Total tokens: 100,000,000
+    - Epochs completed: {epoch}
+    - Tokens processed: {tokens_processed:,}
+    - Cross-modal similarity: {best_similarity:.4f}
+    
+    ## Model Architecture
+    - Text encoder: {text_encoder_layers} layers, {text_encoder_dim} hidden size
+    - Vision encoder: DiNOv2 features compressed to {vision_latent_size}
+    - Episodic memory: {memory_size} slots
+    
+    ## Usage
+    ```python
+    from transformers import AutoModel, AutoTokenizer
+    
+    model = AutoModel.from_pretrained("{repo_id}")
+    tokenizer = AutoTokenizer.from_pretrained("{repo_id}")
+    ```
