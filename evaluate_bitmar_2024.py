@@ -83,6 +83,18 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
     results = {}
 
     try:
+        # Convert BitMar checkpoint to HuggingFace format first
+        hf_model_dir = f"hf_model_temp_2024_{eval_type}"
+        try:
+            sys.path.append(str(Path(__file__).parent))
+            from bitmar_hf_adapter import save_hf_compatible_model
+            hf_model_path = save_hf_compatible_model(model_path, hf_model_dir)
+            logger.info(f"✅ Created HuggingFace compatible model for 2024 evaluation at: {hf_model_path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to create HF adapter for 2024 evaluation: {e}")
+            results['multimodal'] = {"error": f"HF adapter failed: {e}"}
+            return results
+
         # Check for multimodal evaluation script in 2024 pipeline
         multimodal_scripts = [
             "eval_multimodal.sh",
@@ -99,13 +111,17 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
         if not eval_script:
             logger.warning("⚠️ No multimodal evaluation script found in 2024 pipeline")
             # Try to run individual multimodal tasks
-            return run_individual_multimodal_tasks(model_path, eval_type, output_dir)
+            individual_results = run_individual_multimodal_tasks(hf_model_path, eval_type, output_dir)
+            # Cleanup temp HF model
+            if Path(hf_model_dir).exists():
+                shutil.rmtree(hf_model_dir)
+            return individual_results
 
-        # Run multimodal evaluation with proper quoting
+        # Run multimodal evaluation with HuggingFace model
         if eval_script.endswith('.py'):
             cmd = [
                 sys.executable, eval_script,
-                "--model_path", f'"{model_path}"',  # Quote the model path
+                "--model_path", hf_model_path,  # Use HF model path
                 "--eval_type", eval_type,
                 "--output_dir", f"{output_dir}/multimodal_results"
             ]
@@ -114,12 +130,12 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
         else:
             cmd = [
                 "bash", eval_script,
-                f'"{model_path}"',  # Quote the model path for bash scripts
+                hf_model_path,  # Use HF model path for bash scripts
                 eval_type,
                 f"{output_dir}/multimodal_results"
             ]
-            # Use shell=True for bash scripts with quoted arguments
-            result = subprocess.run(' '.join(cmd), capture_output=True, text=True, timeout=3600, shell=True)
+            # Use normal subprocess for bash scripts
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
 
         logger.info(f"Running command: {' '.join(cmd)}")
 
@@ -135,14 +151,21 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
             logger.warning(f"⚠️ Multimodal evaluation failed: {result.stderr}")
             results['multimodal'] = {"error": result.stderr}
 
+        # Cleanup temp HF model
+        if Path(hf_model_dir).exists():
+            shutil.rmtree(hf_model_dir)
+
     except Exception as e:
         logger.error(f"❌ Multimodal evaluation error: {e}")
         results['multimodal'] = {"error": str(e)}
+        # Cleanup temp HF model
+        if 'hf_model_dir' in locals() and Path(hf_model_dir).exists():
+            shutil.rmtree(hf_model_dir)
 
     return results
 
 
-def run_individual_multimodal_tasks(model_path: str, eval_type: str, output_dir: str):
+def run_individual_multimodal_tasks(hf_model_path: str, eval_type: str, output_dir: str):
     """Run individual multimodal tasks if main script not found"""
     logger.info("🔧 Running individual multimodal tasks...")
 
@@ -187,10 +210,10 @@ def run_individual_multimodal_tasks(model_path: str, eval_type: str, output_dir:
                 logger.warning(f"⚠️ Script not found for {task['name']}")
                 continue
 
-            # Run task with properly quoted model path
+            # Run task with HuggingFace model path
             cmd = [
                 sys.executable, script_path,
-                "--model_path", f'"{model_path}"',  # Quote the model path
+                "--model_path", hf_model_path,  # Use HF model path
                 "--data_dir", str(data_path),
                 "--output_dir", f"{output_dir}/{task['name']}_results"
             ]

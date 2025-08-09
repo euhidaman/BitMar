@@ -87,13 +87,25 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
         text_output_dir = Path(output_dir) / "text_results"
         text_output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Convert BitMar checkpoint to HuggingFace format first
+        hf_model_dir = f"hf_model_temp_text_{eval_type}"
+        try:
+            sys.path.append(str(Path(__file__).parent))
+            from bitmar_hf_adapter import save_hf_compatible_model
+            hf_model_path = save_hf_compatible_model(model_path, hf_model_dir)
+            logger.info(f"✅ Created HuggingFace compatible model for text evaluation at: {hf_model_path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to create HF adapter for text evaluation: {e}")
+            results['text'] = {"error": f"HF adapter failed: {e}"}
+            return results
+
         # Determine eval script and arguments based on type
         if eval_type == "fast":
             eval_script = "eval_zero_shot_fast.sh"
             # eval_zero_shot_fast.sh expects: MODEL_PATH REVISION_NAME BACKEND [EVAL_DIR]
             cmd = [
                 "bash", eval_script,
-                f'"{model_path}"',  # Quote the model path to handle spaces
+                hf_model_path,  # Use HF model path instead of original checkpoint
                 "main",  # revision_name
                 "causal",  # backend for BitMar (causal language model)
                 "evaluation_data/fast_eval"  # eval_dir
@@ -103,7 +115,7 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
             # eval_zero_shot.sh expects: MODEL_PATH BACKEND [EVAL_DIR]
             cmd = [
                 "bash", eval_script,
-                f'"{model_path}"',  # Quote the model path to handle spaces
+                hf_model_path,  # Use HF model path instead of original checkpoint
                 "causal",  # backend for BitMar (causal language model)
                 "evaluation_data/full_eval"  # eval_dir
             ]
@@ -111,6 +123,9 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
         # Check if script exists
         if not Path(eval_script).exists():
             logger.warning(f"⚠️ Evaluation script not found: {eval_script}")
+            # Cleanup temp HF model
+            if Path(hf_model_dir).exists():
+                shutil.rmtree(hf_model_dir)
             return results
 
         logger.info(f"Running command: {' '.join(cmd)}")
@@ -119,14 +134,13 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
 
-        # Use shell=True to properly handle quoted arguments
+        # Run the evaluation
         result = subprocess.run(
-            ' '.join(cmd),  # Join command as string for shell execution
+            cmd,
             capture_output=True,
             text=True,
             timeout=3600,
             env=env,
-            shell=True,  # Enable shell processing for proper quoting
             cwd=Path.cwd()
         )
 
@@ -158,12 +172,22 @@ def run_text_evaluations(model_path: str, eval_type: str = "fast", output_dir: s
                 "stdout": result.stdout[:1000] if result.stdout else ""
             }
 
+        # Cleanup temp HF model
+        if Path(hf_model_dir).exists():
+            shutil.rmtree(hf_model_dir)
+
     except subprocess.TimeoutExpired:
         logger.error("❌ Text evaluation timed out after 1 hour")
         results['text'] = {"error": "Timeout after 3600 seconds"}
+        # Cleanup temp HF model
+        if Path(hf_model_dir).exists():
+            shutil.rmtree(hf_model_dir)
     except Exception as e:
         logger.error(f"❌ Text evaluation error: {e}")
         results['text'] = {"error": str(e)}
+        # Cleanup temp HF model
+        if 'hf_model_dir' in locals() and Path(hf_model_dir).exists():
+            shutil.rmtree(hf_model_dir)
 
     return results
 
