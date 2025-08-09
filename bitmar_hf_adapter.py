@@ -147,7 +147,43 @@ def load_bitmar_as_hf_model(checkpoint_path: str, device: str = 'cuda:0'):
 
         # Create original BitMar model
         original_model = create_bitmar_model(bitmar_config['model'])
-        original_model.load_state_dict(model_state)
+
+        # Fix shape mismatches in state dict
+        fixed_state_dict = {}
+        current_model_state = original_model.state_dict()
+
+        for key, value in model_state.items():
+            if key in current_model_state:
+                current_shape = current_model_state[key].shape
+                checkpoint_shape = value.shape
+
+                # Handle weight_scale parameter mismatches
+                if 'weight_scale' in key and checkpoint_shape != current_shape:
+                    if checkpoint_shape == torch.Size([]) and current_shape == torch.Size([1]):
+                        # Convert scalar to 1D tensor
+                        fixed_state_dict[key] = value.unsqueeze(0)
+                        print(f"Fixed shape mismatch for {key}: {checkpoint_shape} -> {current_shape}")
+                    elif checkpoint_shape == torch.Size([1]) and current_shape == torch.Size([]):
+                        # Convert 1D tensor to scalar
+                        fixed_state_dict[key] = value.squeeze(0)
+                        print(f"Fixed shape mismatch for {key}: {checkpoint_shape} -> {current_shape}")
+                    else:
+                        print(f"Warning: Could not fix shape mismatch for {key}: {checkpoint_shape} vs {current_shape}")
+                        fixed_state_dict[key] = value
+                else:
+                    fixed_state_dict[key] = value
+            else:
+                print(f"Warning: Key {key} not found in current model, skipping")
+
+        # Load the fixed state dict
+        try:
+            original_model.load_state_dict(fixed_state_dict)
+            print("✅ Successfully loaded fixed state dict")
+        except Exception as e:
+            print(f"❌ Failed to load fixed state dict, trying strict=False: {e}")
+            original_model.load_state_dict(fixed_state_dict, strict=False)
+            print("✅ Loaded state dict with strict=False")
+
         original_model = original_model.to(device)
         original_model.eval()
 
