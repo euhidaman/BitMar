@@ -23,6 +23,7 @@ psutil
 typing-extensions
 huggingface-hub
 codecarbon
+nlopt
 
 # Additional testing dependencies
 pytest

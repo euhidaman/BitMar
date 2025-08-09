@@ -291,13 +291,15 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
             results['multimodal'] = {"error": f"HF adapter failed: {e}"}
             return results
 
-        # Run each multimodal task
+        # Run each multimodal task with enhanced error handling
         task_results = {}
+        successful_tasks = 0
+
         for task_name, data_dir in multimodal_tasks:
             try:
                 logger.info(f"Running {task_name} evaluation...")
 
-                # Use the evaluation pipeline's multimodal runner
+                # Use the evaluation pipeline's multimodal runner with enhanced error handling
                 cmd = [
                     "python", "-m", "evaluation_pipeline.sentence_zero_shot.run",
                     "--model_path_or_name", hf_model_path,
@@ -311,19 +313,58 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
 
                 if result.returncode == 0:
                     logger.info(f"✅ {task_name} evaluation completed")
-                    task_results[task_name] = {"status": "completed", "stdout": result.stdout[:500]}
+                    task_results[task_name] = {
+                        "status": "completed",
+                        "stdout": result.stdout[-500:] if result.stdout else ""
+                    }
+                    successful_tasks += 1
                 else:
-                    logger.warning(f"⚠️ {task_name} evaluation failed: {result.stderr[:500]}")
-                    task_results[task_name] = {"error": result.stderr[:500]}
+                    logger.warning(f"⚠️ {task_name} evaluation failed with return code {result.returncode}")
+                    logger.warning(f"STDERR: {result.stderr[:500] if result.stderr else 'No stderr'}")
+                    logger.warning(f"STDOUT: {result.stdout[:500] if result.stdout else 'No stdout'}")
 
+                    # Check for specific error patterns
+                    error_msg = result.stderr if result.stderr else "Unknown error"
+                    if "process_results" in error_msg:
+                        error_msg = "Results processing failed - possibly empty results"
+                    elif "Traceback" in error_msg:
+                        # Extract the actual error from traceback
+                        lines = error_msg.split('\n')
+                        for i, line in enumerate(lines):
+                            if 'Error:' in line or 'Exception:' in line:
+                                error_msg = line.strip()
+                                break
+
+                    task_results[task_name] = {
+                        "error": f"Return code {result.returncode}: {error_msg[:200]}",
+                        "stderr": result.stderr[:300] if result.stderr else "",
+                        "stdout": result.stdout[:300] if result.stdout else ""
+                    }
+
+            except subprocess.TimeoutExpired:
+                logger.warning(f"⚠️ {task_name} evaluation timed out after 30 minutes")
+                task_results[task_name] = {"error": "Timeout after 30 minutes"}
             except Exception as e:
                 logger.error(f"❌ {task_name} evaluation error: {e}")
                 task_results[task_name] = {"error": str(e)}
 
-        results['multimodal'] = task_results
+        # Compile results
+        if successful_tasks > 0:
+            results['multimodal'] = {
+                "status": "partially_completed" if successful_tasks < len(multimodal_tasks) else "completed",
+                "successful_tasks": successful_tasks,
+                "total_tasks": len(multimodal_tasks),
+                "task_results": task_results
+            }
+            logger.info(f"✅ Multimodal evaluation completed: {successful_tasks}/{len(multimodal_tasks)} tasks successful")
+        else:
+            results['multimodal'] = {
+                "error": "All multimodal tasks failed",
+                "task_results": task_results
+            }
+            logger.error("❌ All multimodal evaluation tasks failed")
 
         # Cleanup temp HF model
-        import shutil
         if Path(hf_model_dir).exists():
             shutil.rmtree(hf_model_dir)
 
@@ -335,7 +376,7 @@ def run_multimodal_evaluations(model_path: str, eval_type: str = "fast", output_
 
 
 def run_devbench_evaluation(model_path: str, output_dir: str = "results_2025"):
-    """Run DevBench evaluation"""
+    """Run DevBench evaluation with enhanced error handling"""
     logger.info("🧪 Running DevBench evaluation...")
 
     results = {}
@@ -346,6 +387,31 @@ def run_devbench_evaluation(model_path: str, output_dir: str = "results_2025"):
 
         if not Path(devbench_script).exists():
             logger.warning("⚠️ DevBench evaluation script not found")
+            results['devbench'] = {"error": "DevBench script not found", "status": "skipped"}
+            return results
+
+        # Check if required dependencies are available
+        try:
+            # Test if nlopt is available by trying to import it
+            import subprocess
+            test_cmd = ["python", "-c", "import nlopt; print('nlopt available')"]
+            test_result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=10)
+
+            if test_result.returncode != 0:
+                logger.warning("⚠️ DevBench dependency 'nlopt' not available - skipping DevBench evaluation")
+                results['devbench'] = {
+                    "error": "Missing required dependency: nlopt",
+                    "status": "skipped",
+                    "note": "Install nlopt with: pip install nlopt"
+                }
+                return results
+
+        except Exception as dep_error:
+            logger.warning(f"⚠️ Failed to check DevBench dependencies: {dep_error}")
+            results['devbench'] = {
+                "error": f"Dependency check failed: {dep_error}",
+                "status": "skipped"
+            }
             return results
 
         # Run DevBench evaluation
@@ -356,7 +422,7 @@ def run_devbench_evaluation(model_path: str, output_dir: str = "results_2025"):
         ]
 
         logger.info(f"Running command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)  # Increased timeout for full eval
 
         if result.returncode == 0:
             logger.info("✅ DevBench evaluation completed successfully")
@@ -366,13 +432,41 @@ def run_devbench_evaluation(model_path: str, output_dir: str = "results_2025"):
             if results_file.exists():
                 with open(results_file, 'r') as f:
                     results['devbench'] = json.load(f)
+                    results['devbench']['status'] = 'completed'
+            else:
+                results['devbench'] = {
+                    "status": "completed",
+                    "note": "DevBench completed but no results file found"
+                }
         else:
-            logger.warning(f"⚠️ DevBench evaluation failed: {result.stderr}")
-            results['devbench'] = {"error": result.stderr}
+            logger.warning(f"⚠️ DevBench evaluation failed with return code {result.returncode}")
+            logger.warning(f"STDERR: {result.stderr[:500] if result.stderr else 'No stderr'}")
 
+            # Check for specific error patterns
+            error_msg = result.stderr if result.stderr else "Unknown error"
+            if "nlopt" in error_msg.lower():
+                error_msg = "Missing nlopt dependency - install with: pip install nlopt"
+            elif "modulenotfounderror" in error_msg.lower():
+                # Extract module name
+                lines = error_msg.split('\n')
+                for line in lines:
+                    if "modulenotfounderror" in line.lower():
+                        error_msg = f"Missing Python module: {line.strip()}"
+                        break
+
+            results['devbench'] = {
+                "error": f"Return code {result.returncode}: {error_msg[:300]}",
+                "stderr": result.stderr[:500] if result.stderr else "",
+                "stdout": result.stdout[:500] if result.stdout else "",
+                "status": "failed"
+            }
+
+    except subprocess.TimeoutExpired:
+        logger.warning("⚠️ DevBench evaluation timed out after 1 hour")
+        results['devbench'] = {"error": "Timeout after 1 hour", "status": "timeout"}
     except Exception as e:
         logger.error(f"❌ DevBench evaluation error: {e}")
-        results['devbench'] = {"error": str(e)}
+        results['devbench'] = {"error": str(e), "status": "error"}
 
     return results
 
