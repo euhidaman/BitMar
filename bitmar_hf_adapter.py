@@ -204,32 +204,69 @@ def save_hf_compatible_model(bitmar_checkpoint_path: str, output_dir: str):
         # Save model (will be saved as GPT2 model)
         model.save_pretrained(output_path)
 
-        # Create a tokenizer config for full compatibility
-        tokenizer_config = {
-            "add_bos_token": False,
-            "add_prefix_space": False,
-            "bos_token": "<|endoftext|>",
-            "clean_up_tokenization_spaces": True,
-            "eos_token": "<|endoftext|>",
-            "model_max_length": 1024,
-            "pad_token": "<|endoftext|>",
-            "tokenizer_class": "GPT2Tokenizer",
-            "unk_token": "<|endoftext|>"
-        }
+        # Create a proper tokenizer for full compatibility
+        from transformers import GPT2Tokenizer
+        try:
+            # Use GPT2 tokenizer
+            tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
 
-        with open(output_path / "tokenizer_config.json", 'w') as f:
-            json.dump(tokenizer_config, f, indent=2)
+            # Set pad token to eos token (common practice for GPT2)
+            tokenizer.pad_token = tokenizer.eos_token
 
-        # Create special tokens map for full compatibility
-        special_tokens_map = {
-            "bos_token": "<|endoftext|>",
-            "eos_token": "<|endoftext|>",
-            "pad_token": "<|endoftext|>",
-            "unk_token": "<|endoftext|>"
-        }
+            # Save tokenizer
+            tokenizer.save_pretrained(output_path)
+            print(f"✅ Saved GPT2 tokenizer to: {output_path}")
 
-        with open(output_path / "special_tokens_map.json", 'w') as f:
-            json.dump(special_tokens_map, f, indent=2)
+        except Exception as e:
+            print(f"⚠️ Failed to save tokenizer, creating manual files: {e}")
+
+            # Create tokenizer config manually if GPT2Tokenizer fails
+            tokenizer_config = {
+                "add_bos_token": False,
+                "add_prefix_space": False,
+                "bos_token": "<|endoftext|>",
+                "clean_up_tokenization_spaces": True,
+                "eos_token": "<|endoftext|>",
+                "model_max_length": 1024,
+                "pad_token": "<|endoftext|>",
+                "tokenizer_class": "GPT2Tokenizer",
+                "unk_token": "<|endoftext|>"
+            }
+
+            with open(output_path / "tokenizer_config.json", 'w') as f:
+                json.dump(tokenizer_config, f, indent=2)
+
+            # Create special tokens map
+            special_tokens_map = {
+                "bos_token": "<|endoftext|>",
+                "eos_token": "<|endoftext|>",
+                "pad_token": "<|endoftext|>",
+                "unk_token": "<|endoftext|>"
+            }
+
+            with open(output_path / "special_tokens_map.json", 'w') as f:
+                json.dump(special_tokens_map, f, indent=2)
+
+            # Create vocab.json and merges.txt files from GPT2
+            try:
+                import requests
+                # Download vocab.json
+                vocab_url = "https://huggingface.co/gpt2/resolve/main/vocab.json"
+                vocab_response = requests.get(vocab_url)
+                if vocab_response.status_code == 200:
+                    with open(output_path / "vocab.json", 'w') as f:
+                        f.write(vocab_response.text)
+
+                # Download merges.txt
+                merges_url = "https://huggingface.co/gpt2/resolve/main/merges.txt"
+                merges_response = requests.get(merges_url)
+                if merges_response.status_code == 200:
+                    with open(output_path / "merges.txt", 'w') as f:
+                        f.write(merges_response.text)
+
+                print("✅ Downloaded GPT2 vocab and merges files")
+            except Exception as download_e:
+                print(f"⚠️ Failed to download vocab/merges files: {download_e}")
 
         print(f"✅ Model saved in HuggingFace GPT2 format to: {output_path}")
         return str(output_path)
