@@ -262,17 +262,60 @@ class TokenAwareTrainer:
             logger.warning("⚠️  No Hugging Face repo_id specified - model uploads disabled")
             return
 
-        # Get or set up authentication token
-        self.hf_token = hf_config.get('token') or os.getenv('HF_TOKEN')
+        # Get or set up authentication token with multiple fallback options
+        self.hf_token = None
+
+        # 1. Check config file first
+        if hf_config.get('token'):
+            self.hf_token = hf_config.get('token')
+            logger.info("🔑 Using Hugging Face token from config file")
+
+        # 2. Check environment variable
+        elif os.getenv('HF_TOKEN'):
+            self.hf_token = os.getenv('HF_TOKEN')
+            logger.info("🔑 Using Hugging Face token from HF_TOKEN environment variable")
+
+        # 3. Try to get token from huggingface_hub default location
+        else:
+            try:
+                from huggingface_hub import HfFolder
+                stored_token = HfFolder.get_token()
+                if stored_token:
+                    self.hf_token = stored_token
+                    logger.info("🔑 Using Hugging Face token from huggingface-cli login")
+            except Exception as e:
+                logger.debug(f"Failed to get token from HfFolder: {e}")
+
+        # 4. Final fallback - try using HfApi without explicit token (uses cached credentials)
+        if not self.hf_token:
+            try:
+                # Test if we can authenticate without explicit token
+                test_api = HfApi()
+                user_info = test_api.whoami()
+                if user_info:
+                    # Authentication worked, we can use the API without explicit token
+                    self.hf_token = "cached_credentials"
+                    logger.info("🔑 Using cached Hugging Face credentials")
+                else:
+                    raise Exception("No user info returned")
+            except Exception as e:
+                logger.debug(f"Failed to use cached credentials: {e}")
+
         if not self.hf_token:
             self.hf_hub_enabled = False
             logger.warning("⚠️  No Hugging Face token found - model uploads disabled")
-            logger.warning("   Set HF_TOKEN environment variable or add token to config")
+            logger.warning("   Options to fix this:")
+            logger.warning("   1. Run: huggingface-cli login")
+            logger.warning("   2. Set HF_TOKEN environment variable")
+            logger.warning("   3. Add token to config file")
             return
 
         try:
             # Initialize Hugging Face API
-            self.hf_api = HfApi(token=self.hf_token)
+            if self.hf_token == "cached_credentials":
+                self.hf_api = HfApi()  # Use cached credentials
+            else:
+                self.hf_api = HfApi(token=self.hf_token)
 
             # Test authentication
             user_info = self.hf_api.whoami()
