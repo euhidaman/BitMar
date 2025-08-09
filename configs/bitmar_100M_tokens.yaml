@@ -151,7 +151,7 @@ training:
 
 # Weights & Biases (Comprehensive logging for 100M token dataset training)
 wandb:
-  project: "bitmar-100M-dataset-epochs"
+  project: "bitmar-100M-attention-epochs"
   entity: "babylm-ntust"
   api_key: null
   log_every_n_steps: 100 # Regular logging
@@ -286,7 +286,7 @@ token_tracking:
 # Hugging Face Hub integration for model checkpoint saving
 huggingface_hub:
   enabled: true # Enable automatic uploads to HF Hub
-  repo_id: "euhidaman/bitmar-multimodal" # Replace with your HF repo ID
+  repo_id: "euhidaman/bitmar-attention-multimodal" # Replace with your HF repo ID
   private: true # Keep repo private by default
   upload_after_epoch: true # Upload checkpoint after each epoch
   upload_final_model: true # Upload final model at end
