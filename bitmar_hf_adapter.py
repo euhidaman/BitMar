@@ -5,7 +5,7 @@ Adapts BitMar models to be compatible with HuggingFace evaluation pipelines
 
 import torch
 import torch.nn as nn
-from transformers import PreTrainedModel, PretrainedConfig
+from transformers import PreTrainedModel, PretrainedConfig, AutoConfig, AutoModel
 from typing import Optional, Dict, Any
 import json
 from pathlib import Path
@@ -129,6 +129,15 @@ class BitMarForCausalLM(PreTrainedModel):
             return generated
 
 
+# Register the custom model type with HuggingFace
+try:
+    AutoConfig.register("bitmar", BitMarConfig)
+    AutoModel.register(BitMarConfig, BitMarForCausalLM)
+    print("✅ Registered BitMar model with HuggingFace AutoConfig and AutoModel")
+except Exception as e:
+    print(f"⚠️ Failed to register BitMar model with HuggingFace: {e}")
+
+
 def load_bitmar_as_hf_model(checkpoint_path: str, device: str = 'cuda:0'):
     """Load BitMar checkpoint and wrap it as HuggingFace model"""
     try:
@@ -222,11 +231,25 @@ def save_hf_compatible_model(bitmar_checkpoint_path: str, output_dir: str):
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        # Save config
+        # Save config with proper model type
+        config.model_type = "bitmar"
         config.save_pretrained(output_path)
 
         # Save model
         model.save_pretrained(output_path)
+
+        # Also save a tokenizer config to make it more compatible
+        tokenizer_config = {
+            "tokenizer_class": "GPT2Tokenizer",
+            "vocab_size": config.vocab_size,
+            "eos_token": "<|endoftext|>",
+            "bos_token": "<|endoftext|>",
+            "pad_token": "<|endoftext|>",
+            "unk_token": "<|endoftext|>"
+        }
+
+        with open(output_path / "tokenizer.json", 'w') as f:
+            json.dump(tokenizer_config, f, indent=2)
 
         print(f"✅ Model saved in HuggingFace format to: {output_path}")
         return str(output_path)
