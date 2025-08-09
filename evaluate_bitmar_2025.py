@@ -458,7 +458,7 @@ def run_vqa_with_fallback(hf_model_path: str, data_dir: str, eval_type: str):
 
 
 def run_devbench_evaluation(model_path: str, output_dir: str = "results_2025"):
-    """Run DevBench evaluation with enhanced error handling"""
+    """Run DevBench evaluation with enhanced error handling and data validation"""
     logger.info("🧪 Running DevBench evaluation...")
 
     results = {}
@@ -496,6 +496,38 @@ def run_devbench_evaluation(model_path: str, output_dir: str = "results_2025"):
             }
             return results
 
+        # Enhanced data validation for DevBench
+        required_devbench_files = [
+            "evaluation_data/full_eval/devbench/evals/sem-things/spose_similarity.mat",
+            "evaluation_data/full_eval/devbench/evals/",
+            "evaluation_data/full_eval/devbench/"
+        ]
+
+        missing_files = []
+        for file_path in required_devbench_files:
+            if not Path(file_path).exists():
+                missing_files.append(file_path)
+
+        if missing_files:
+            logger.warning("⚠️ DevBench evaluation data files missing:")
+            for missing_file in missing_files:
+                logger.warning(f"  • Missing: {missing_file}")
+
+            # Check if any devbench data exists at all
+            devbench_base = Path("evaluation_data/full_eval/devbench")
+            if not devbench_base.exists():
+                logger.warning("⚠️ DevBench base directory not found - evaluation data may need to be downloaded")
+                results['devbench'] = {
+                    "error": "DevBench evaluation data not found",
+                    "status": "skipped",
+                    "note": "Run download_evaluation_data.py to get DevBench data",
+                    "missing_files": missing_files
+                }
+                return results
+            else:
+                # Partial data exists, try to run with what we have
+                logger.warning("⚠️ Some DevBench data missing, attempting evaluation with available data...")
+
         # Run DevBench evaluation
         cmd = [
             "bash", devbench_script,
@@ -524,10 +556,18 @@ def run_devbench_evaluation(model_path: str, output_dir: str = "results_2025"):
             logger.warning(f"⚠️ DevBench evaluation failed with return code {result.returncode}")
             logger.warning(f"STDERR: {result.stderr[:500] if result.stderr else 'No stderr'}")
 
-            # Check for specific error patterns
+            # Enhanced error analysis for missing data files
             error_msg = result.stderr if result.stderr else "Unknown error"
-            if "nlopt" in error_msg.lower():
+
+            if "spose_similarity.mat" in error_msg:
+                error_msg = "Missing DevBench data file: spose_similarity.mat - evaluation data incomplete"
+                data_solution = "Download complete DevBench data or use fast evaluation mode"
+            elif "FileNotFoundError" in error_msg and "devbench" in error_msg:
+                error_msg = "DevBench data files missing - evaluation data incomplete"
+                data_solution = "Run download_evaluation_data.py to get complete DevBench dataset"
+            elif "nlopt" in error_msg.lower():
                 error_msg = "Missing nlopt dependency - install with: pip install nlopt"
+                data_solution = "Install required Python packages"
             elif "modulenotfounderror" in error_msg.lower():
                 # Extract module name
                 lines = error_msg.split('\n')
@@ -535,13 +575,22 @@ def run_devbench_evaluation(model_path: str, output_dir: str = "results_2025"):
                     if "modulenotfounderror" in line.lower():
                         error_msg = f"Missing Python module: {line.strip()}"
                         break
+                data_solution = "Install missing Python dependencies"
+            else:
+                data_solution = "Check DevBench setup and data completeness"
 
             results['devbench'] = {
                 "error": f"Return code {result.returncode}: {error_msg[:300]}",
                 "stderr": result.stderr[:500] if result.stderr else "",
                 "stdout": result.stdout[:500] if result.stdout else "",
-                "status": "failed"
+                "status": "failed",
+                "solution": data_solution,
+                "missing_files": missing_files if missing_files else None
             }
+
+            # If it's a data issue, suggest using fast evaluation
+            if "spose_similarity.mat" in error_msg or "FileNotFoundError" in error_msg:
+                logger.info("💡 Suggestion: Consider using --eval_type fast to avoid DevBench data issues")
 
     except subprocess.TimeoutExpired:
         logger.warning("⚠️ DevBench evaluation timed out after 1 hour")
