@@ -287,7 +287,6 @@ token_tracking:
 huggingface_hub:
   enabled: true # Enable automatic uploads to HF Hub
   repo_id: "euhidaman/bitmar-100m-tokens" # Replace with your HF repo ID
-  token: null # HF token (will use HF_TOKEN env var if not set)
   private: true # Keep repo private by default
   upload_after_epoch: true # Upload checkpoint after each epoch
   upload_final_model: true # Upload final model at end
