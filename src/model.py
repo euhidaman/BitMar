@@ -2,26 +2,17 @@
 BitMar Model Architecture
 BitNet-quantized Vision-Language Episodic Memory Transformer
 Combines 1.58-bit quantization, DiNOv2 vision, and Larimar episodic memory
-Enhanced with Attention Sinks for endless fluent generation
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import time
 from typing import Dict, List, Optional, Tuple, Union
 from transformers import AutoTokenizer
 import math
 import logging
-
-# Import attention sinks integration
-from .attention_sinks_integration import (
-    BitMarAttentionSinksMixin,
-    AttentionSinkKVCache,
-    AttentionSinksConfig,
-    apply_attention_sinks_to_bitmar_model,
-    update_model_kwargs_for_generation_with_sinks
-)
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +118,7 @@ class BitNetMLP(nn.Module):
         return self.norm(x + residual)
 
 
-class BitNetAttention(nn.Module, BitMarAttentionSinksMixin):
+class BitNetAttention(nn.Module):
     """Multi-head attention with BitNet quantization"""
 
     def __init__(
@@ -158,8 +149,7 @@ class BitNetAttention(nn.Module, BitMarAttentionSinksMixin):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
-        attention_sinks: Optional[AttentionSinkKVCache] = None  # NEW: Attention sinks support
+        mask: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len = query.shape[:2]
 
@@ -219,11 +209,6 @@ class BitNetAttention(nn.Module, BitMarAttentionSinksMixin):
             batch_size, seq_len, self.dim
         )
         output = self.out_proj(attended)
-
-        # Update attention sinks if provided
-        if attention_sinks is not None:
-            # Cache key and value projections for sinks
-            attention_sinks.update_cache(key, value, attention_weights)
 
         return output, attention_weights.mean(dim=1)  # Average across heads
 
@@ -429,7 +414,7 @@ class BitNetTextDecoder(nn.Module):
 
 
 class EpisodicMemory(nn.Module):
-    """Episodic Memory mechanism inspired by Larimar with performance optimizations"""
+    """Episodic Memory mechanism inspired by Larimar with performance optimizations and external storage support"""
 
     def __init__(
         self,
@@ -437,7 +422,11 @@ class EpisodicMemory(nn.Module):
         episode_dim: int,
         alpha: float = 0.1,
         direct_writing: bool = True,
-        observation_noise_std: float = 1e-6
+        observation_noise_std: float = 1e-6,
+        external_storage: bool = False,
+        memory_storage_path: str = None,
+        compression_enabled: bool = True,
+        lazy_loading: bool = False
     ):
         super().__init__()
         self.memory_size = memory_size
@@ -446,16 +435,28 @@ class EpisodicMemory(nn.Module):
         self.direct_writing = direct_writing
         self.observation_noise_std = observation_noise_std
 
-        # Memory storage with improved initialization
-        self.register_buffer('memory', torch.randn(memory_size, episode_dim) * 0.02)
-        self.register_buffer('memory_age', torch.zeros(memory_size))
-        self.register_buffer('memory_usage', torch.zeros(memory_size))
+        # External storage configuration
+        self.external_storage = external_storage
+        self.memory_storage_path = memory_storage_path
+        self.compression_enabled = compression_enabled
+        self.lazy_loading = lazy_loading
+        self._memory_loaded = False
+        self._memory_version = 1
 
-        # Add memory quality tracking for better slot selection
+        # Memory storage with improved initialization
+        if external_storage and lazy_loading:
+            # For lazy loading, we'll initialize empty and load when needed
+            self._memory_data = None
+            self._metadata = None
+        else:
+            # Standard initialization for compatibility
+            self.register_buffer('memory', torch.randn(memory_size, episode_dim) * 0.02)
+            self.register_buffer('memory_age', torch.zeros(memory_size))
+            self.register_buffer('memory_usage', torch.zeros(memory_size))
+
+        # Always initialize these for proper functioning
         self.register_buffer('memory_quality', torch.zeros(memory_size))
         self.register_buffer('memory_importance', torch.ones(memory_size))
-
-        # Add running statistics for adaptive normalization
         self.register_buffer('memory_mean', torch.zeros(episode_dim))
         self.register_buffer('memory_std', torch.ones(episode_dim))
         self.register_buffer('update_count', torch.tensor(0))
@@ -492,6 +493,180 @@ class EpisodicMemory(nn.Module):
             BitNetLinear(episode_dim * 2, episode_dim),
             nn.LayerNorm(episode_dim)
         )
+
+    def _ensure_memory_loaded(self):
+        """Ensure memory is loaded into device memory"""
+        if self.external_storage and self.lazy_loading and not self._memory_loaded:
+            self.load_external_memory()
+        elif not hasattr(self, 'memory'):
+            # Initialize if not present (compatibility mode)
+            self.register_buffer('memory', torch.randn(self.memory_size, self.episode_dim) * 0.02)
+            self.register_buffer('memory_age', torch.zeros(self.memory_size))
+            self.register_buffer('memory_usage', torch.zeros(self.memory_size))
+
+    def save_external_memory(self, path: str = None, compress: bool = None) -> str:
+        """Save episodic memory to external storage"""
+        import os
+        import json
+        from pathlib import Path
+
+        # Use provided path or default
+        save_path = path or self.memory_storage_path or "episodic_memory.pt"
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Use provided compression setting or default
+        use_compression = compress if compress is not None else self.compression_enabled
+
+        # Prepare memory data
+        memory_data = {
+            'memory': self.memory.cpu() if hasattr(self, 'memory') else torch.randn(self.memory_size, self.episode_dim) * 0.02,
+            'memory_age': self.memory_age.cpu() if hasattr(self, 'memory_age') else torch.zeros(self.memory_size),
+            'memory_usage': self.memory_usage.cpu() if hasattr(self, 'memory_usage') else torch.zeros(self.memory_size),
+            'memory_quality': self.memory_quality.cpu(),
+            'memory_importance': self.memory_importance.cpu(),
+            'memory_mean': self.memory_mean.cpu(),
+            'memory_std': self.memory_std.cpu(),
+            'update_count': self.update_count.cpu(),
+            'version': self._memory_version,
+            'metadata': {
+                'memory_size': self.memory_size,
+                'episode_dim': self.episode_dim,
+                'alpha': self.alpha,
+                'creation_timestamp': torch.tensor(time.time()),
+                'compression_enabled': use_compression
+            }
+        }
+
+        # Apply compression if enabled
+        if use_compression:
+            # Quantize memory to reduce storage size
+            memory_data['memory'] = self._compress_memory_tensor(memory_data['memory'])
+            memory_data['compressed'] = True
+        else:
+            memory_data['compressed'] = False
+
+        # Save to file
+        torch.save(memory_data, save_path)
+
+        # Also save metadata separately for quick access
+        metadata_path = save_path.with_suffix('.json')
+        with open(metadata_path, 'w') as f:
+            json.dump({
+                'memory_size': self.memory_size,
+                'episode_dim': self.episode_dim,
+                'version': self._memory_version,
+                'compressed': use_compression,
+                'file_size_mb': save_path.stat().st_size / (1024 * 1024),
+                'creation_timestamp': time.time()
+            }, f, indent=2)
+
+        logger.info(f"💾 Episodic memory saved to: {save_path}")
+        logger.info(f"📊 Memory size: {save_path.stat().st_size / 1024:.1f} KB")
+
+        return str(save_path)
+
+    def load_external_memory(self, path: str = None, device: str = None) -> bool:
+        """Load episodic memory from external storage"""
+        import json
+        from pathlib import Path
+
+        # Use provided path or default
+        load_path = path or self.memory_storage_path or "episodic_memory.pt"
+        load_path = Path(load_path)
+
+        if not load_path.exists():
+            logger.warning(f"⚠️ External memory file not found: {load_path}")
+            return False
+
+        try:
+            # Load memory data
+            memory_data = torch.load(load_path, map_location='cpu')
+
+            # Validate compatibility
+            if memory_data['metadata']['memory_size'] != self.memory_size:
+                logger.error(f"❌ Memory size mismatch: expected {self.memory_size}, got {memory_data['metadata']['memory_size']}")
+                return False
+
+            if memory_data['metadata']['episode_dim'] != self.episode_dim:
+                logger.error(f"❌ Episode dimension mismatch: expected {self.episode_dim}, got {memory_data['metadata']['episode_dim']}")
+                return False
+
+            # Set device
+            device = device or next(self.parameters()).device
+
+            # Decompress if needed
+            if memory_data.get('compressed', False):
+                memory_tensor = self._decompress_memory_tensor(memory_data['memory'])
+            else:
+                memory_tensor = memory_data['memory']
+
+            # Load memory tensors
+            if hasattr(self, 'memory'):
+                self.memory.copy_(memory_tensor.to(device))
+                self.memory_age.copy_(memory_data['memory_age'].to(device))
+                self.memory_usage.copy_(memory_data['memory_usage'].to(device))
+            else:
+                # Register buffers if not present (lazy loading case)
+                self.register_buffer('memory', memory_tensor.to(device))
+                self.register_buffer('memory_age', memory_data['memory_age'].to(device))
+                self.register_buffer('memory_usage', memory_data['memory_usage'].to(device))
+
+            self.memory_quality.copy_(memory_data['memory_quality'].to(device))
+            self.memory_importance.copy_(memory_data['memory_importance'].to(device))
+            self.memory_mean.copy_(memory_data['memory_mean'].to(device))
+            self.memory_std.copy_(memory_data['memory_std'].to(device))
+            self.update_count.copy_(memory_data['update_count'].to(device))
+
+            self._memory_version = memory_data.get('version', 1)
+            self._memory_loaded = True
+
+            logger.info(f"✅ Episodic memory loaded from: {load_path}")
+            logger.info(f"📊 Memory version: {self._memory_version}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to load external memory: {e}")
+            return False
+
+    def _compress_memory_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Compress memory tensor for storage"""
+        # Quantize to int8 to reduce storage size
+        tensor_min = tensor.min()
+        tensor_max = tensor.max()
+
+        # Avoid division by zero
+        tensor_range = tensor_max - tensor_min
+        if tensor_range < 1e-8:
+            return tensor
+
+        # Quantize to int8 range
+        quantized = ((tensor - tensor_min) / tensor_range * 255).round().clamp(0, 255).to(torch.uint8)
+
+        # Store quantization parameters
+        return {
+            'data': quantized,
+            'min': tensor_min,
+            'max': tensor_max,
+            'original_shape': tensor.shape
+        }
+
+    def _decompress_memory_tensor(self, compressed_data) -> torch.Tensor:
+        """Decompress memory tensor"""
+        if isinstance(compressed_data, dict):
+            quantized = compressed_data['data'].float()
+            tensor_min = compressed_data['min']
+            tensor_max = compressed_data['max']
+
+            # Dequantize
+            tensor_range = tensor_max - tensor_min
+            dequantized = (quantized / 255.0) * tensor_range + tensor_min
+
+            return dequantized.view(compressed_data['original_shape'])
+        else:
+            # Not compressed, return as-is
+            return compressed_data
 
     def _update_memory_statistics(self, episodes: torch.Tensor):
         """Update running statistics for memory normalization"""
@@ -714,7 +889,88 @@ class EpisodicMemory(nn.Module):
             self.memory_quality[:] = self.memory_quality[sorted_indices]
             self.memory_importance[:] = self.memory_importance[sorted_indices]
 
+    def get_memory_info(self) -> Dict:
+        """Get comprehensive memory information"""
+        info = {
+            'memory_size': self.memory_size,
+            'episode_dim': self.episode_dim,
+            'external_storage': self.external_storage,
+            'compression_enabled': self.compression_enabled,
+            'lazy_loading': self.lazy_loading,
+            'memory_loaded': self._memory_loaded if self.external_storage else True,
+            'version': self._memory_version,
+            'storage_path': self.memory_storage_path
+        }
 
+        if hasattr(self, 'memory'):
+            info.update({
+                'memory_utilization': (self.memory_usage > 0).float().mean().item(),
+                'memory_diversity': torch.std(self.memory, dim=0).mean().item(),
+                'update_count': self.update_count.item(),
+                'memory_device': str(self.memory.device)
+            })
+
+        return info
+
+    def create_memory_snapshot(self, snapshot_name: str = None) -> str:
+        """Create a named snapshot of the current memory state"""
+        import time
+        from pathlib import Path
+
+        timestamp = int(time.time())
+        snapshot_name = snapshot_name or f"memory_snapshot_{timestamp}"
+
+        # Create snapshots directory
+        snapshots_dir = Path("memory_snapshots")
+        snapshots_dir.mkdir(exist_ok=True)
+
+        snapshot_path = snapshots_dir / f"{snapshot_name}.pt"
+
+        # Save current memory state
+        saved_path = self.save_external_memory(str(snapshot_path), compress=True)
+
+        logger.info(f"📸 Memory snapshot created: {saved_path}")
+        return saved_path
+
+    def load_memory_snapshot(self, snapshot_name: str) -> bool:
+        """Load a named memory snapshot"""
+        from pathlib import Path
+
+        snapshots_dir = Path("memory_snapshots")
+        snapshot_path = snapshots_dir / f"{snapshot_name}.pt"
+
+        if not snapshot_path.exists():
+            logger.warning(f"⚠️ Snapshot not found: {snapshot_path}")
+            return False
+
+        success = self.load_external_memory(str(snapshot_path))
+        if success:
+            logger.info(f"📸 Memory snapshot loaded: {snapshot_name}")
+
+        return success
+
+    def enable_external_storage(self, storage_path: str = None, compress: bool = True, lazy: bool = False):
+        """Enable external storage mode for edge deployment"""
+        self.external_storage = True
+        self.memory_storage_path = storage_path or "episodic_memory.pt"
+        self.compression_enabled = compress
+        self.lazy_loading = lazy
+
+        logger.info(f"🔄 External storage enabled: {self.memory_storage_path}")
+        logger.info(f"   Compression: {compress}, Lazy loading: {lazy}")
+
+    def disable_external_storage(self):
+        """Disable external storage and return to integrated mode"""
+        # Ensure memory is loaded before disabling external storage
+        self._ensure_memory_loaded()
+
+        self.external_storage = False
+        self.lazy_loading = False
+        self._memory_loaded = True
+
+        logger.info("🔄 External storage disabled, using integrated mode")
+
+    # ...existing code for other methods...
 class CrossModalFusion(nn.Module):
     """Cross-modal fusion module for text and vision features"""
 

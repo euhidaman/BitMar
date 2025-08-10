@@ -1021,6 +1021,29 @@ class TokenAwareTrainer:
         latest_path = self.checkpoint_dir / 'latest_checkpoint.pt'
         torch.save(checkpoint, latest_path)
         
+        # NEW: Save episodic memory separately for edge deployment
+        if hasattr(self.model, 'memory'):
+            try:
+                from src.memory_utils import MemoryManager
+                memory_manager = MemoryManager(self.model, base_path=self.checkpoint_dir / "memory_exports")
+
+                # Create edge deployment package every few checkpoints
+                if self.global_step % 10000 == 0:  # Every 10k steps
+                    package_path = memory_manager.create_edge_deployment_package(
+                        f"epoch_{self.current_epoch}_step_{self.global_step}"
+                    )
+                    logger.info(f"📦 Edge deployment package created: {package_path}")
+
+                # Always export compressed memory for edge use
+                memory_export_path = memory_manager.export_memory_for_edge(
+                    f"memory_epoch_{self.current_epoch}_tokens_{self.tokens_processed}",
+                    compress=True
+                )
+                logger.info(f"💾 Memory exported for edge deployment: {memory_export_path}")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to export memory for edge deployment: {e}")
+
         logger.info(f"💾 Checkpoint saved: {checkpoint_path}")
 
         # Cleanup old checkpoints - keep only top 5 most recent epoch checkpoints
